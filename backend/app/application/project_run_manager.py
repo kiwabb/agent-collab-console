@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """In-memory dev-server runner for project repos.
 
-Deliberately ephemeral: nothing is persisted. One running process per project,
+Deliberately ephemeral: nothing is persisted. One running process per project service,
 spawned in its own process group so `stop` can `killpg` the whole tree
 (dev servers fork children). Logs land in a bounded ring buffer with a
 monotonic sequence so the polling frontend can fetch incremental tail slices.
@@ -132,10 +132,17 @@ class _RunEntry:
 
 class ProjectRunManager:
     def __init__(self) -> None:
-        self._entries: dict[str, _RunEntry] = {}
+        self._entries: dict[tuple[str, str], _RunEntry] = {}
         self._lock = asyncio.Lock()
 
-    async def start(self, project_id: str, command: str, cwd: str) -> RunStatus:
+    async def start(
+        self,
+        project_id: str,
+        command: str,
+        cwd: str,
+        *,
+        service_id: str = "legacy",
+    ) -> RunStatus:
         command = (command or "").strip()
         if not command:
             raise ProjectRunError("no_run_command")
@@ -145,7 +152,8 @@ class ProjectRunManager:
             raise ProjectRunError("refused", pattern=exc.reason) from exc
 
         async with self._lock:
-            existing = self._entries.get(project_id)
+            key = (project_id, service_id)
+            existing = self._entries.get(key)
             if existing is not None and existing.running:
                 raise ProjectRunError("already_running")
 
@@ -186,7 +194,7 @@ class ProjectRunManager:
                 asyncio.create_task(self._drain(entry, proc.stderr, "stderr")),
             ]
             asyncio.create_task(self._wait_exit(entry))  # noqa: RUF006
-            self._entries[project_id] = entry
+            self._entries[key] = entry
             return entry.status_dict()
 
     async def _drain(
@@ -212,9 +220,9 @@ class ProjectRunManager:
         except Exception:  # noqa: BLE001, RUF100
             logger.debug("project run waiter error pid=%s", entry.pid, exc_info=True)
 
-    async def stop(self, project_id: str) -> RunStatus:
+    async def stop(self, project_id: str, *, service_id: str = "legacy") -> RunStatus:
         async with self._lock:
-            entry = self._entries.get(project_id)
+            entry = self._entries.get((project_id, service_id))
             if entry is None:
                 return {
                     "running": False,
@@ -289,8 +297,8 @@ class ProjectRunManager:
             await asyncio.sleep(0.05)
         return entry.proc.returncode is not None or entry.exit_code is not None
 
-    def status(self, project_id: str) -> RunStatus:
-        entry = self._entries.get(project_id)
+    def status(self, project_id: str, *, service_id: str = "legacy") -> RunStatus:
+        entry = self._entries.get((project_id, service_id))
         if entry is None:
             return {
                 "running": False,
@@ -301,8 +309,10 @@ class ProjectRunManager:
             }
         return entry.status_dict()
 
-    def get_logs(self, project_id: str, after: int = 0) -> RunLogs:
-        entry = self._entries.get(project_id)
+    def get_logs(
+        self, project_id: str, after: int = 0, *, service_id: str = "legacy"
+    ) -> RunLogs:
+        entry = self._entries.get((project_id, service_id))
         if entry is None:
             return {"lines": [], "last_seq": 0, "running": False, "exit_code": None}
         status = entry.status_dict()

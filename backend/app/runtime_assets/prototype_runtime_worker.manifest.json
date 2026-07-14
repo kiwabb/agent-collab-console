@@ -1,0 +1,54 @@
+{
+  "manifestVersion": "prototype-runtime-worker-manifest/v1",
+  "protocolVersion": "prototype-runtime-worker/v1",
+  "runtimeCoreVersion": "0.1.0-spike",
+  "runtimeCoreSourceHash": "sha256:a004c5b10a2e55c277debd7f615a0bf2666ba5c20c9ff50182881fedf309d204",
+  "stateMachineKernelVersion": "5.32.4",
+  "bundleFile": "prototype_runtime_worker.mjs",
+  "bundleHash": "sha256:af0b11659d65caa6ee18edeb3ee8ed7c12ff5b36b3c84a00f36ca0cd68c3a6fa",
+  "bundleByteSize": 180729,
+  "buildTool": "esbuild@0.28.1",
+  "target": "node20",
+  "sources": [
+    {
+      "path": "src/features/prototype/runtime/canonical.ts",
+      "hash": "sha256:d694a6f7f233409791c4fcc8f7a1a8b2e1549e1d729bbd2a600ab01208e0783b",
+      "byteSize": 3831
+    },
+    {
+      "path": "src/features/prototype/runtime/runtimeCore.ts",
+      "hash": "sha256:a53f49e776fabaa672bdb7bb37664fd9325493e6b85c0bafa58cc5bb243923f5",
+      "byteSize": 43347
+    },
+    {
+      "path": "src/features/prototype/runtime/runtimeInputCodec.ts",
+      "hash": "sha256:bbc7d24fac2c878456852d9a734087d716be21aedc920fb4b4b28d0867d6529a",
+      "byteSize": 22364
+    },
+    {
+      "path": "src/features/prototype/runtime/runtimeStateCodec.ts",
+      "hash": "sha256:be39de4c6e44ee6768ea835a39f8abe6c9f2cf8d744241e97cb5e2480533c67e",
+      "byteSize": 9719
+    },
+    {
+      "path": "src/features/prototype/runtime/runtimeWorkerProtocol.ts",
+      "hash": "sha256:efec575ab2b5d2bdb00a288fef32cd86c3c8c662722bc3bb06f0ae5972ee13a5",
+      "byteSize": 13389
+    },
+    {
+      "path": "src/features/prototype/runtime/types.ts",
+      "hash": "sha256:8cefc2a12bcf7bf3654cdf3cbedf0efa6ab3a09ed94555d8ebff81c79d533a15",
+      "byteSize": 9470
+    },
+    {
+      "path": "src/lib/utils.tsx",
+      "hash": "sha256:8ec3e0ee231db89ce05e5e191635ad65a22c14da6e3397a133adee5e65091e94",
+      "byteSize": 3079
+    },
+    {
+      "path": "scripts/prototype-runtime-worker.ts",
+      "hash": "sha256:cc721a4b42fd2fbf0024a60816a279960e106cc6d826100d4eb23b467332eb8d",
+      "byteSize": 2769
+    }
+  ]
+}

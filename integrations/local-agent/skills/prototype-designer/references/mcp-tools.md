@@ -12,7 +12,7 @@ The MCP server is `prototype-collaboration`. Every input uses camelCase and `pro
 `get_active_design_context`
 
 - Input: `scope` with nullable `pageId`, unique `selectedNodeIds`, nullable `flowId`, and `viewport` (`desktop`, `tablet`, or `mobile`).
-- Use to obtain the authoritative draft base and bounded active context.
+- Use to obtain the authoritative draft base, `supportedCommandKinds`, and the exact `context.commandBatchSchema` required to construct a proposal.
 
 `get_document_slice`
 

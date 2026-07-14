@@ -1,11 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Loader2, Plus, RefreshCw, X } from "lucide-react";
+import {
+  Boxes,
+  Check,
+  FilePlus2,
+  ListChecks,
+  Loader2,
+  MoreHorizontal,
+  Plus,
+  RefreshCw,
+  Sparkles,
+  X,
+} from "lucide-react";
 
 import {
   createPrototype,
+  createPrototypePlan,
+  getLatestPrototypePlan,
   getPrototype,
+  getPrototypePlanFeatureConfig,
   getRegenerateAllStreamUrl,
   listPrototypes,
 } from "@/lib/api/prototypes";
@@ -13,6 +27,7 @@ import type { Project, Prototype, PrototypeDetail } from "@/lib/types";
 import { useI18n } from "@/providers/I18nProvider";
 import { useToast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -27,8 +42,21 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 import { PrototypeCanvas } from "./PrototypeCanvas";
+import { PrototypePageRail } from "./PrototypePageRail";
+import {
+  buildPrototypeRouteTargets,
+  matchPrototypeRoute,
+  readPrototypeRoutePatterns,
+} from "./prototypeNavigation";
 import {
   parseSseRecord,
   readFailedPrototypeItems,
@@ -89,16 +117,25 @@ const INITIAL_REGEN: RegenState = {
  * the `current_version` chips pick up the new versions.
  */
 export function ProjectPrototypesPage({ projectId, project }: Props) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const { addToast } = useToast();
 
   const [prototypes, setPrototypes] = useState<Prototype[] | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeRoutePattern, setActiveRoutePattern] = useState<string | null>(null);
   const [detail, setDetail] = useState<PrototypeDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftBrief, setDraftBrief] = useState("");
+  const [planDialogOpen, setPlanDialogOpen] = useState(false);
+  const [planInstruction, setPlanInstruction] = useState("");
+  const [planCreating, setPlanCreating] = useState(false);
+  const [latestPlanOpening, setLatestPlanOpening] = useState(false);
+  const [planFeatureEnabled, setPlanFeatureEnabled] = useState<boolean | null>(null);
+  const [planFeatureError, setPlanFeatureError] = useState<string | null>(null);
+  const [planFeatureLoading, setPlanFeatureLoading] = useState(false);
 
   // Batch-regen state. The confirmation dialog and the progress dialog
   // share the same lifecycle — confirm → start stream → open progress →
@@ -107,19 +144,50 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
   const [progressOpen, setProgressOpen] = useState(false);
   const [regen, setRegen] = useState<RegenState>(INITIAL_REGEN);
   const sourceRef = useRef<EventSource | null>(null);
+  const planFeatureRequestIdRef = useRef(0);
+  const planCreateInFlightRef = useRef(false);
+
+  const loadPlanFeatureConfig = useCallback(async () => {
+    const requestId = planFeatureRequestIdRef.current + 1;
+    planFeatureRequestIdRef.current = requestId;
+    setPlanFeatureLoading(true);
+    try {
+      const config = await getPrototypePlanFeatureConfig();
+      if (planFeatureRequestIdRef.current !== requestId) return;
+      setPlanFeatureEnabled(config.enabled);
+      setPlanFeatureError(null);
+    } catch (err) {
+      console.error("prototype plan feature config load failed:", err);
+      if (planFeatureRequestIdRef.current !== requestId) return;
+      setPlanFeatureError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (planFeatureRequestIdRef.current === requestId) setPlanFeatureLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadPlanFeatureConfig();
+    return () => {
+      planFeatureRequestIdRef.current += 1;
+    };
+  }, [loadPlanFeatureConfig]);
 
   const refetchList = useCallback(async () => {
     try {
       const list = await listPrototypes(projectId);
       setPrototypes(list);
+      setListError(null);
       return list;
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("prototype list load failed:", err);
+      setListError(message);
       addToast({
         type: "error",
-        title: t("prototype.toast.createFailed"),
-        message: err instanceof Error ? err.message : String(err),
+        title: t("prototype.listLoadFailed"),
+        message,
       });
-      return [];
+      return null;
     }
   }, [projectId, addToast, t]);
 
@@ -128,10 +196,11 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
     let cancelled = false;
     (async () => {
       const list = await refetchList();
-      if (cancelled) return;
+      if (cancelled || !list) return;
       const firstPrototype = list[0];
       if (firstPrototype && !activeId) {
         setActiveId(firstPrototype.id);
+        setActiveRoutePattern(readPrototypeRoutePatterns(firstPrototype)[0] ?? null);
       }
     })();
     return () => {
@@ -158,7 +227,6 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
             title: t("prototype.toast.createFailed"),
             message: err instanceof Error ? err.message : String(err),
           });
-          setDetail(null);
         }
       })
       .finally(() => {
@@ -191,26 +259,90 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
     }
   }, [draftTitle, draftBrief, projectId, addToast, t]);
 
+  const handleCreatePlan = useCallback(async () => {
+    if (planCreateInFlightRef.current) return;
+    planCreateInFlightRef.current = true;
+    setPlanCreating(true);
+    try {
+      const result = await createPrototypePlan(projectId, planInstruction, locale);
+      window.location.assign(`/projects/${projectId}/prototypes/plans/${result.plan_id}`);
+    } catch (err) {
+      planCreateInFlightRef.current = false;
+      setPlanCreating(false);
+      addToast({
+        type: "error",
+        title: t("prototype.plan.createFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, [projectId, planInstruction, locale, addToast, t]);
+
+  const openPlanDialog = useCallback(async () => {
+    try {
+      const latest = await getLatestPrototypePlan(projectId);
+      setPlanInstruction(latest?.global_instruction ?? "");
+      setPlanDialogOpen(true);
+    } catch (err) {
+      console.error("latest prototype plan load failed:", err);
+      addToast({
+        type: "error",
+        title: t("prototype.plan.createFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, [projectId, addToast, t]);
+
+  const openLatestPlan = useCallback(async () => {
+    setLatestPlanOpening(true);
+    try {
+      const latest = await getLatestPrototypePlan(projectId);
+      if (!latest) {
+        addToast({ type: "info", title: t("prototype.plan.latestMissing") });
+        return;
+      }
+      window.location.assign(`/projects/${projectId}/prototypes/plans/${latest.id}`);
+    } catch (err) {
+      console.error("latest prototype plan open failed:", err);
+      addToast({
+        type: "error",
+        title: t("prototype.plan.latestOpenFailed"),
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setLatestPlanOpening(false);
+    }
+  }, [projectId, addToast, t]);
+
   const handleVersionsChanged = useCallback(async () => {
     // Re-fetch both list (for current_version chip) and detail (new version row).
     const list = await refetchList();
     if (activeId) {
       try {
-        const d = await getPrototype(activeId);
-        setDetail(d);
-      } catch {
-        // The detail fetch may race with the user navigating away;
-        // a stale detail is preferable to a noisy toast here.
+        const nextDetail = await getPrototype(activeId);
+        setDetail(nextDetail);
+      } catch (err) {
+        console.error("prototype detail refresh failed:", err);
+        addToast({
+          type: "error",
+          title: t("prototype.toast.versionLoadFailed"),
+          message: err instanceof Error ? err.message : String(err),
+        });
       }
     }
-    if (list.length === 0) setActiveId(null);
-  }, [refetchList, activeId]);
+    if (list?.length === 0) setActiveId(null);
+  }, [refetchList, activeId, addToast, t]);
 
   const handlePrototypeDeleted = useCallback(async () => {
     const list = await refetchList();
+    if (!list) return;
     const firstPrototype = list[0];
-    if (firstPrototype) setActiveId(firstPrototype.id);
-    else setActiveId(null);
+    if (firstPrototype) {
+      setActiveId(firstPrototype.id);
+      setActiveRoutePattern(readPrototypeRoutePatterns(firstPrototype)[0] ?? null);
+    } else {
+      setActiveId(null);
+      setActiveRoutePattern(null);
+    }
     setDetail(null);
   }, [refetchList]);
 
@@ -433,126 +565,253 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
   const sortedItems = useMemo(() => {
     return Object.values(regen.items).sort((a, b) => a.title.localeCompare(b.title));
   }, [regen.items]);
+  const regenProcessed = regen.okCount + regen.failedCount;
+  const regenPercent =
+    regen.total > 0 ? Math.min(100, Math.round((regenProcessed / regen.total) * 100)) : 0;
+  const routeTargets = useMemo(() => buildPrototypeRouteTargets(prototypes ?? []), [prototypes]);
+  const handlePrototypeSelect = useCallback((prototype: Prototype) => {
+    setActiveId(prototype.id);
+    setActiveRoutePattern(readPrototypeRoutePatterns(prototype)[0] ?? null);
+  }, []);
+  const handlePrototypeNavigate = useCallback(
+    (route: string) => {
+      const target = matchPrototypeRoute(route, routeTargets);
+      if (!target) {
+        addToast({
+          type: "error",
+          title: t("prototype.routeNotFoundTitle"),
+          message: t("prototype.routeNotFoundMessage", { route }),
+        });
+        return;
+      }
+      setActiveId(target.prototypeId);
+      setActiveRoutePattern(target.routePattern);
+    },
+    [routeTargets, addToast, t],
+  );
 
   return (
-    <section className="flex h-full flex-col gap-4">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight">{t("prototype.title")}</h1>
-          <p className="text-sm text-text-muted">{t("prototype.subtitle")}</p>
-          {project?.repo_path && (
-            <p className="font-mono text-[11px] text-text-muted/70">{project.repo_path}</p>
-          )}
+    <section
+      className="flex min-h-0 min-w-0 flex-col gap-3 overflow-x-hidden"
+      data-density="compact"
+    >
+      <header className="flex flex-col gap-3 border-b border-border-subtle pb-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <h1 className="text-xl font-semibold">{t("prototype.title")}</h1>
+            {prototypes && (
+              <Badge variant="outline">
+                {t("prototype.pageCount", { count: prototypes.length })}
+              </Badge>
+            )}
+          </div>
+          <p className="mt-1 truncate text-sm text-text-muted">
+            {project?.name ?? t("workspace.projectPage.titleFallback")}
+          </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 self-stretch sm:self-auto">
           <Button
-            variant="secondary"
+            className="min-h-11 min-w-0 flex-1 sm:min-h-0 sm:flex-none"
             size="sm"
-            onClick={() => setConfirmRegenOpen(true)}
-            disabled={!hasPrototypes || batchRunning}
-            title={!hasPrototypes ? t("prototype.regenerateAll.disabledHint") : undefined}
+            onClick={planFeatureEnabled ? () => void openPlanDialog() : () => setCreating(true)}
+            disabled={planCreating}
           >
-            <RefreshCw size={14} className={cn(batchRunning && "animate-spin")} />
-            {t("prototype.regenerateAll.button")}
+            {planFeatureEnabled ? <Sparkles size={14} /> : <Plus size={14} />}
+            {planFeatureEnabled ? t("prototype.plan.fromProject") : t("prototype.newTitle")}
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-border bg-background text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring sm:min-h-7 sm:min-w-7"
+              aria-label={t("prototype.moreActions")}
+              title={t("prototype.moreActions")}
+            >
+              <MoreHorizontal size={16} />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-52">
+              {planFeatureEnabled && (
+                <DropdownMenuItem
+                  onClick={() => void openLatestPlan()}
+                  disabled={latestPlanOpening}
+                >
+                  {latestPlanOpening ? (
+                    <Loader2 className="animate-spin" size={14} />
+                  ) : (
+                    <ListChecks size={14} />
+                  )}
+                  {t("prototype.plan.viewLatest")}
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onClick={() => setCreating(true)}>
+                <FilePlus2 size={14} />
+                {t("prototype.newTitle")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => window.location.assign(`/projects/${projectId}/prototypes/studio`)}
+              >
+                <Boxes size={14} />
+                {t("prototype.structured.open")}
+              </DropdownMenuItem>
+              {hasPrototypes && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => setConfirmRegenOpen(true)}
+                    disabled={batchRunning}
+                  >
+                    <RefreshCw size={14} className={cn(batchRunning && "animate-spin")} />
+                    {t("prototype.regenerateAll.button")}
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
-      <div className="grid min-h-[640px] flex-1 grid-cols-[280px_minmax(0,1fr)] gap-4">
-        <aside className="flex flex-col gap-2 rounded-xl border border-border-subtle bg-surface-raised/60 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-              {t("prototype.title")}
-            </span>
-            <Button size="sm" variant="secondary" onClick={() => setCreating((v) => !v)}>
-              <Plus size={14} />
-              {t("prototype.newTitle")}
+      {planFeatureError && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-status-failed/40 bg-status-failed/10 px-3 py-2 text-xs text-status-failed"
+        >
+          <span className="min-w-0 break-words">
+            {t("prototype.plan.featureConfigLoadFailed", { message: planFeatureError })}
+          </span>
+          <Button
+            className="min-h-11"
+            size="sm"
+            variant="outline"
+            onClick={() => void loadPlanFeatureConfig()}
+            disabled={planFeatureLoading}
+          >
+            <RefreshCw className={cn(planFeatureLoading && "animate-spin")} size={14} />
+            {t("prototype.plan.featureConfigRetry")}
+          </Button>
+        </div>
+      )}
+
+      {listError && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-2 border-l-2 border-status-failed px-3 py-2 text-xs text-status-failed"
+        >
+          <span className="min-w-0 break-words">
+            {t("prototype.listLoadFailedDetail", { message: listError })}
+          </span>
+          <Button
+            className="min-h-11 sm:min-h-0"
+            size="sm"
+            variant="outline"
+            onClick={() => void refetchList()}
+          >
+            <RefreshCw size={14} />
+            {t("prototype.retry")}
+          </Button>
+        </div>
+      )}
+
+      <Dialog open={planDialogOpen} onOpenChange={setPlanDialogOpen}>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>{t("prototype.plan.dialogTitle")}</DialogTitle>
+            <DialogDescription>{t("prototype.plan.dialogDescription")}</DialogDescription>
+          </DialogHeader>
+          <Textarea
+            rows={4}
+            value={planInstruction}
+            onChange={(event) => setPlanInstruction(event.target.value)}
+            placeholder={t("prototype.plan.instructionPlaceholder")}
+            aria-label={t("prototype.plan.instructionLabel")}
+          />
+          <DialogFooter>
+            <Button
+              className="min-h-11 sm:min-h-0"
+              variant="ghost"
+              onClick={() => setPlanDialogOpen(false)}
+              disabled={planCreating}
+            >
+              {t("prototype.createCancel")}
             </Button>
+            <Button
+              className="min-h-11 sm:min-h-0"
+              onClick={() => void handleCreatePlan()}
+              disabled={planCreating}
+            >
+              {planCreating ? <Loader2 className="animate-spin" /> : <Sparkles />}
+              {t("prototype.plan.start")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={creating} onOpenChange={setCreating}>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>{t("prototype.newTitle")}</DialogTitle>
+            <DialogDescription>{t("prototype.manualCreateDescription")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              className="min-h-11 sm:min-h-0"
+              value={draftTitle}
+              onChange={(event) => setDraftTitle(event.target.value)}
+              placeholder={t("prototype.titlePlaceholder")}
+              aria-label={t("prototype.titleLabel")}
+            />
+            <Textarea
+              rows={5}
+              value={draftBrief}
+              onChange={(event) => setDraftBrief(event.target.value)}
+              placeholder={t("prototype.briefPlaceholder")}
+              aria-label={t("prototype.briefLabel")}
+            />
           </div>
+          <DialogFooter>
+            <Button
+              className="min-h-11 sm:min-h-0"
+              variant="ghost"
+              onClick={() => {
+                setCreating(false);
+                setDraftTitle("");
+                setDraftBrief("");
+              }}
+            >
+              {t("prototype.createCancel")}
+            </Button>
+            <Button
+              className="min-h-11 sm:min-h-0"
+              onClick={() => void handleCreate()}
+              disabled={!draftTitle.trim() || !draftBrief.trim()}
+            >
+              <Plus size={14} />
+              {t("prototype.createButton")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-          {creating && (
-            <div className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface-base p-2">
-              <Input
-                value={draftTitle}
-                onChange={(e) => setDraftTitle(e.target.value)}
-                placeholder={t("prototype.titlePlaceholder")}
-              />
-              <Textarea
-                rows={3}
-                value={draftBrief}
-                onChange={(e) => setDraftBrief(e.target.value)}
-                placeholder={t("prototype.briefPlaceholder")}
-              />
-              <div className="flex items-center justify-end gap-2">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setCreating(false);
-                    setDraftTitle("");
-                    setDraftBrief("");
-                  }}
-                >
-                  {t("prototype.createCancel")}
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={handleCreate}
-                  disabled={!draftTitle.trim() || !draftBrief.trim()}
-                >
-                  {t("prototype.createButton")}
-                </Button>
-              </div>
-            </div>
-          )}
+      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[15rem_minmax(0,1fr)]">
+        <PrototypePageRail
+          prototypes={prototypes}
+          activeId={activeId}
+          onSelect={handlePrototypeSelect}
+          onCreate={() => setCreating(true)}
+        />
 
-          <div className="flex-1 overflow-auto">
-            {prototypes === null ? (
-              <div className="flex h-32 items-center justify-center">
-                <Loader variant="card" label="Loading…" />
-              </div>
-            ) : prototypes.length === 0 ? (
-              <EmptyState title={t("prototype.empty")} />
-            ) : (
-              <ul className="flex flex-col gap-1">
-                {prototypes.map((p) => (
-                  <li key={p.id}>
-                    <button
-                      type="button"
-                      onClick={() => setActiveId(p.id)}
-                      className={cn(
-                        "w-full rounded-lg border px-3 py-2 text-left text-sm transition-colors",
-                        activeId === p.id
-                          ? "border-brand bg-brand/15 text-foreground"
-                          : "border-transparent bg-surface-base text-text-muted hover:text-foreground",
-                      )}
-                    >
-                      <div className="truncate font-semibold">{p.title}</div>
-                      <div className="mt-1 text-[11px] text-text-muted/80">
-                        {p.current_version > 0
-                          ? `v${p.current_version}`
-                          : t("prototype.noVersionsYet")}
-                      </div>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </aside>
-
-        <main className="flex min-h-0 flex-col rounded-xl border border-border-subtle bg-surface-raised/40 p-3">
+        <main className="flex min-h-0 min-w-0 flex-col" id="prototype-workbench-main">
           {!activeId ? (
             <EmptyState title={t("prototype.empty")} />
           ) : detailLoading || !detail ? (
-            <div className="flex h-full items-center justify-center">
-              <Loader variant="card" label="Loading…" />
+            <div className="flex min-h-[32rem] items-center justify-center">
+              <Loader variant="card" label={t("prototype.loading")} />
             </div>
           ) : (
             <PrototypeCanvas
-              projectId={projectId}
+              key={detail.prototype.id}
               prototype={detail.prototype}
               versions={detail.versions}
+              routeTargets={routeTargets}
+              activeRoutePattern={activeRoutePattern}
+              onNavigate={handlePrototypeNavigate}
               onVersionsChanged={handleVersionsChanged}
               onPrototypeDeleted={handlePrototypeDeleted}
             />
@@ -571,13 +830,30 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
       />
 
       <Dialog open={progressOpen} onOpenChange={handleProgressOpenChange}>
-        <DialogContent className="sm:max-w-lg" showCloseButton={regen.done}>
+        <DialogContent className="sm:max-w-lg" showCloseButton={false}>
           <DialogHeader>
             <DialogTitle>{t("prototype.regenerateAll.dialogTitle")}</DialogTitle>
             <DialogDescription>
-              {regen.total > 0 ? `${regen.okCount + regen.failedCount}/${regen.total}` : ""}
+              <span role="status" aria-live="polite" aria-atomic="true">
+                {regen.total > 0 ? `${regenProcessed}/${regen.total}` : ""}
+              </span>
             </DialogDescription>
           </DialogHeader>
+          <div
+            className="h-2 overflow-hidden rounded-sm bg-surface-base"
+            role="progressbar"
+            aria-label={t("prototype.regenerateAll.dialogTitle")}
+            aria-valuemin={0}
+            aria-valuemax={Math.max(regen.total, 1)}
+            aria-valuenow={regenProcessed}
+            aria-valuetext={
+              regen.total > 0
+                ? `${regenProcessed}/${regen.total}`
+                : t("prototype.regenerateAll.statusPending")
+            }
+          >
+            <div className="h-full bg-brand" style={{ width: `${regenPercent}%` }} />
+          </div>
           <div className="max-h-[60vh] overflow-auto">
             {sortedItems.length === 0 ? (
               <div className="flex items-center gap-2 py-6 text-sm text-text-muted">
@@ -600,7 +876,9 @@ export function ProjectPrototypesPage({ projectId, project }: Props) {
           </div>
           <DialogFooter showCloseButton={regen.done}>
             {regen.done && (
-              <Button onClick={() => setProgressOpen(false)}>{t("issue.close")}</Button>
+              <Button className="min-h-11 sm:min-h-0" onClick={() => setProgressOpen(false)}>
+                {t("issue.close")}
+              </Button>
             )}
           </DialogFooter>
         </DialogContent>

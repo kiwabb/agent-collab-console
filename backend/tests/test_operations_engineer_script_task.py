@@ -7,6 +7,7 @@ import pytest
 
 from app.application.engineer_workflow import EngineerWorkflow
 from app.application.knowledge_index_service import ArtifactRow, DbConnection, IssueInput
+from app.application.project_script_suggestions import ProjectScriptSuggestion
 from app.application.role_workflow_service import RoleWorkflowService, RoleWorkflowStore
 from app.application.specialist_orchestrator import SpecialistGraphRef
 from app.domain.models import (
@@ -206,6 +207,7 @@ async def test_operations_persist_falls_back_to_repo_inference_for_empty_result(
 
     suggestion = await service._persist_operations_engineer_result(task)
 
+    assert isinstance(suggestion, ProjectScriptSuggestion)
     assert suggestion.setup_script == "npm install"
     assert suggestion.run_command == "npm run dev"
     assert store.saved_projects
@@ -240,6 +242,7 @@ async def test_operations_persist_preserves_existing_field_when_suggestion_empty
 
     suggestion = await service._persist_operations_engineer_result(task)
 
+    assert isinstance(suggestion, ProjectScriptSuggestion)
     assert suggestion.setup_script == "pnpm install"
     assert suggestion.run_command == "pnpm dev"
     assert store.project.setup_script == "pnpm install"
@@ -310,9 +313,13 @@ class FakeExecutionProcess:
 class ScriptTaskRunner:
     def __init__(self):
         self.started: list[CodexTask] = []
+        self.command_args_override: list[str] | None = None
 
-    async def start_task_run(self, task: CodexTask):
+    async def start_task_run(
+        self, task: CodexTask, *, command_args_override: list[str] | None = None
+    ):
         self.started.append(task)
+        self.command_args_override = command_args_override
         task.last_execution_process_id = "ep-1"
         return FakeExecutionProcess("ep-1")
 
@@ -323,6 +330,11 @@ class FakeRuntimeCatalogService:
 
     def resolve_effective_config(self, catalog, executor, provider, model):
         return executor or "codex", provider or "openai", model or "gpt-test", None, executor or "codex"
+
+
+class ActiveStartupMcp:
+    def has_task_session(self, task_id: str) -> bool:
+        return True
 
 
 def test_start_project_script_task_creates_operations_task(client, tmp_path, monkeypatch):
@@ -463,6 +475,7 @@ def test_start_project_script_task_reuses_active_operations_task(client, tmp_pat
     monkeypatch.setattr(api_module, "event_bus", event_bus)
     monkeypatch.setattr(api_module, "_get_task_runner", lambda: runner)
     monkeypatch.setattr(api_module, "_get_runtime_catalog_service", lambda: FakeRuntimeCatalogService())
+    monkeypatch.setattr(api_module, "project_startup_mcp_service", ActiveStartupMcp())
 
     response = client.post(f"/api/projects/{project.id}/script-task", json={})
 
@@ -568,6 +581,7 @@ def test_start_project_script_task_reuse_emits_builder_event_when_task_loads(
     monkeypatch.setattr(api_module, "event_bus", event_bus)
     monkeypatch.setattr(api_module, "_get_task_runner", lambda: runner)
     monkeypatch.setattr(api_module, "_get_runtime_catalog_service", lambda: FakeRuntimeCatalogService())
+    monkeypatch.setattr(api_module, "project_startup_mcp_service", ActiveStartupMcp())
 
     response = client.post(f"/api/projects/{project.id}/script-task", json={})
 
@@ -757,12 +771,16 @@ async def test_async_store_lists_operations_task_project_and_runtime_fields(tmp_
         await store.close()
 
 class FailingScriptTaskRunner:
-    async def start_task_run(self, task: CodexTask):
+    async def start_task_run(
+        self, task: CodexTask, *, command_args_override: list[str] | None = None
+    ):
         raise RuntimeError("executor offline")
 
 
 class ConflictingScriptTaskRunner:
-    async def start_task_run(self, task: CodexTask):
+    async def start_task_run(
+        self, task: CodexTask, *, command_args_override: list[str] | None = None
+    ):
         raise ValueError("executor already running")
 
 
@@ -867,6 +885,7 @@ def test_start_project_script_task_reuses_latest_active_operations_task(
     monkeypatch.setattr(api_module, "project_service", store)
     monkeypatch.setattr(api_module, "event_bus", event_bus)
     monkeypatch.setattr(api_module, "_get_task_runner", lambda: runner)
+    monkeypatch.setattr(api_module, "project_startup_mcp_service", ActiveStartupMcp())
 
     response = client.post(f"/api/projects/{project.id}/script-task", json={})
 
@@ -905,6 +924,7 @@ def test_start_project_script_task_reuses_status_with_case_and_spaces(
     monkeypatch.setattr(api_module, "project_service", store)
     monkeypatch.setattr(api_module, "event_bus", event_bus)
     monkeypatch.setattr(api_module, "_get_task_runner", lambda: runner)
+    monkeypatch.setattr(api_module, "project_startup_mcp_service", ActiveStartupMcp())
 
     response = client.post(f"/api/projects/{project.id}/script-task", json={})
 

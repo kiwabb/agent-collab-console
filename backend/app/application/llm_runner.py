@@ -36,6 +36,10 @@ TRACE_PREVIEW_LIMIT = 4_000
 SENSITIVE_TRACE_KEYS = frozenset({"api_key", "authorization", "token", "password", "secret"})
 
 
+class LLMOutputTokenLimitError(RuntimeError):
+    """The provider stopped before completing the requested model output."""
+
+
 class AgentCallTraceStore(Protocol):
     async def save_agent_call_trace(self, trace: AgentCallTrace) -> None: ...
 
@@ -150,7 +154,9 @@ async def _save_autoplan_trace(
         response_preview = None
         response_truncated = False
         if response_payload is not None:
-            response_json, response_preview, response_truncated = _trace_json_and_preview(response_payload)
+            response_json, response_preview, response_truncated = _trace_json_and_preview(
+                response_payload
+            )
         metadata = {
             "executor_id": executor_id,
             "model": model,
@@ -173,7 +179,7 @@ async def _save_autoplan_trace(
                 created_at=None,
             )
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("Auto-plan trace recording failed", exc_info=True)
 
 
@@ -298,12 +304,29 @@ def _int_value(value: object, default: int = 0) -> int:
     return default
 
 
+def _assistant_text(message: JsonObject) -> str:
+    text_parts: list[str] = []
+    for raw_part in _object_items(message.get("content")):
+        part_text = raw_part.get("text")
+        if raw_part.get("type") == "text" and isinstance(part_text, str):
+            text_parts.append(part_text)
+    return "".join(text_parts)
+
+
 def build_llm_runner(
     catalog_service: RuntimeCatalogService,
     trace_store: AgentCallTraceStore | None = None,
+    *,
+    timeout_s: float | None = None,
+    max_tokens: int | None = None,
+    raise_on_max_tokens: bool = False,
 ) -> LLM_RUNNER_TYPE:
     """Return an async callable that turns a prompt into assistant text."""
     config = _workflow_orchestrator_llm_config()
+    request_timeout_s = timeout_s if timeout_s is not None else config.timeout_s
+    request_max_tokens = max_tokens if max_tokens is not None else config.max_tokens
+    if request_max_tokens < 1:
+        raise ValueError("max_tokens must be positive")
 
     async def runner(prompt: str) -> str | None:
         try:
@@ -324,14 +347,16 @@ def build_llm_runner(
             # Assistant-prefill (see stream_llm for the rationale). The
             # leading "{" is NOT in the model's response, so we prepend it
             # before returning so json.loads sees a complete object.
+            prefill_supported = model.casefold() != "minimax-m3"
+            primary_messages = [{"role": "user", "content": prompt}]
+            if prefill_supported:
+                primary_messages.append({"role": "assistant", "content": "{"})
             payload = {
                 "model": model,
-                "max_tokens": config.max_tokens,
-                "messages": [
-                    {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": "{"},
-                ],
+                "max_tokens": request_max_tokens,
+                "messages": primary_messages,
             }
+            response_used_prefill = prefill_supported
             trace_id = f"autoplan-{uuid4().hex}"
             # Audit the auto-plan LLM call (PR2): previously this path only
             # emitted WARNING-level stderr and never entered conductor_turns.
@@ -339,11 +364,11 @@ def build_llm_runner(
                 "llm_call",
                 executor_id=executor.config.id,
                 model=model,
-                payload={"prompt_chars": len(prompt), "max_tokens": config.max_tokens},
+                payload={"prompt_chars": len(prompt), "max_tokens": request_max_tokens},
                 trace_id=trace_id,
             )
             _call_started = time.monotonic()
-            async with _llm_http_client(config.timeout_s) as client:
+            async with _llm_http_client(request_timeout_s) as client:
                 response = await client.post(
                     url,
                     headers={
@@ -382,6 +407,54 @@ def build_llm_runner(
                 )
                 return None
             data = object_dict(response.json())
+            if data.get("stop_reason") == "max_tokens":
+                logger.warning(
+                    "Auto-plan: model output reached max_tokens=%s",
+                    request_max_tokens,
+                )
+                if raise_on_max_tokens:
+                    raise LLMOutputTokenLimitError(
+                        f"model output reached max_tokens={request_max_tokens}"
+                    )
+                return None
+            if not _assistant_text(data):
+                # Retry once without assistant prefill. MiniMax-M3 already uses
+                # this shape on the first attempt, so its retry intentionally
+                # repeats the compatible request instead of switching to the
+                # prefill shape known to produce content=null.
+                fallback_payload = {
+                    **payload,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
+                async with _llm_http_client(request_timeout_s) as client:
+                    fallback_response = await client.post(
+                        url,
+                        headers={
+                            "x-api-key": executor.api_key,
+                            "anthropic-version": "2023-06-01",
+                            "content-type": "application/json",
+                        },
+                        json=fallback_payload,
+                    )
+                if fallback_response.status_code != 200:
+                    logger.warning(
+                        "Auto-plan: no-prefill retry returned HTTP %s: %s",
+                        fallback_response.status_code,
+                        fallback_response.text[:300],
+                    )
+                    return None
+                data = object_dict(fallback_response.json())
+                if data.get("stop_reason") == "max_tokens":
+                    logger.warning(
+                        "Auto-plan: no-prefill retry reached max_tokens=%s",
+                        request_max_tokens,
+                    )
+                    if raise_on_max_tokens:
+                        raise LLMOutputTokenLimitError(
+                            f"model output reached max_tokens={request_max_tokens}"
+                        )
+                    return None
+                response_used_prefill = False
             _audit_autoplan(
                 "llm_return",
                 executor_id=executor.config.id,
@@ -406,15 +479,7 @@ def build_llm_runner(
                 started=_call_started,
             )
             # Anthropic shape: { "content": [ { "type": "text", "text": "..." }, ... ], ... }
-            raw_parts = data.get("content")
-            parts = raw_parts if isinstance(raw_parts, list) else []
-            text_parts: list[str] = []
-            for raw_part in parts:
-                part = object_dict(raw_part)
-                part_text = part.get("text")
-                if part.get("type") == "text" and isinstance(part_text, str):
-                    text_parts.append(part_text)
-            text = "".join(text_parts)
+            text = _assistant_text(data)
             if not text:
                 return None
             # Prepend the prefilled "{" only when the model continued AFTER it
@@ -422,11 +487,13 @@ def build_llm_runner(
             # and re-emit "{" themselves; in that case skip the prepend so we
             # don't end up with "{{".
             stripped = text.lstrip()
-            if not stripped.startswith("{"):
+            if response_used_prefill and not stripped.startswith("{"):
                 return "{" + text
             return text
+        except LLMOutputTokenLimitError:
+            raise
         except httpx.TimeoutException:
-            logger.warning("Auto-plan: LLM request timed out after %ss", config.timeout_s)
+            logger.warning("Auto-plan: LLM request timed out after %ss", request_timeout_s)
             return None
         except Exception as exc:  # noqa: BLE001, RUF100
             logger.warning("Auto-plan: LLM runner error: %s", exc)
@@ -823,9 +890,7 @@ def _anthropic_messages_to_openai(messages: list[JsonObject]) -> list[JsonObject
             out.append(assistant_msg)
         else:
             # user turn: may carry tool_result blocks -> one OpenAI "tool" msg each.
-            tool_results = [
-                b for b in _object_items(content) if b.get("type") == "tool_result"
-            ]
+            tool_results = [b for b in _object_items(content) if b.get("type") == "tool_result"]
             if tool_results:
                 for block in tool_results:
                     raw = block.get("content")
@@ -861,7 +926,9 @@ def _openai_choice_to_anthropic(
     for tool_call in _object_items(message.get("tool_calls")):
         fn = object_dict(tool_call.get("function"))
         args_raw = fn.get("arguments") or "{}"
-        tool_input = parse_json_object(args_raw) if isinstance(args_raw, str) else object_dict(args_raw)
+        tool_input = (
+            parse_json_object(args_raw) if isinstance(args_raw, str) else object_dict(args_raw)
+        )
         content.append(
             {
                 "type": "tool_use",

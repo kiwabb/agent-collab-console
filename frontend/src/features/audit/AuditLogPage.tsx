@@ -252,7 +252,8 @@ function auditProjectPrSweepText(
   if (issuesWithPr != null) {
     parts.push(t("auditLog.event.prSweep.issuesWithPr", { count: issuesWithPr }));
   }
-  if (skippedNoPr != null) parts.push(t("auditLog.event.prSweep.skippedNoPr", { count: skippedNoPr }));
+  if (skippedNoPr != null)
+    parts.push(t("auditLog.event.prSweep.skippedNoPr", { count: skippedNoPr }));
   if (skippedMerged != null) {
     parts.push(t("auditLog.event.prSweep.skippedMerged", { count: skippedMerged }));
   }
@@ -265,11 +266,7 @@ function auditProjectPrSweepText(
   return { primary, secondary: parts.join(" · ") };
 }
 
-function auditTaskStatusRoleLabel(
-  role: string | null,
-  entry: AuditLog,
-  t: AuditTranslate,
-): string {
+function auditTaskStatusRoleLabel(role: string | null, entry: AuditLog, t: AuditTranslate): string {
   if (role === "operations_engineer") return t("auditLog.event.taskStatus.role.operationsEngineer");
   if (entry.role_label) return entry.role_label;
   if (role) return role;
@@ -747,12 +744,15 @@ function AuditRow({ entry, expanded, projectNames, onToggle }: AuditRowProps) {
         </span>
         <Badge
           variant="outline"
-            className={cn("shrink-0 font-mono text-[10px] uppercase", categoryClass(entry.category))}
+          className={cn("shrink-0 font-mono text-[10px] uppercase", categoryClass(entry.category))}
         >
           {t(`auditLog.category.${entry.category}` as never) || entry.category}
         </Badge>
         <span className="min-w-0">
-          <span className="block truncate font-mono text-xs text-text-primary" title={display.primary}>
+          <span
+            className="block truncate font-mono text-xs text-text-primary"
+            title={display.primary}
+          >
             {display.primary}
           </span>
           {display.secondary && (

@@ -41,6 +41,7 @@
   - `task_status`
   - `project_script_updated`
   - `cli_spawn`
+  - `prototype_artifact_validation`
 
 ### 3. Contracts
 
@@ -100,6 +101,24 @@
   - `project_script_updated` trace detail returns setup/run command results.
   - Whole-task runtime logs are a fallback when the row has no better semantic
     detail and no provider trace row exists.
+- Prototype generation follows the raw runtime evidence policy. Persist the
+  complete stdout/stream-json frames, thinking, tool inputs and outputs,
+  commands, assistant messages, final result/HTML, runtime traces, status
+  events, and audit payloads. This trajectory is durable Agent-system data for
+  debugging, review, and continuation.
+- Runtime trace `request_json` and `response_json` retain the complete payload;
+  bounded preview columns are UI summaries only and never replace the source
+  trace.
+- Runtime evidence is observability only. Generation must never reconstruct
+  HTML from logs, constrain or whitelist the agent's tool sequence, or use
+  tool history as artifact-success evidence. Success comes only from the
+  staged HTML, strict manifest, source integrity, and durable completion.
+- `prototype_artifact_validation` records only task/process identity, the exact
+  staging path, validated checksum and byte size, `passed|failed`, and a stable
+  safe error code. It never serializes manifest text, exception text, or HTML.
+- Schema version 8 does not rewrite runtime history. Databases already opened
+  by the retired destructive v8 migration have irreversibly lost those old
+  payloads; future migrations and writes preserve complete content.
 
 ### 4. Validation & Error Matrix
 
@@ -113,6 +132,12 @@
   parsing fails.
 - Status event for same `task_id` but different/missing execution boundary ->
   do not override an execution-scoped timeline node.
+- Runtime task identity unavailable while persisting a frame -> retain the raw
+  frame with the available correlation fields; do not silently discard Agent
+  trajectory data.
+- Prototype model response is not a strict compact `prototype-artifact/v1`
+  manifest -> retain the raw result for observability, while final artifact
+  validation fails through the normal generator boundary.
 
 ### 5. Good/Base/Bad Cases
 
@@ -148,6 +173,13 @@
   task messages and `log_events` so the UI can show the Claude Code process.
 - Store parity test: sync and async log-event stores preserve
   `parent_span_id`.
+- Runtime evidence test: HTML and command sentinels in stdout, thinking,
+  Write/Edit/Bash, tool result, message delta, task result, agent trace, status,
+  and audit payload are persisted for `prototype_generation`.
+- Migration test: all schema v7 runtime-history rows remain byte-for-byte
+  unchanged at v8, and reopening v8 is idempotent.
+- Artifact audit test: success and every post-task failure stage emit exactly
+  one metadata-only `prototype_artifact_validation` event.
 - Frontend typecheck: timeline API types stay aligned with the response shape.
 
 ### 7. Wrong vs Correct
@@ -177,6 +209,29 @@ await event_bus.append(
 )
 ```
 
+For prototype generation runtime evidence, this complete trace is correct:
+
+```python
+response_payload = {
+    "result": task.result,
+    "logs": [{"content": event.content} for event in logs],
+}
+```
+
+The following metadata-only replacement is wrong because it destroys the
+Agent trajectory:
+
+```python
+response_payload = {
+    "status": task.status,
+    "execution_process_id": task.last_execution_process_id,
+    "result_is_manifest": validated_manifest is not None,
+    "manifest": validated_manifest_metadata,
+    "log_count": len(logs),
+    "log_content_chars": sum(len(event.content) for event in logs),
+}
+```
+
 #### Wrong
 
 ```python
@@ -203,4 +258,97 @@ return {
         }
     ]
 }
+```
+
+## Scenario: Plan-Scoped Prototype Discovery MCP
+
+### 1. Scope / Trigger
+
+- Trigger: a Claude Code prototype-planning run needs to read project code and
+  persist page discoveries before its final response.
+
+### 2. Signatures
+
+- Endpoint: `POST /api/internal/prototype-planning-mcp`.
+- Tools: `list_discovered_pages`, `register_prototype_page`, and
+  `finalize_prototype_inventory`.
+- Item fields: `discovery_origin` (`static|claude`) and `review_status`
+  (`provisional|confirmed|needs_confirmation`).
+- Source line boundary: `source_line_count(source) -> int` is shared by static
+  evidence discovery and dynamic MCP evidence validation.
+
+### 3. Contracts
+
+- The spawned Claude process receives an ephemeral MCP config with a random
+  `X-Prototype-Planning-Token`; it is revoked when that planning run exits.
+- The endpoint first enforces loopback host restrictions, then validates that
+  token. It never accepts the MCP token for other API routes.
+- `list_discovered_pages` returns paths, routes, confidence, diagnostics and
+  evidence IDs, never source excerpts. Each successful registration is an
+  upsert, so the persisted plan snapshot is the live progress source.
+- Evidence `start_line` and `end_line` refer only to addressable lines in the
+  source file. A trailing newline terminates the last line; it does not create
+  an additional empty line.
+
+### 4. Validation & Error Matrix
+
+- Missing, expired, or wrong MCP token -> `401`; non-loopback host -> `403`.
+- Invalid source path, evidence line, locale, or evidence ID -> tool error and
+  no partial item persistence.
+- `end_line` greater than `source_line_count(source)` -> tool error, including
+  when the only apparent extra line comes from `source.count("\n") + 1` on a
+  file ending in a newline.
+- Finalization before route-list lookup -> tool error. Missing static routes ->
+  tool error containing the missing candidate IDs; the plan remains analyzing.
+
+### 5. Good/Base/Bad Cases
+
+- Good: Claude reads a route, registers it, and the review UI shows a locked
+  provisional row before the next route is processed.
+- Base: a source-backed page not found by the static scanner is stored as
+  `claude` / `needs_confirmation` and is not selected for generation.
+- Good: a one-line file containing `"component\n"` produces `end_line=1`.
+- Bad: forwarding the console control token to Claude, or bypassing all local
+  authentication for the MCP endpoint.
+- Bad: calculating line bounds with `source.count("\n") + 1`, which reports a
+  non-existent second line for `"component\n"`.
+
+### 6. Tests Required
+
+- MCP tests cover compact route output, registration, finalization, token
+  revocation, a valid non-static source-backed page, and rejection of an
+  `end_line` one past the real final line.
+- Planning tests assert incremental upserts preserve prior rows and do not let
+  non-static discoveries increase the static-route progress denominator.
+- Evidence scanner tests assert a trailing-newline source ends at its real
+  final line.
+- Frontend type and stream-parser tests include both new item fields.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+if request.url.path.startswith("/api/internal/"):
+    return await call_next(request)
+```
+
+#### Correct
+
+```python
+failure = authorize_loopback_request(request)
+if failure is None and prototype_planning_mcp_service.has_session_token(token):
+    return await call_next(request)
+```
+
+For source bounds, the wrong calculation is:
+
+```python
+line_count = source.count("\n") + 1
+```
+
+The correct shared calculation is:
+
+```python
+line_count = source_line_count(source)
 ```

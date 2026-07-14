@@ -343,12 +343,12 @@ def _infer_dockerfile_defaults(root: Path) -> dict[str, str]:
 
 _DESCRIPTION_HINTS = {
     "PORT": "服务监听端口",
-    "HOST": "服务绑定地址（0.0.0.0 = 所有网卡）",
+    "HOST": "服务绑定地址 (0.0.0.0 = 所有网卡)",
     "URL": "访问地址",
-    "KEY": "密钥（敏感，请手动填写）",
-    "SECRET": "密钥（敏感，请手动填写）",
-    "TOKEN": "访问令牌（敏感，请手动填写）",
-    "PASSWORD": "密码（敏感，请手动填写）",
+    "KEY": "密钥 (敏感, 请手动填写)",
+    "SECRET": "密钥 (敏感, 请手动填写)",
+    "TOKEN": "访问令牌 (敏感, 请手动填写)",
+    "PASSWORD": "密码 (敏感, 请手动填写)",
     "DB": "数据库配置",
     "DATABASE": "数据库配置",
     "REGISTRY": "镜像仓库地址",
@@ -359,7 +359,7 @@ _DESCRIPTION_HINTS = {
 def _describe(name: str, secret: bool) -> str:
     upper = name.upper()
     if secret:
-        return "敏感凭据（系统不会自动填写，请手动录入）"
+        return "敏感凭据 (系统不会自动填写, 请手动录入)"
     for hint, desc in _DESCRIPTION_HINTS.items():
         if hint in upper:
             return desc
@@ -394,7 +394,7 @@ def detect_env_requirements(repo_path: str) -> EnvRequirements:
     # Resolve + dedupe env_file references relative to repo root.
     seen_files: set[str] = set()
     for ref in env_file_refs:
-        resolved = ref if ref.startswith("/") else ref
+        resolved = ref
         if resolved not in seen_files:
             seen_files.add(resolved)
             requirements.env_files.append(resolved)

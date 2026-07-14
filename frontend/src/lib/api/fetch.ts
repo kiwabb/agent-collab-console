@@ -105,6 +105,10 @@ export async function apiRequest<T>(url: string, init?: RequestInit): Promise<T>
   return handleResponse<T>(response);
 }
 
+export function apiRawRequest(url: string, init?: RequestInit): Promise<Response> {
+  return fetch(url, init);
+}
+
 export async function apiDedupedRequest<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await dedupedFetch(url, init);
   return handleResponse<T>(response);

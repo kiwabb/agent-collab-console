@@ -114,6 +114,237 @@ async def test_prepare_chat_task_worktree(project: Project, manager: WorktreeMan
     assert base == "main"
 
 
+@pytest.mark.asyncio
+async def test_prototype_worktree_snapshots_dirty_source_and_cleans_branch(
+    project: Project,
+    manager: WorktreeManager,
+) -> None:
+    repo = Path(project.repo_path)
+    (repo / "README.md").write_text("dirty tracked source\n", encoding="utf-8")
+    (repo / "untracked-page.tsx").write_text("export const Page = 1;\n", encoding="utf-8")
+    primary_status_before = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    branch, path, base_revision = await manager.prepare_prototype_worktree(
+        project,
+        "prototype-generation-item-123",
+        source_paths=("README.md", "untracked-page.tsx"),
+    )
+
+    worktree = Path(path)
+    assert branch.startswith("prototype/")
+    assert base_revision != project.default_branch
+    assert (worktree / "README.md").read_text(encoding="utf-8") == "dirty tracked source\n"
+    assert (worktree / "untracked-page.tsx").read_text(encoding="utf-8") == (
+        "export const Page = 1;\n"
+    )
+    assert (
+        subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        == primary_status_before
+    )
+
+    await manager.cleanup_prototype_worktree(project, "prototype-generation-item-123")
+
+    assert not worktree.exists()
+    branches = subprocess.run(
+        ["git", "branch", "--list", branch],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert branches.strip() == ""
+
+
+@pytest.mark.asyncio
+async def test_prototype_worktree_with_no_source_paths_ignores_dirty_and_untracked_state(
+    project: Project,
+    manager: WorktreeManager,
+) -> None:
+    repo = Path(project.repo_path)
+    (repo / "README.md").write_text("dirty tracked source\n", encoding="utf-8")
+    unrelated_worktree = repo / "examples" / "admin-demo-worktrees" / "prototype-existing"
+    unrelated_worktree.mkdir(parents=True)
+    _git("init", "-b", "main", cwd=unrelated_worktree)
+    (unrelated_worktree / "artifact.txt").write_text("unrelated\n", encoding="utf-8")
+
+    _, path, _ = await manager.prepare_prototype_worktree(
+        project,
+        "requirements-only-generation",
+        source_paths=(),
+    )
+    try:
+        worktree = Path(path)
+        assert (worktree / "README.md").read_text(encoding="utf-8") == "hello"
+        assert not (worktree / "examples").exists()
+    finally:
+        await manager.cleanup_prototype_worktree(project, "requirements-only-generation")
+
+
+@pytest.mark.asyncio
+async def test_prototype_worktree_isolates_nested_untracked_project_root(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git("init", "-b", "main", cwd=repo)
+    _git("config", "user.email", "test@example.com", cwd=repo)
+    _git("config", "user.name", "Test", cwd=repo)
+    tracked_frontend = repo / "frontend/src"
+    tracked_frontend.mkdir(parents=True)
+    (tracked_frontend / "globals.css").write_text("parent styles\n", encoding="utf-8")
+    _git("add", "frontend/src/globals.css", cwd=repo)
+    _git("commit", "-m", "parent app", cwd=repo)
+
+    nested = repo / "examples/admin-demo"
+    source = nested / "frontend/src/Page.vue"
+    source.parent.mkdir(parents=True)
+    source.write_text("<template>nested</template>\n", encoding="utf-8")
+    project = Project(id="nested", name="admin-demo", repo_path=str(nested))
+    manager = WorktreeManager(GitService())
+    item_ids = ("prototype-nested-a", "prototype-nested-b")
+
+    prepared = await asyncio.gather(
+        *(
+            manager.prepare_prototype_worktree(
+                project,
+                item_id,
+                source_paths=("frontend/src/Page.vue",),
+            )
+            for item_id in item_ids
+        )
+    )
+    try:
+        for _, path, _ in prepared:
+            isolated = Path(path)
+            assert isolated.name == "admin-demo"
+            assert (isolated / "frontend/src/Page.vue").read_text(encoding="utf-8") == (
+                "<template>nested</template>\n"
+            )
+            assert not (isolated / "frontend/src/globals.css").exists()
+            top_level = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=isolated,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            assert Path(top_level) == isolated
+    finally:
+        await asyncio.gather(
+            *(manager.cleanup_prototype_worktree(project, item_id) for item_id in item_ids)
+        )
+
+
+@pytest.mark.asyncio
+async def test_prototype_worktree_excludes_generated_prototype_versions(
+    project: Project,
+    manager: WorktreeManager,
+) -> None:
+    repo = Path(project.repo_path)
+    generated = repo / "prototypes" / "prototype-1" / "version-1" / "index.html"
+    generated.parent.mkdir(parents=True)
+    generated.write_text("<!DOCTYPE html><html></html>", encoding="utf-8")
+    nested_source = repo / "frontend" / "src" / "prototypes" / "Page.tsx"
+    nested_source.parent.mkdir(parents=True)
+    nested_source.write_text("export const Page = 1;\n", encoding="utf-8")
+
+    _, path, _ = await manager.prepare_prototype_worktree(
+        project,
+        "prototype-excludes-generated-versions",
+        source_paths=("frontend/src/prototypes/Page.tsx",),
+    )
+    try:
+        worktree = Path(path)
+        assert not (worktree / "prototypes").exists()
+        assert (worktree / "frontend" / "src" / "prototypes" / "Page.tsx").is_file()
+    finally:
+        await manager.cleanup_prototype_worktree(
+            project,
+            "prototype-excludes-generated-versions",
+        )
+
+
+@pytest.mark.asyncio
+async def test_prototype_worktree_removes_tracked_root_prototypes_only(
+    project: Project,
+    manager: WorktreeManager,
+) -> None:
+    repo = Path(project.repo_path)
+    generated = repo / "prototypes" / "prototype-1" / "version-1" / "index.html"
+    generated.parent.mkdir(parents=True)
+    generated.write_text("<!DOCTYPE html><html></html>", encoding="utf-8")
+    nested_source = repo / "frontend" / "src" / "prototypes" / "Page.tsx"
+    nested_source.parent.mkdir(parents=True)
+    nested_source.write_text("export const Page = 1;\n", encoding="utf-8")
+    _git("add", "prototypes", "frontend/src/prototypes", cwd=repo)
+    _git("commit", "-m", "track prototype paths", cwd=repo)
+
+    _, path, _ = await manager.prepare_prototype_worktree(
+        project,
+        "prototype-excludes-tracked-generated-versions",
+    )
+    try:
+        worktree = Path(path)
+        assert not (worktree / "prototypes").exists()
+        assert (worktree / "frontend" / "src" / "prototypes" / "Page.tsx").read_text(
+            encoding="utf-8"
+        ) == "export const Page = 1;\n"
+    finally:
+        await manager.cleanup_prototype_worktree(
+            project,
+            "prototype-excludes-tracked-generated-versions",
+        )
+
+
+@pytest.mark.asyncio
+async def test_prototype_worktree_never_runs_setup_or_links_frontend_dependencies(
+    project: Project,
+    manager: WorktreeManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _add_ignored_frontend_dependencies(project)
+    project.setup_script = "touch prototype-setup-must-not-run"
+    calls: list[str] = []
+
+    async def unexpected_setup(script: str, cwd: Path) -> None:
+        del script, cwd
+        calls.append("setup")
+
+    async def unexpected_dependency_link(target_project: Project, worktree: Path) -> None:
+        del target_project, worktree
+        calls.append("dependencies")
+
+    monkeypatch.setattr(manager, "_run_setup", unexpected_setup)
+    monkeypatch.setattr(
+        manager,
+        "_link_trusted_frontend_dependencies",
+        unexpected_dependency_link,
+    )
+
+    _, path, _ = await manager.prepare_prototype_worktree(
+        project,
+        "prototype-no-setup",
+        source_paths=("frontend/package.json",),
+    )
+    try:
+        worktree = Path(path)
+        assert calls == []
+        assert not (worktree / "prototype-setup-must-not-run").exists()
+        assert not (worktree / "frontend" / "node_modules").exists()
+    finally:
+        await manager.cleanup_prototype_worktree(project, "prototype-no-setup")
+
+
 def _add_ignored_frontend_dependencies(project: Project) -> Path:
     repo = Path(project.repo_path)
     frontend = repo / "frontend"
@@ -248,8 +479,7 @@ async def test_setup_script_runs_structured_commands_with_minimal_env(
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
 
     await manager._run_setup(
-        "(cd frontend && npm install) && "
-        "(cd backend && python -m pip install -r requirements.txt)",
+        "(cd frontend && npm install) && (cd backend && python -m pip install -r requirements.txt)",
         tmp_path,
     )
 

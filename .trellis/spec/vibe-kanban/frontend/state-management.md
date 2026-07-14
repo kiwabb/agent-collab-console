@@ -330,3 +330,206 @@ handledScriptTaskIdsRef.current.delete(task.task_id);
 setSuggestingTaskId(task.task_id);
 if (lastEvent.task_id !== suggestingTaskId) return;
 ```
+
+
+---
+
+## Scenario: Recoverable Prototype Planning and Generation State
+
+### 1. Scope / Trigger
+
+- Trigger: changing the prototype plan review page, planning/generation SSE,
+  refresh recovery, polling fallback, or progress counters.
+- Planning drafts and generation activity are recoverable server workflows.
+  React state renders and reconciles them; it is not the lifecycle owner.
+
+### 2. Signatures
+
+- Planning hook:
+  `usePrototypePlanLiveRecovery({ plan, planId, projectId, onSnapshot, recoveryKey })`.
+- Generation hook:
+  `usePrototypeGenerationLiveRun({ run, onSnapshot, recoveryKey })`.
+- Recovery reads:
+  `getPrototypePlan(planId)` and `getPrototypeGenerationRun(runId)`.
+- Stream identity:
+  heartbeat `{ contract_version: 1, resource_id, sent_at }` plus a full
+  persisted plan/run snapshot.
+- Generation counters:
+  `processed`, `succeeded`, `failed`, `running`, `pending`, and
+  `total`.
+
+### 3. Contracts
+
+- The latest valid persisted snapshot is the source of truth after reload.
+  Never reconstruct run/item terminal state from component-local booleans.
+- Open SSE only for active plans/runs. Every snapshot and heartbeat must match
+  the requested plan/run identity; planning snapshots must also match the
+  project identity.
+- A valid snapshot or heartbeat marks the stream healthy and resets the bounded
+  recovery budget. Silence, disconnect, or an invalid frame surfaces a visible
+  connection issue and activates REST reconciliation.
+- Poll every 1.5 seconds only while recovery is active, for at most 20 attempts
+  and 60 seconds. Exhaustion stops automatic polling and leaves an explicit
+  manual recovery path; it never becomes an infinite background poll.
+- A failed REST reconciliation preserves the last valid plan/run, editable
+  draft, and generated results. Log with plan/run identity and set a visible
+  polling error.
+- `processed = done + failed + interrupted + skipped`,
+  `succeeded = done`, and `failed = failed + interrupted`. The primary
+  progress bar uses `processed / total`, not successful `completed / total`.
+- A terminal run has `processed === total`, `running === 0`, and
+  `pending === 0`. A partial 8-success/5-failure run therefore renders
+  `13/13` processed and retains all five retryable failure details.
+
+### 4. Validation & Error Matrix
+
+- Snapshot parse failure -> keep stale data, show `invalid_snapshot`, and
+  enter bounded polling.
+- Snapshot/heartbeat resource mismatch -> reject the frame, keep stale data,
+  show `invalid_resource`, and do not apply it to the current page.
+- SSE error or 15 seconds without valid activity -> show
+  `disconnected` / `silent` and enter bounded polling.
+- Valid REST snapshot for the wrong resource -> reject it and stop treating the
+  response as recovery.
+- Poll request failure -> keep stale data, log with identity, and expose retry.
+- Poll budget exhausted -> stop automatic recovery and show the explicit
+  exhausted state; manual refresh increments `recoveryKey` and starts a fresh
+  bounded budget.
+- Terminal snapshot -> close active recovery and render its persisted counters,
+  item errors, timestamps, and retry eligibility.
+
+### 5. Good/Base/Bad Cases
+
+- Good: SSE is buffered after an 8/13 display; silence detection polls the run,
+  applies the persisted 13/13 terminal snapshot, and keeps all failure rows.
+- Base: an active planning snapshot and heartbeat arrive normally, reset the
+  budget, and update batch progress without polling.
+- Bad: clearing the current plan or unsaved draft when one poll request fails.
+- Bad: accepting a valid snapshot for another run because its shape parses.
+- Bad: using `completed / total` as the progress bar for a partial terminal run.
+- Bad: leaving a poll interval active forever after the recovery deadline.
+
+### 6. Tests Required
+
+- Pure recovery-budget tests cover attempt limit, deadline, and healthy-stream
+  reset.
+- Hook/source tests cover silence, disconnect, resource mismatch, REST failure,
+  stale-data preservation, terminal stop, and manual recovery reset.
+- Snapshot tests assert the 8-success/5-failure terminal run is 13/13 processed
+  and reject counter/item contradictions.
+- Browser checks at 1164, 390, and 375 CSS pixels assert first-viewport metrics,
+  visible failure recovery, and no horizontal overflow.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```tsx
+source.onerror = () => {
+  setRun(null);
+  setItems([]);
+};
+```
+
+Correct:
+
+```tsx
+source.onerror = () => {
+  setConnectionIssue("disconnected");
+  // Keep the last snapshot and let the bounded REST reconciler refresh it.
+};
+```
+
+---
+
+## Scenario: Structured Generation-to-Studio Bootstrap
+
+### 1. Scope / Trigger
+
+- Trigger: changing the structured Studio route, requirements generation UI,
+  generation polling, candidate acceptance, runtime session creation, or the
+  procurement walkthrough controls.
+- The structured document and durable generation job are server state. React
+  and local storage may cache request/session identity but never choose the
+  project's canonical draft.
+
+### 2. Signatures
+
+- Studio hook: `useStructuredPrototypeStudio(projectId)`.
+- Generation hook:
+  `useStructuredPrototypeGeneration({ projectId, onAccepted })`.
+- Reads: `getCurrentStructuredPrototypeDraft(projectId, clientRequestId)` and
+  `getCurrentStructuredPrototypeGenerationJob(projectId)`.
+- Semantic projection:
+  `deriveProcurementRuntimeBindings(document) -> ProcurementRuntimeBindings | null`.
+- Generation actions: create requirements job, confirm blueprint, accept
+  candidate, then recover the project-current draft.
+
+### 3. Contracts
+
+- Studio always asks the backend for the project-current draft. A `null` draft
+  renders requirements generation; it never creates a fixture document.
+- The generation UI exposes requirements, blueprint pages, durable counters,
+  item phase/status, job/operation/task/process IDs, preview, and Accept.
+- Poll only active statuses every two seconds, for at most 300 attempts. Keep
+  the last valid job on request failure and expose manual recovery.
+- Accept is complete only after the returned draft ID matches a fresh
+  project-current draft recovery; then the same Studio controller creates the
+  pinned runtime session.
+- Procurement actions derive scenario, form, entity fields, table, submit, and
+  approve identities from stable runtime keys and rule triggers. Form inputs
+  are selected from the referenced Form subtree by their typed input roles.
+- Missing or ambiguous semantic mappings return `null` and fail Studio startup;
+  components never import fixture UUIDs for production interaction behavior.
+
+### 4. Validation & Error Matrix
+
+- Current draft `null` -> show requirements generation with no runtime session.
+- Current generation `null` -> show empty requirements state.
+- Generation poll failure -> retain the last job/blueprint/preview and show the
+  error plus Retry.
+- Poll budget exhausted -> stop automatic polling and show localized manual
+  recovery.
+- Missing blueprint/candidate/output hash -> disable Confirm/Accept.
+- Accepted response draft ID differs from project-current recovery -> visible
+  failure; do not enter Studio.
+- Missing scenario/rule/form/schema key or ambiguous text/number inputs -> fail
+  closed before runtime creation.
+
+### 5. Good/Base/Bad Cases
+
+- Good: refresh during Claude page generation restores job progress without a
+  browser-owned job ID.
+- Base: a project with no structured data starts at the requirements form.
+- Good: an accepted generated document with different opaque UUIDs still runs
+  because behavior is derived from semantic keys.
+- Bad: production imports `STRUCTURED_PROCUREMENT_IDS` to submit or approve.
+- Bad: a poll error calls `setJob(null)` or clears the candidate preview.
+
+### 6. Tests Required
+
+- Pure tests cover active polling statuses, processed progress, retryable
+  terminal jobs, semantic binding success, and fail-closed missing keys.
+- API tests cover current draft, current job, create/confirm/accept URL and body
+  contracts.
+- Full TypeScript, node tests, ESLint, and Prettier pass.
+- Browser checks cover direct accepted-Studio recovery, document-free generation
+  entry, enabled requirements action, desktop/narrow overflow, and console
+  errors.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```tsx
+const scenarioId = STRUCTURED_PROCUREMENT_IDS.scenario;
+const submitNodeId = STRUCTURED_PROCUREMENT_IDS.nodes.submitRequest;
+```
+
+Correct:
+
+```tsx
+const bindings = deriveProcurementRuntimeBindings(draft.document);
+if (!bindings) throw new Error("procurement runtime contract is unavailable");
+await createRuntimeSession(draft.draftId, bindings.scenarioId);
+```

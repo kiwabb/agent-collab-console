@@ -547,7 +547,9 @@ function ExecutorCard({
                 size="sm"
                 onClick={handleCliTest}
                 disabled={testingCli}
-                data-density={testingCli ? "runtime-catalog-test-cli-tool" : "runtime-catalog-test-cli"}
+                data-density={
+                  testingCli ? "runtime-catalog-test-cli-tool" : "runtime-catalog-test-cli"
+                }
                 className={cn("gap-1.5", testingCli && "motion-essential")}
               >
                 {testingCli ? (

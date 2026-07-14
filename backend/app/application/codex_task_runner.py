@@ -11,6 +11,7 @@ from app.application.role_workflow_service import RoleWorkflowService
 from app.application.runtime_catalog_service import RuntimeCatalogStore
 from app.application.task_status_events import build_task_status_event
 from app.application.task_statuses import (
+    execution_process_state_for_task,
     is_task_active_status,
     is_task_failure_status,
     is_task_success_status,
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 JsonEvent = dict[str, object]
 RefreshTaskResult = Callable[[CodexTask], Awaitable[object]]
+ExecutionStartedCallback = Callable[[CodexTask, ExecutionProcess], Awaitable[None]]
 
 
 class TaskRunnerStore(RuntimeCatalogStore, Protocol):
@@ -158,6 +160,9 @@ class CodexTaskRunner:
         run_model: str | None = None,
         kind: ExecutionProcessKind = "initial",
         triggering_message_id: str | None = None,
+        wait_for_completion: bool = False,
+        execution_started_callback: ExecutionStartedCallback | None = None,
+        command_args_override: list[str] | None = None,
     ) -> ExecutionProcess:
         if is_task_active_status(task.status):
             raise ValueError("Task already running or responding")
@@ -213,6 +218,34 @@ class CodexTaskRunner:
         await self.event_bus.append(
             build_task_status_event(task, "running", execution_process_id=exec_process.id)
         )
+        if execution_started_callback is not None:
+            try:
+                await execution_started_callback(task, exec_process)
+            except Exception:
+                logger.exception(
+                    "task execution-start callback failed: task_id=%s process_id=%s",
+                    task.id,
+                    exec_process.id,
+                )
+                task.status = "failed"
+                task.result = "task execution-start persistence failed"
+                task.updated_at = datetime.now()
+                await self.codex_store.save_codex_task(task)
+                await self.codex_store.update_execution_process_status(
+                    exec_process.id,
+                    "Failed",
+                    exit_code=-1,
+                    completed_at=datetime.now(),
+                )
+                await self.event_bus.append(
+                    build_task_status_event(
+                        task,
+                        "failed",
+                        result=task.result,
+                        execution_process_id=exec_process.id,
+                    )
+                )
+                raise
 
         mgr = self._process_manager_factory()
         if self._help_orchestrator_factory is not None:
@@ -221,7 +254,7 @@ class CodexTaskRunner:
                 runtime = getattr(mgr, runtime_name, None)
                 if runtime is not None:
                     cast(RuntimeHelpSlot, runtime).help_orchestrator = help_orchestrator
-        wait_for_completion = isinstance(mgr, self._mock_manager_cls)
+        should_wait_for_completion = wait_for_completion or isinstance(mgr, self._mock_manager_cls)
         prompt_text = prompt_override if prompt_override is not None else task.prompt
         prompt_text = await self._build_prompt_text(
             task,
@@ -232,11 +265,12 @@ class CodexTaskRunner:
             resume_message_id=resume_message_id,
         )
 
+        effective_command_args = [*(rendered_command_args or []), *(command_args_override or [])]
         try:
             final_status = await mgr.write_input_async(
                 task.session_id,
-                prompt_text + "\n",
-                wait=wait_for_completion,
+                prompt_text,
+                wait=should_wait_for_completion,
                 task_id=task.id,
                 executor=executor_type,  # Use executor_type for runtime routing
                 provider=provider,
@@ -245,7 +279,7 @@ class CodexTaskRunner:
                 resume_message_id=resume_message_id,
                 cwd=task.workspace_path,
                 env_overrides=rendered_env,
-                command_args=rendered_command_args,
+                command_args=effective_command_args,
                 force_new_session=kind in ("rerun", "initial"),
             )
         except Exception:
@@ -293,9 +327,9 @@ class CodexTaskRunner:
         # request_specialist which sets the task to waiting_for_specialist in DB.
         # Saving the stale local copy would overwrite that status transition.
         reloaded = await self.codex_store.load_codex_task(task.id)
-        if reloaded is not None and reloaded.status in (
-            "waiting_for_specialist",
-            "waiting_for_help",
+        if reloaded is not None and (
+            is_task_failure_status(reloaded.status)
+            or reloaded.status in ("waiting_for_specialist", "waiting_for_help")
         ):
             task = reloaded
         else:
@@ -317,15 +351,7 @@ class CodexTaskRunner:
                 # Don't fail the run on a bookkeeping update.
                 logger.debug("task git head bookkeeping failed: task_id=%s", task.id, exc_info=True)
 
-        if is_task_success_status(task.status):
-            exec_final_status = "Completed"
-            exec_exit_code: int | None = 0
-        elif is_task_failure_status(task.status):
-            exec_final_status = "Failed"
-            exec_exit_code = -1
-        else:
-            exec_final_status = "Running"
-            exec_exit_code = None
+        exec_final_status, exec_exit_code = execution_process_state_for_task(task.status)
         await self.codex_store.update_execution_process_status(
             exec_process.id,
             exec_final_status,

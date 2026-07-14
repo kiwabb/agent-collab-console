@@ -1,0 +1,1806 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>构想台 - 结构化原型工作台</title>
+  <style>
+    :root {
+      --app-bg: #eef1ef;
+      --surface: #ffffff;
+      --surface-soft: #f7f8f7;
+      --surface-muted: #ecefed;
+      --ink: #17201d;
+      --ink-muted: #62706b;
+      --line: #d9dfdc;
+      --line-strong: #b8c3be;
+      --primary: #126b5f;
+      --primary-strong: #0b554b;
+      --primary-soft: #e1f1ed;
+      --flow: #4f46a5;
+      --flow-soft: #ecebfa;
+      --warning: #9a5b13;
+      --warning-soft: #fff2d8;
+      --danger: #b4233a;
+      --success: #237a45;
+      --shadow-sm: 0 1px 2px rgba(18, 31, 27, 0.08);
+      --shadow-md: 0 12px 34px rgba(18, 31, 27, 0.12);
+      --radius: 6px;
+      --header-h: 58px;
+      --mobile-dock-h: 60px;
+      color-scheme: light;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-synthesis: none;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      min-width: 0;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--app-bg);
+      color: var(--ink);
+    }
+
+    body {
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    button, input, select, textarea { font: inherit; letter-spacing: 0; }
+    button, [draggable="true"] { touch-action: manipulation; }
+
+    button {
+      border: 0;
+      color: inherit;
+    }
+
+    button:not(:disabled), select:not(:disabled), [draggable="true"] { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: 0.45; }
+
+    :focus-visible {
+      outline: 3px solid rgba(18, 107, 95, 0.28);
+      outline-offset: 2px;
+    }
+
+    .skip-link {
+      position: fixed;
+      left: 12px;
+      top: -52px;
+      z-index: 999;
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      background: var(--ink);
+      color: white;
+      text-decoration: none;
+    }
+
+    .skip-link:focus { top: 10px; }
+
+    .app-shell {
+      display: grid;
+      grid-template-rows: var(--header-h) minmax(0, 1fr);
+      width: 100%;
+      height: 100dvh;
+    }
+
+    .app-header {
+      position: relative;
+      z-index: 40;
+      display: grid;
+      grid-template-columns: minmax(230px, 1fr) auto minmax(230px, 1fr);
+      align-items: center;
+      min-width: 0;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.97);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 10px;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 32px;
+      height: 32px;
+      flex: 0 0 32px;
+      place-items: center;
+      border-radius: 6px;
+      background: var(--ink);
+      color: white;
+      font-size: 14px;
+      font-weight: 750;
+    }
+
+    .brand-copy { min-width: 0; }
+    .brand-name { font-size: 13px; font-weight: 750; line-height: 1.15; }
+    .project-name {
+      max-width: 300px;
+      margin-top: 3px;
+      overflow: hidden;
+      color: var(--ink-muted);
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .mode-switch, .mini-segment {
+      display: inline-grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(72px, auto);
+      align-items: center;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface-muted);
+    }
+
+    .mode-button, .mini-segment button {
+      min-height: 34px;
+      padding: 0 13px;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--ink-muted);
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .mode-button[aria-pressed="true"], .mini-segment button[aria-pressed="true"] {
+      background: var(--surface);
+      color: var(--ink);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .mode-button[data-mode="flow"][aria-pressed="true"] { color: var(--flow); }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      min-width: 0;
+      gap: 8px;
+    }
+
+    .status-copy {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--ink-muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--success);
+    }
+
+    .button {
+      display: inline-flex;
+      min-height: 38px;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 650;
+      box-shadow: var(--shadow-sm);
+      transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+    }
+
+    .button:hover { border-color: var(--line-strong); background: var(--surface-soft); }
+    .button.primary { border-color: var(--primary); background: var(--primary); color: white; }
+    .button.primary:hover { border-color: var(--primary-strong); background: var(--primary-strong); }
+    .button.flow { border-color: var(--flow); background: var(--flow); color: white; }
+    .button.ghost { border-color: transparent; background: transparent; box-shadow: none; }
+    .button.danger { color: var(--danger); }
+    .button.small { min-height: 32px; padding: 0 10px; font-size: 12px; }
+    .icon-button { width: 38px; padding: 0; font-size: 18px; }
+
+    .editor-grid {
+      display: grid;
+      grid-template-columns: 252px minmax(440px, 1fr) 330px;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .panel {
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: var(--surface);
+    }
+
+    .left-panel {
+      display: grid;
+      grid-template-rows: auto minmax(150px, 1fr) auto minmax(170px, 0.9fr);
+      border-right: 1px solid var(--line);
+    }
+
+    .right-panel {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      border-left: 1px solid var(--line);
+    }
+
+    .panel-heading {
+      display: flex;
+      min-height: 48px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-title { font-size: 12px; font-weight: 750; text-transform: uppercase; }
+    .panel-count { color: var(--ink-muted); font-size: 12px; }
+
+    .page-list {
+      min-height: 0;
+      overflow: auto;
+      padding: 8px;
+    }
+
+    .page-row {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr) auto;
+      min-height: 52px;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 3px;
+      padding: 5px 6px;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      background: transparent;
+    }
+
+    .page-row:hover { background: var(--surface-soft); }
+    .page-row.active { border-color: #b6d7cf; background: var(--primary-soft); }
+    .page-row.drag-over { border-color: var(--primary); background: #d8eee9; }
+
+    .drag-handle {
+      display: grid;
+      width: 24px;
+      height: 34px;
+      place-items: center;
+      border-radius: 4px;
+      color: #7b8782;
+      font-size: 16px;
+      cursor: grab;
+      user-select: none;
+    }
+
+    .drag-handle:active { cursor: grabbing; }
+
+    .page-main {
+      min-width: 0;
+      padding: 4px 2px;
+      border: 0;
+      background: transparent;
+      text-align: left;
+    }
+
+    .page-main strong, .page-main span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .page-main strong { font-size: 13px; font-weight: 650; }
+    .page-main span { margin-top: 3px; color: var(--ink-muted); font-size: 11px; }
+
+    .page-order-controls { display: flex; gap: 2px; }
+    .page-order-controls button {
+      width: 26px;
+      height: 30px;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--ink-muted);
+    }
+    .page-order-controls button:hover { background: var(--surface-muted); color: var(--ink); }
+
+    .library {
+      min-height: 0;
+      overflow: auto;
+      padding: 10px;
+    }
+
+    .library-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 7px;
+    }
+
+    .library-item {
+      display: grid;
+      min-height: 68px;
+      place-items: center;
+      align-content: center;
+      gap: 6px;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-soft);
+      color: var(--ink);
+      text-align: center;
+      transition: border-color 160ms ease, background 160ms ease;
+    }
+
+    .library-item:hover { border-color: var(--primary); background: var(--primary-soft); }
+    .library-glyph { color: var(--primary); font-size: 16px; font-weight: 800; }
+    .library-label { font-size: 12px; font-weight: 650; }
+
+    .flow-list { display: grid; gap: 7px; }
+    .flow-summary {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-soft);
+    }
+    .flow-summary strong { display: block; font-size: 12px; }
+    .flow-summary span { display: block; margin-top: 4px; color: var(--ink-muted); font-size: 11px; }
+
+    .center-workspace {
+      display: grid;
+      grid-template-rows: 48px minmax(0, 1fr);
+      min-width: 0;
+      min-height: 0;
+      background: var(--app-bg);
+    }
+
+    .workspace-top {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-soft);
+    }
+
+    .crumbs {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      gap: 7px;
+      overflow: hidden;
+      color: var(--ink-muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .crumbs strong { overflow: hidden; color: var(--ink); text-overflow: ellipsis; }
+
+    .revision-badge {
+      flex: 0 0 auto;
+      padding: 4px 7px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--surface);
+      color: var(--ink-muted);
+      font-size: 11px;
+    }
+
+    .stage {
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      padding: 20px;
+    }
+
+    .design-stage {
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+    }
+
+    .prototype-window {
+      width: min(100%, 1100px);
+      min-width: 0;
+      min-height: 640px;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: white;
+      box-shadow: var(--shadow-md);
+      transition: width 180ms ease;
+    }
+
+    .prototype-window[data-viewport="tablet"] { width: min(100%, 820px); }
+    .prototype-window[data-viewport="mobile"] { width: min(100%, 430px); }
+
+    .browser-bar {
+      display: flex;
+      height: 38px;
+      align-items: center;
+      gap: 9px;
+      padding: 0 12px;
+      border-bottom: 1px solid #dfe4e1;
+      background: #f3f5f4;
+    }
+
+    .browser-dots { display: flex; gap: 5px; }
+    .browser-dots span { width: 8px; height: 8px; border-radius: 50%; background: #bfc8c4; }
+    .browser-url {
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+      padding: 5px 9px;
+      border: 1px solid #d8dfdc;
+      border-radius: 5px;
+      background: white;
+      color: #6b7772;
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .preview-app {
+      display: grid;
+      grid-template-columns: 184px minmax(0, 1fr);
+      min-height: 600px;
+      background: #f5f7f6;
+      --preview-accent: #126b5f;
+    }
+
+    .prototype-window[data-viewport="mobile"] .preview-app { grid-template-columns: 1fr; }
+    .prototype-window[data-viewport="mobile"] .preview-sidebar { display: none; }
+
+    .preview-sidebar {
+      padding: 18px 12px;
+      background: #1d2925;
+      color: white;
+    }
+
+    .preview-brand { padding: 0 10px 18px; font-size: 15px; font-weight: 750; }
+    .preview-brand span { display: block; margin-top: 4px; color: #aebcb7; font-size: 10px; font-weight: 500; }
+
+    .preview-nav { display: grid; gap: 4px; }
+    .preview-nav button {
+      display: flex;
+      width: 100%;
+      min-height: 38px;
+      align-items: center;
+      gap: 9px;
+      padding: 0 10px;
+      border-radius: 5px;
+      background: transparent;
+      color: #cbd5d1;
+      font-size: 12px;
+      text-align: left;
+    }
+
+    .preview-nav button:hover { background: rgba(255,255,255,0.08); color: white; }
+    .preview-nav button.active { background: rgba(255,255,255,0.13); color: white; font-weight: 650; }
+    .nav-bullet { width: 6px; height: 6px; border-radius: 2px; background: currentColor; opacity: 0.8; }
+
+    .preview-content { min-width: 0; padding: 22px; }
+
+    .preview-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .preview-mobile-menu { display: none; }
+    .prototype-window[data-viewport="mobile"] .preview-mobile-menu { display: inline-flex; }
+
+    .preview-topbar small { color: #64716c; font-size: 11px; }
+    .avatar { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 50%; background: #d9e7e2; color: #294b41; font-size: 11px; font-weight: 750; }
+
+    .block-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-height: 470px;
+      padding: 2px;
+      border-radius: 6px;
+    }
+
+    .block-stack.drop-active { outline: 2px dashed var(--primary); outline-offset: 5px; background: rgba(18, 107, 95, 0.04); }
+
+    .canvas-block {
+      position: relative;
+      min-width: 0;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      transition: border-color 140ms ease, box-shadow 140ms ease;
+    }
+
+    .canvas-block:hover { border-color: #b7c8c1; }
+    .canvas-block.selected { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(18,107,95,0.13); }
+    .canvas-block.block-drag-over { border-top: 3px solid var(--primary); }
+
+    .block-grip {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      display: none;
+      width: 26px;
+      height: 26px;
+      place-items: center;
+      border: 1px solid #cbd5d1;
+      border-radius: 4px;
+      background: white;
+      color: #66736e;
+      box-shadow: var(--shadow-sm);
+      cursor: grab;
+      z-index: 2;
+    }
+
+    .canvas-block:hover .block-grip, .canvas-block.selected .block-grip { display: grid; }
+
+    .page-heading { padding: 8px 4px; }
+    .page-heading h1 { margin: 0; font-size: 23px; line-height: 1.25; letter-spacing: 0; }
+    .page-heading p { max-width: 620px; margin: 7px 0 0; color: #63716b; font-size: 12px; line-height: 1.55; }
+
+    .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .metric-card { padding: 14px; border: 1px solid #dce3e0; border-radius: 6px; background: white; }
+    .metric-card span { display: block; color: #69756f; font-size: 11px; }
+    .metric-card strong { display: block; margin-top: 8px; font-size: 22px; line-height: 1; font-variant-numeric: tabular-nums; }
+    .metric-card small { display: block; margin-top: 8px; color: var(--success); font-size: 10px; }
+
+    .table-card { overflow: hidden; border: 1px solid #dce3e0; border-radius: 6px; background: white; }
+    .table-title { display: flex; min-height: 46px; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid #e3e8e6; }
+    .table-title strong { font-size: 12px; }
+    .table-title button { min-height: 30px; padding: 0 9px; border-radius: 4px; background: var(--preview-accent); color: white; font-size: 10px; }
+    .data-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .data-table th, .data-table td { padding: 11px 14px; border-bottom: 1px solid #edf0ef; text-align: left; white-space: nowrap; }
+    .data-table th { background: #fafbfa; color: #66736e; font-weight: 650; }
+    .data-table tr:last-child td { border-bottom: 0; }
+    .data-table.compact th, .data-table.compact td { padding-top: 7px; padding-bottom: 7px; }
+    .table-scroll { overflow-x: auto; }
+    .status-pill { display: inline-flex; padding: 3px 7px; border-radius: 999px; background: #e6f3eb; color: #256a42; font-size: 10px; font-weight: 650; }
+    .status-pill.pending { background: #fff1d6; color: #8b5716; }
+
+    .form-block { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px; border: 1px solid #dce3e0; border-radius: 6px; background: white; }
+    .form-field { display: grid; gap: 6px; }
+    .form-field label { color: #57645f; font-size: 10px; font-weight: 650; }
+    .form-field input, .form-field select { width: 100%; min-height: 38px; padding: 0 10px; border: 1px solid #cfd8d4; border-radius: 5px; background: white; color: #24302c; font-size: 11px; }
+    .form-actions { display: flex; grid-column: 1 / -1; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+    .preview-button { min-height: 36px; padding: 0 12px; border: 1px solid #cfd8d4; border-radius: 5px; background: white; font-size: 11px; font-weight: 650; }
+    .preview-button.primary { border-color: var(--preview-accent); background: var(--preview-accent); color: white; }
+
+    .input-block { padding: 14px; border: 1px solid #dce3e0; border-radius: 6px; background: white; }
+    .input-block label { display: block; margin-bottom: 6px; color: #596660; font-size: 10px; font-weight: 650; }
+    .input-block input { width: 100%; min-height: 38px; padding: 0 10px; border: 1px solid #cfd8d4; border-radius: 5px; }
+
+    .added-button-block { display: flex; justify-content: flex-end; padding: 12px; border: 1px solid #dce3e0; border-radius: 6px; background: white; }
+    .empty-block { display: grid; min-height: 100px; place-items: center; border: 1px dashed #b9c5c0; border-radius: 6px; color: #71807a; font-size: 12px; }
+
+    .flow-stage { position: relative; overflow: auto; padding: 14px; }
+    .flow-toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 8;
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.96);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .flow-toolbar strong { font-size: 12px; }
+    .flow-toolbar span { color: var(--ink-muted); font-size: 11px; }
+
+    .flow-canvas {
+      position: relative;
+      width: max(100%, 980px);
+      height: 680px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background-color: #f8f9f8;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .flow-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    .flow-edge { fill: none; stroke: #8f9c97; stroke-width: 2; }
+    .flow-edge.active { stroke: var(--flow); stroke-width: 2.5; }
+    .flow-edge-label { fill: #68736f; font-size: 10px; }
+    .flow-temp { fill: none; stroke: var(--flow); stroke-width: 2; stroke-dasharray: 5 5; }
+
+    .flow-node {
+      position: absolute;
+      width: 210px;
+      height: 112px;
+      padding: 13px;
+      border: 1px solid #cbd4d0;
+      border-radius: 7px;
+      background: white;
+      box-shadow: 0 5px 15px rgba(32, 45, 40, 0.09);
+      user-select: none;
+      touch-action: none;
+    }
+
+    .flow-node:hover { border-color: #9992d4; }
+    .flow-node.selected { border-color: var(--flow); box-shadow: 0 0 0 3px rgba(79,70,165,0.13), 0 8px 20px rgba(32,45,40,0.12); }
+    .flow-node.start::before { content: "起点"; position: absolute; top: -22px; left: 0; padding: 3px 7px; border-radius: 4px; background: var(--flow); color: white; font-size: 10px; font-weight: 700; }
+    .flow-node-kicker { color: var(--flow); font-size: 10px; font-weight: 750; }
+    .flow-node strong { display: block; margin-top: 7px; font-size: 14px; }
+    .flow-node code { display: block; margin-top: 5px; overflow: hidden; color: #68736f; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .flow-node footer { position: absolute; left: 13px; right: 13px; bottom: 11px; display: flex; justify-content: space-between; color: #7b8682; font-size: 10px; }
+
+    .flow-port {
+      position: absolute;
+      top: 50%;
+      width: 16px;
+      height: 16px;
+      padding: 0;
+      transform: translateY(-50%);
+      border: 3px solid white;
+      border-radius: 50%;
+      background: var(--flow);
+      box-shadow: 0 0 0 1px var(--flow);
+    }
+
+    .flow-port.in { left: -8px; }
+    .flow-port.out { right: -8px; }
+    .flow-port:hover { background: #2f287e; }
+
+    .inspector-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      width: 100%;
+      padding: 4px;
+      border-radius: 7px;
+      background: var(--surface-muted);
+    }
+
+    .inspector-tabs button {
+      min-height: 34px;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--ink-muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .inspector-tabs button[aria-selected="true"] { background: white; color: var(--ink); box-shadow: var(--shadow-sm); }
+
+    .inspector-body { min-height: 0; overflow: hidden; }
+    .inspector-view { height: 100%; min-height: 0; }
+    .ai-view { display: grid; grid-template-rows: minmax(0, 1fr) auto auto; }
+
+    .chat-thread { min-height: 0; overflow: auto; padding: 14px; }
+    .message { max-width: 92%; margin-bottom: 12px; }
+    .message.user { margin-left: auto; }
+    .message-label { margin-bottom: 4px; color: var(--ink-muted); font-size: 10px; font-weight: 700; }
+    .message.user .message-label { text-align: right; }
+    .message-bubble { padding: 10px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); font-size: 12px; line-height: 1.55; }
+    .message.user .message-bubble { border-color: #b7d8d0; background: var(--primary-soft); }
+    .message.typing .message-bubble { color: var(--ink-muted); }
+
+    .suggestions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 10px; }
+    .suggestion {
+      min-height: 32px;
+      flex: 1 1 auto;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: white;
+      color: var(--ink-muted);
+      font-size: 11px;
+    }
+    .suggestion:hover { border-color: var(--primary); color: var(--primary); }
+
+    .draft-card {
+      margin: 0 12px 10px;
+      padding: 11px;
+      border: 1px solid #d4c88c;
+      border-radius: 6px;
+      background: #fffaf0;
+    }
+    .draft-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .draft-card header strong { font-size: 12px; }
+    .draft-card header span { color: var(--warning); font-size: 10px; font-weight: 750; }
+    .draft-card p { margin: 8px 0 0; color: #5f5641; font-size: 11px; line-height: 1.5; }
+    .draft-ops { display: grid; gap: 4px; margin: 9px 0 0; padding: 0; list-style: none; color: #6d6249; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+    .draft-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+
+    .chat-composer { padding: 10px 12px 12px; border-top: 1px solid var(--line); background: var(--surface); }
+    .composer-box { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 7px; }
+    .composer-box textarea { width: 100%; min-height: 64px; max-height: 130px; resize: vertical; padding: 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: white; color: var(--ink); font-size: 12px; line-height: 1.45; }
+    .send-button { width: 40px; height: 40px; border-radius: 6px; background: var(--primary); color: white; font-size: 18px; }
+    .composer-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 7px; color: var(--ink-muted); font-size: 10px; }
+
+    .properties-view { overflow: auto; padding: 14px; }
+    .selection-summary { padding-bottom: 13px; border-bottom: 1px solid var(--line); }
+    .selection-summary span { display: block; color: var(--ink-muted); font-size: 10px; text-transform: uppercase; }
+    .selection-summary strong { display: block; margin-top: 5px; font-size: 14px; }
+    .property-section { padding: 14px 0; border-bottom: 1px solid var(--line); }
+    .property-section h3 { margin: 0 0 10px; font-size: 11px; text-transform: uppercase; }
+    .property-field { display: grid; gap: 6px; margin-bottom: 10px; }
+    .property-field label { color: var(--ink-muted); font-size: 10px; font-weight: 650; }
+    .property-field input, .property-field select { width: 100%; min-height: 38px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; background: white; }
+    .swatches { display: flex; gap: 8px; }
+    .swatch { width: 34px; height: 34px; padding: 0; border: 3px solid white; border-radius: 6px; box-shadow: 0 0 0 1px var(--line-strong); }
+    .swatch.active { box-shadow: 0 0 0 2px var(--ink); }
+    .range-row { display: grid; grid-template-columns: 1fr 42px; align-items: center; gap: 9px; }
+    .range-row output { color: var(--ink-muted); font-size: 11px; text-align: right; }
+    input[type="range"] { accent-color: var(--primary); }
+
+    .empty-inspector { display: grid; min-height: 240px; place-items: center; padding: 24px; color: var(--ink-muted); font-size: 12px; text-align: center; }
+
+    .mobile-dock, .mobile-scrim { display: none; }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 20px;
+      z-index: 120;
+      max-width: min(90vw, 420px);
+      padding: 10px 14px;
+      transform: translate(-50%, 18px);
+      border: 1px solid #2f3a36;
+      border-radius: 6px;
+      background: #17201d;
+      color: white;
+      font-size: 12px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 180ms ease, transform 180ms ease;
+      box-shadow: var(--shadow-md);
+    }
+    .toast.show { transform: translate(-50%, 0); opacity: 1; }
+
+    .is-hidden { display: none !important; }
+
+    body.presenting .left-panel,
+    body.presenting .right-panel,
+    body.presenting .workspace-top,
+    body.presenting .mode-switch { display: none; }
+    body.presenting .app-header { grid-template-columns: 1fr auto; }
+    body.presenting .editor-grid { grid-template-columns: minmax(0, 1fr); }
+    body.presenting .center-workspace { grid-template-rows: minmax(0, 1fr); }
+    body.presenting .stage { padding: 24px; }
+    body.presenting .prototype-window { width: min(100%, 1280px); }
+
+    @media (max-width: 1160px) {
+      .editor-grid { grid-template-columns: 224px minmax(380px, 1fr) 300px; }
+      .header-actions .status-copy { display: none; }
+      .preview-content { padding: 18px; }
+    }
+
+    @media (max-width: 860px) {
+      :root { --header-h: 54px; }
+      .app-header { grid-template-columns: minmax(0, 1fr) auto; padding: 0 10px; }
+      .mode-switch { justify-self: end; }
+      .header-actions { display: none; }
+      .project-name { max-width: 150px; }
+      .editor-grid { grid-template-columns: minmax(0, 1fr); padding-bottom: var(--mobile-dock-h); }
+      .left-panel, .right-panel {
+        position: fixed;
+        top: var(--header-h);
+        bottom: var(--mobile-dock-h);
+        z-index: 90;
+        width: min(88vw, 360px);
+        transform: translateX(-105%);
+        border: 0;
+        box-shadow: var(--shadow-md);
+        transition: transform 200ms ease;
+      }
+      .left-panel { left: 0; }
+      .right-panel { right: 0; left: auto; transform: translateX(105%); }
+      .left-panel.mobile-open, .right-panel.mobile-open { transform: translateX(0); }
+      .mobile-scrim { position: fixed; inset: var(--header-h) 0 var(--mobile-dock-h); z-index: 80; background: rgba(13,22,19,0.46); }
+      .mobile-scrim.show { display: block; }
+      .mobile-dock {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 100;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        height: var(--mobile-dock-h);
+        padding: 6px 10px calc(6px + env(safe-area-inset-bottom));
+        border-top: 1px solid var(--line);
+        background: rgba(255,255,255,0.98);
+      }
+      .mobile-dock button { min-height: 44px; border-radius: 5px; background: transparent; color: var(--ink-muted); font-size: 12px; font-weight: 700; }
+      .mobile-dock button.active { background: var(--primary-soft); color: var(--primary); }
+      .workspace-top { padding: 0 10px; }
+      .workspace-top .mini-segment { display: none; }
+      .stage { padding: 10px; }
+      .prototype-window { min-height: 610px; }
+      .preview-app { grid-template-columns: 1fr; }
+      .preview-sidebar { display: none; }
+      .preview-mobile-menu { display: inline-flex; }
+      .flow-stage { padding: 8px; }
+      .flow-canvas { height: 620px; }
+      body.presenting .mobile-dock { display: none; }
+      body.presenting .editor-grid { padding-bottom: 0; }
+    }
+
+    @media (max-width: 520px) {
+      .brand-name { font-size: 12px; }
+      .project-name { display: none; }
+      .mode-switch { grid-auto-columns: minmax(62px, auto); }
+      .mode-button { min-height: 32px; padding: 0 10px; }
+      .workspace-top { gap: 6px; }
+      .revision-badge { display: none; }
+      .preview-content { padding: 14px; }
+      .metric-grid { grid-template-columns: 1fr; }
+      .form-block { grid-template-columns: 1fr; }
+      .prototype-window { min-height: 560px; }
+      .preview-app { min-height: 522px; }
+      .block-stack { min-height: 400px; }
+      .page-heading h1 { font-size: 20px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-workspace">跳到工作区</a>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">构</div>
+        <div class="brand-copy">
+          <div class="brand-name">构想台</div>
+          <div class="project-name">Orion 采购协同 · 业务原型</div>
+        </div>
+      </div>
+
+      <div class="mode-switch" aria-label="工作模式">
+        <button class="mode-button" data-mode="design" aria-pressed="true">设计</button>
+        <button class="mode-button" data-mode="flow" aria-pressed="false">流程</button>
+      </div>
+
+      <div class="header-actions">
+        <div class="status-copy" id="save-status"><span class="status-dot"></span><span>已保存</span></div>
+        <button class="button" id="present-button">预览</button>
+        <button class="button primary" id="publish-button">发布 v13</button>
+      </div>
+    </header>
+
+    <main class="editor-grid" id="main-workspace">
+      <aside class="panel left-panel" aria-label="页面与组件">
+        <div class="panel-heading">
+          <span class="panel-title">页面</span>
+          <button class="button ghost icon-button" id="add-page-button" aria-label="添加页面" title="添加页面">+</button>
+        </div>
+        <div class="page-list" id="page-list"></div>
+
+        <div class="panel-heading">
+          <span class="panel-title" id="library-title">组件</span>
+          <span class="panel-count" id="library-count">4</span>
+        </div>
+        <div class="library" id="library"></div>
+      </aside>
+
+      <section class="center-workspace" aria-label="原型工作区">
+        <div class="workspace-top">
+          <div class="crumbs">
+            <span id="mode-crumb">设计</span>
+            <span aria-hidden="true">/</span>
+            <strong id="active-page-crumb">概览</strong>
+            <span class="revision-badge" id="revision-badge">文档 v12</span>
+          </div>
+          <div class="mini-segment" aria-label="预览尺寸">
+            <button data-viewport="desktop" aria-pressed="true">桌面</button>
+            <button data-viewport="tablet" aria-pressed="false">平板</button>
+            <button data-viewport="mobile" aria-pressed="false">手机</button>
+          </div>
+        </div>
+
+        <div class="stage design-stage" id="design-stage">
+          <div class="prototype-window" id="prototype-window" data-viewport="desktop">
+            <div class="browser-bar" aria-hidden="true">
+              <div class="browser-dots"><span></span><span></span><span></span></div>
+              <div class="browser-url" id="browser-url">orion.local/overview</div>
+            </div>
+            <div class="preview-app" id="preview-app"></div>
+          </div>
+        </div>
+
+        <div class="stage flow-stage is-hidden" id="flow-stage">
+          <div class="flow-toolbar">
+            <div><strong>采购申请主流程</strong><span id="flow-count"> · 4 个页面，3 条连接</span></div>
+            <div class="status-copy"><span class="status-dot" style="background: var(--flow)"></span><span id="flow-status">所有目标有效</span></div>
+          </div>
+          <div class="flow-canvas" id="flow-canvas" aria-label="业务流程画布">
+            <svg class="flow-svg" id="flow-svg" aria-hidden="true"></svg>
+            <div id="flow-nodes"></div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel right-panel" aria-label="AI 与属性">
+        <div class="panel-heading">
+          <div class="inspector-tabs" role="tablist" aria-label="检查器">
+            <button role="tab" data-inspector="ai" aria-selected="true">AI 对话</button>
+            <button role="tab" data-inspector="properties" aria-selected="false">属性</button>
+          </div>
+        </div>
+        <div class="inspector-body">
+          <section class="inspector-view ai-view" id="ai-view" role="tabpanel">
+            <div class="chat-thread" id="chat-thread" aria-live="polite"></div>
+            <div>
+              <div id="draft-area"></div>
+              <div class="suggestions" id="suggestions">
+                <button class="suggestion">把主按钮改成绿色</button>
+                <button class="suggestion">新增供应商审批页面</button>
+                <button class="suggestion">收紧表格密度</button>
+              </div>
+            </div>
+            <form class="chat-composer" id="chat-form">
+              <div class="composer-box">
+                <textarea id="chat-input" aria-label="向 AI 描述修改" placeholder="描述要调整的内容"></textarea>
+                <button class="send-button" type="submit" aria-label="发送给 AI" title="发送">→</button>
+              </div>
+              <div class="composer-meta"><span id="ai-scope">范围：当前页面</span><span>结构化补丁</span></div>
+            </form>
+          </section>
+
+          <section class="inspector-view properties-view is-hidden" id="properties-view" role="tabpanel"></section>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <div class="mobile-scrim" id="mobile-scrim"></div>
+  <nav class="mobile-dock" aria-label="移动工作台导航">
+    <button data-mobile-panel="left">页面</button>
+    <button data-mobile-panel="canvas" class="active">画布</button>
+    <button data-mobile-panel="right">AI</button>
+  </nav>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const componentCatalog = [
+      { type: "metric", glyph: "12", label: "指标" },
+      { type: "input", glyph: "T", label: "输入框" },
+      { type: "button", glyph: "+", label: "按钮" },
+      { type: "table", glyph: "#", label: "表格" }
+    ];
+
+    const state = {
+      mode: "design",
+      viewport: "desktop",
+      activePageId: "overview",
+      selectedNodeId: "overview-heading",
+      selectedFlowId: "overview",
+      inspector: "ai",
+      revision: 12,
+      publishedRevision: 12,
+      compactTable: false,
+      previewAccent: "#126b5f",
+      pendingPatch: null,
+      busy: false,
+      pageDragId: null,
+      blockDrag: null,
+      connectingFrom: null,
+      connectionPoint: null,
+      pages: [
+        { id: "overview", title: "概览", route: "/overview", kind: "仪表盘" },
+        { id: "requests", title: "采购申请", route: "/requests", kind: "列表" },
+        { id: "approvals", title: "审批中心", route: "/approvals", kind: "工作台" },
+        { id: "settings", title: "流程设置", route: "/settings", kind: "配置" }
+      ],
+      blocks: {
+        overview: [
+          { id: "overview-heading", type: "heading", title: "采购运营概览", subtitle: "跟踪采购申请、审批时效与本月执行情况。" },
+          { id: "overview-metrics", type: "metric" },
+          { id: "overview-table", type: "table", title: "近期采购申请" }
+        ],
+        requests: [
+          { id: "requests-heading", type: "heading", title: "采购申请", subtitle: "统一查看申请状态、预算占用和当前审批节点。" },
+          { id: "requests-table", type: "table", title: "全部申请" }
+        ],
+        approvals: [
+          { id: "approvals-heading", type: "heading", title: "审批中心", subtitle: "处理待办并查看跨部门审批进度。" },
+          { id: "approvals-metrics", type: "metric" },
+          { id: "approvals-form", type: "form" }
+        ],
+        settings: [
+          { id: "settings-heading", type: "heading", title: "流程设置", subtitle: "配置审批角色、阈值和通知方式。" },
+          { id: "settings-form", type: "form" }
+        ]
+      },
+      flowNodes: {
+        overview: { x: 80, y: 100 },
+        requests: { x: 360, y: 100 },
+        approvals: { x: 650, y: 100 },
+        settings: { x: 360, y: 350 }
+      },
+      edges: [
+        { from: "overview", to: "requests", label: "发起申请" },
+        { from: "requests", to: "approvals", label: "提交审批" },
+        { from: "approvals", to: "settings", label: "调整规则" }
+      ],
+      messages: [
+        { role: "assistant", text: "当前文档包含 4 个页面和 3 条流程连接。我会把修改限制在当前页面和选中组件。" }
+      ]
+    };
+
+    const els = {
+      pageList: document.getElementById("page-list"),
+      library: document.getElementById("library"),
+      libraryTitle: document.getElementById("library-title"),
+      libraryCount: document.getElementById("library-count"),
+      previewApp: document.getElementById("preview-app"),
+      prototypeWindow: document.getElementById("prototype-window"),
+      browserUrl: document.getElementById("browser-url"),
+      designStage: document.getElementById("design-stage"),
+      flowStage: document.getElementById("flow-stage"),
+      flowCanvas: document.getElementById("flow-canvas"),
+      flowSvg: document.getElementById("flow-svg"),
+      flowNodes: document.getElementById("flow-nodes"),
+      flowCount: document.getElementById("flow-count"),
+      activePageCrumb: document.getElementById("active-page-crumb"),
+      modeCrumb: document.getElementById("mode-crumb"),
+      revisionBadge: document.getElementById("revision-badge"),
+      chatThread: document.getElementById("chat-thread"),
+      draftArea: document.getElementById("draft-area"),
+      chatInput: document.getElementById("chat-input"),
+      aiScope: document.getElementById("ai-scope"),
+      propertiesView: document.getElementById("properties-view"),
+      aiView: document.getElementById("ai-view"),
+      saveStatus: document.getElementById("save-status"),
+      publishButton: document.getElementById("publish-button"),
+      toast: document.getElementById("toast"),
+      mobileScrim: document.getElementById("mobile-scrim")
+    };
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function activePage() {
+      return state.pages.find((page) => page.id === state.activePageId);
+    }
+
+    function activeBlocks() {
+      return state.blocks[state.activePageId];
+    }
+
+    function findSelectedBlock() {
+      return activeBlocks().find((block) => block.id === state.selectedNodeId) || null;
+    }
+
+    function markDirty() {
+      state.revision = Math.max(state.revision, state.publishedRevision) + 1;
+      els.revisionBadge.textContent = `草稿 v${state.revision}`;
+      els.saveStatus.innerHTML = '<span class="status-dot" style="background: var(--warning)"></span><span>有未发布修改</span>';
+      els.publishButton.textContent = `发布 v${state.revision}`;
+    }
+
+    let toastTimer = null;
+    function showToast(message) {
+      els.toast.textContent = message;
+      els.toast.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => els.toast.classList.remove("show"), 2400);
+    }
+
+    function renderPages() {
+      els.pageList.innerHTML = state.pages.map((page, index) => `
+        <div class="page-row ${page.id === state.activePageId ? "active" : ""}" draggable="true" data-page-id="${page.id}">
+          <span class="drag-handle" aria-hidden="true">⋮⋮</span>
+          <button class="page-main" data-open-page="${page.id}" aria-current="${page.id === state.activePageId ? "page" : "false"}">
+            <strong>${escapeHtml(page.title)}</strong>
+            <span>${escapeHtml(page.route)} · ${escapeHtml(page.kind)}</span>
+          </button>
+          <div class="page-order-controls">
+            <button data-move-page="up" data-page-id="${page.id}" aria-label="上移 ${escapeHtml(page.title)}" ${index === 0 ? "disabled" : ""}>↑</button>
+            <button data-move-page="down" data-page-id="${page.id}" aria-label="下移 ${escapeHtml(page.title)}" ${index === state.pages.length - 1 ? "disabled" : ""}>↓</button>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    function renderLibrary() {
+      if (state.mode === "flow") {
+        els.libraryTitle.textContent = "业务流程";
+        els.libraryCount.textContent = "2";
+        els.library.innerHTML = `
+          <div class="flow-list">
+            <button class="flow-summary" data-select-flow="main"><strong>采购申请主流程</strong><span>${state.pages.length} 个页面 · ${state.edges.length} 条连接</span></button>
+            <button class="flow-summary" data-select-flow="exception"><strong>异常处理流程</strong><span>2 个页面 · 待完善</span></button>
+          </div>
+        `;
+        return;
+      }
+      els.libraryTitle.textContent = "组件";
+      els.libraryCount.textContent = String(componentCatalog.length);
+      els.library.innerHTML = `<div class="library-grid">${componentCatalog.map((item) => `
+        <button class="library-item" draggable="true" data-component-type="${item.type}">
+          <span class="library-glyph" aria-hidden="true">${item.glyph}</span>
+          <span class="library-label">${item.label}</span>
+        </button>
+      `).join("")}</div>`;
+    }
+
+    function renderHeading(block) {
+      return `<div class="page-heading"><h1>${escapeHtml(block.title)}</h1><p>${escapeHtml(block.subtitle)}</p></div>`;
+    }
+
+    function renderMetrics() {
+      return `
+        <div class="metric-grid">
+          <div class="metric-card"><span>待审批</span><strong>18</strong><small>较昨日减少 3 项</small></div>
+          <div class="metric-card"><span>本月采购额</span><strong>¥ 286万</strong><small>预算执行 64%</small></div>
+          <div class="metric-card"><span>平均审批时长</span><strong>1.8天</strong><small>效率提升 12%</small></div>
+        </div>`;
+    }
+
+    function renderTable(block) {
+      return `
+        <div class="table-card">
+          <div class="table-title"><strong>${escapeHtml(block.title || "数据列表")}</strong><button data-preview-action="new-request">新建申请</button></div>
+          <div class="table-scroll">
+            <table class="data-table ${state.compactTable ? "compact" : ""}">
+              <thead><tr><th>申请编号</th><th>事项</th><th>申请人</th><th>金额</th><th>状态</th></tr></thead>
+              <tbody>
+                <tr><td>PR-2026-184</td><td>研发设备采购</td><td>周明</td><td>¥ 84,600</td><td><span class="status-pill pending">审批中</span></td></tr>
+                <tr><td>PR-2026-183</td><td>供应商服务续签</td><td>林洁</td><td>¥ 126,000</td><td><span class="status-pill">已通过</span></td></tr>
+                <tr><td>PR-2026-182</td><td>办公软件增购</td><td>韩旭</td><td>¥ 18,400</td><td><span class="status-pill">已通过</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>`;
+    }
+
+    function renderForm() {
+      return `
+        <div class="form-block">
+          <div class="form-field"><label>审批角色</label><select><option>部门负责人</option><option>采购经理</option></select></div>
+          <div class="form-field"><label>金额阈值</label><input value="50,000"></div>
+          <div class="form-field"><label>通知方式</label><select><option>站内信与邮件</option><option>仅站内信</option></select></div>
+          <div class="form-field"><label>处理时限</label><input value="2 个工作日"></div>
+          <div class="form-actions"><button class="preview-button">取消</button><button class="preview-button primary">保存规则</button></div>
+        </div>`;
+    }
+
+    function renderInput() {
+      return `<div class="input-block"><label>业务字段</label><input placeholder="请输入内容"></div>`;
+    }
+
+    function renderButton() {
+      return `<div class="added-button-block"><button class="preview-button primary">确认提交</button></div>`;
+    }
+
+    function renderBlock(block) {
+      let content = "";
+      if (block.type === "heading") content = renderHeading(block);
+      else if (block.type === "metric") content = renderMetrics();
+      else if (block.type === "table") content = renderTable(block);
+      else if (block.type === "form") content = renderForm();
+      else if (block.type === "input") content = renderInput();
+      else if (block.type === "button") content = renderButton();
+      else content = '<div class="empty-block">内容区块</div>';
+      return `
+        <section class="canvas-block ${block.id === state.selectedNodeId ? "selected" : ""}" draggable="true" data-node-id="${block.id}" data-node-type="${block.type}" tabindex="0" aria-label="${block.type} 组件">
+          <span class="block-grip" aria-hidden="true">⋮⋮</span>
+          ${content}
+        </section>`;
+    }
+
+    function renderPreview() {
+      const page = activePage();
+      els.activePageCrumb.textContent = page.title;
+      els.browserUrl.textContent = `orion.local${page.route}`;
+      els.aiScope.textContent = `范围：${page.title}${state.selectedNodeId ? " / 已选组件" : ""}`;
+      els.previewApp.style.setProperty("--preview-accent", state.previewAccent);
+      els.previewApp.innerHTML = `
+        <aside class="preview-sidebar">
+          <div class="preview-brand">Orion<span>采购协同平台</span></div>
+          <nav class="preview-nav" aria-label="原型页面菜单">
+            ${state.pages.map((item) => `<button data-preview-page="${item.id}" class="${item.id === page.id ? "active" : ""}"><span class="nav-bullet"></span>${escapeHtml(item.title)}</button>`).join("")}
+          </nav>
+        </aside>
+        <main class="preview-content">
+          <div class="preview-topbar">
+            <button class="preview-button preview-mobile-menu" data-mobile-preview-menu="true">页面</button>
+            <small>${escapeHtml(page.kind)} · 最后更新于 10:32</small>
+            <div class="avatar" aria-label="当前用户：产品经理">PM</div>
+          </div>
+          <div class="block-stack" id="block-stack">${activeBlocks().map(renderBlock).join("")}</div>
+        </main>`;
+    }
+
+    function renderChat() {
+      const wasNearBottom = els.chatThread.scrollHeight - els.chatThread.scrollTop - els.chatThread.clientHeight < 70;
+      els.chatThread.innerHTML = state.messages.map((message) => `
+        <div class="message ${message.role} ${message.typing ? "typing" : ""}">
+          <div class="message-label">${message.role === "user" ? "你" : "原型 AI"}</div>
+          <div class="message-bubble">${escapeHtml(message.text)}</div>
+        </div>
+      `).join("");
+      if (wasNearBottom || state.messages.length < 4) els.chatThread.scrollTop = els.chatThread.scrollHeight;
+      renderDraft();
+    }
+
+    function renderDraft() {
+      if (!state.pendingPatch) {
+        els.draftArea.innerHTML = "";
+        return;
+      }
+      els.draftArea.innerHTML = `
+        <article class="draft-card">
+          <header><strong>修改草稿</strong><span>待确认</span></header>
+          <p>${escapeHtml(state.pendingPatch.summary)}</p>
+          <ul class="draft-ops">${state.pendingPatch.operations.map((op) => `<li>${escapeHtml(op)}</li>`).join("")}</ul>
+          <div class="draft-actions">
+            <button class="button small" data-draft-action="discard">丢弃</button>
+            <button class="button primary small" data-draft-action="apply">应用修改</button>
+          </div>
+        </article>`;
+    }
+
+    function renderProperties() {
+      if (state.mode === "flow") {
+        const page = state.pages.find((item) => item.id === state.selectedFlowId) || activePage();
+        els.propertiesView.innerHTML = `
+          <div class="selection-summary"><span>流程节点</span><strong>${escapeHtml(page.title)}</strong></div>
+          <div class="property-section">
+            <h3>页面</h3>
+            <div class="property-field"><label>名称</label><input id="flow-page-title" value="${escapeHtml(page.title)}"></div>
+            <div class="property-field"><label>路由</label><input value="${escapeHtml(page.route)}" readonly></div>
+          </div>
+          <div class="property-section">
+            <h3>流程</h3>
+            <div class="property-field"><label>类型</label><select><option>${page.id === "overview" ? "流程起点" : "普通页面"}</option></select></div>
+          </div>`;
+        return;
+      }
+
+      const block = findSelectedBlock();
+      if (!block) {
+        els.propertiesView.innerHTML = '<div class="empty-inspector">选择页面中的组件后查看属性</div>';
+        return;
+      }
+      const textField = block.type === "heading" ? `
+        <div class="property-field"><label>标题</label><input id="property-title" value="${escapeHtml(block.title)}"></div>
+        <div class="property-field"><label>说明</label><input id="property-subtitle" value="${escapeHtml(block.subtitle)}"></div>` : "";
+      els.propertiesView.innerHTML = `
+        <div class="selection-summary"><span>${escapeHtml(block.type)} 节点</span><strong>${escapeHtml(block.id)}</strong></div>
+        <div class="property-section">
+          <h3>内容</h3>
+          ${textField || '<div class="property-field"><label>节点 ID</label><input value="' + escapeHtml(block.id) + '" readonly></div>'}
+        </div>
+        <div class="property-section">
+          <h3>主题</h3>
+          <div class="swatches">
+            <button class="swatch ${state.previewAccent === "#126b5f" ? "active" : ""}" data-accent="#126b5f" style="background:#126b5f" aria-label="松绿色"></button>
+            <button class="swatch ${state.previewAccent === "#2956a3" ? "active" : ""}" data-accent="#2956a3" style="background:#2956a3" aria-label="深蓝色"></button>
+            <button class="swatch ${state.previewAccent === "#8a4b20" ? "active" : ""}" data-accent="#8a4b20" style="background:#8a4b20" aria-label="棕橙色"></button>
+          </div>
+        </div>
+        <div class="property-section">
+          <h3>布局</h3>
+          <div class="property-field"><label for="gap-range">区块间距</label><div class="range-row"><input id="gap-range" type="range" min="8" max="28" step="2" value="14"><output id="gap-output">14</output></div></div>
+        </div>`;
+    }
+
+    function renderInspector() {
+      document.querySelectorAll("[data-inspector]").forEach((button) => {
+        button.setAttribute("aria-selected", String(button.dataset.inspector === state.inspector));
+      });
+      els.aiView.classList.toggle("is-hidden", state.inspector !== "ai");
+      els.propertiesView.classList.toggle("is-hidden", state.inspector !== "properties");
+      renderProperties();
+    }
+
+    function edgePath(from, to) {
+      const start = state.flowNodes[from];
+      const end = state.flowNodes[to];
+      const x1 = start.x + 210;
+      const y1 = start.y + 56;
+      const x2 = end.x;
+      const y2 = end.y + 56;
+      const distance = Math.max(70, Math.abs(x2 - x1) * 0.45);
+      return `M ${x1} ${y1} C ${x1 + distance} ${y1}, ${x2 - distance} ${y2}, ${x2} ${y2}`;
+    }
+
+    function renderFlowNodes() {
+      els.flowCount.textContent = ` · ${state.pages.length} 个页面，${state.edges.length} 条连接`;
+      els.flowNodes.innerHTML = state.pages.map((page, index) => {
+        const point = state.flowNodes[page.id] || { x: 80 + index * 250, y: 500 };
+        state.flowNodes[page.id] = point;
+        const inbound = state.edges.filter((edge) => edge.to === page.id).length;
+        const outbound = state.edges.filter((edge) => edge.from === page.id).length;
+        return `
+          <div class="flow-node ${page.id === state.selectedFlowId ? "selected" : ""} ${page.id === "overview" ? "start" : ""}" style="left:${point.x}px;top:${point.y}px" data-flow-id="${page.id}" tabindex="0" aria-label="流程页面 ${escapeHtml(page.title)}">
+            <button class="flow-port in" data-flow-port="in" data-flow-id="${page.id}" aria-label="${escapeHtml(page.title)} 输入端口"></button>
+            <button class="flow-port out" data-flow-port="out" data-flow-id="${page.id}" aria-label="从 ${escapeHtml(page.title)} 创建连接"></button>
+            <div class="flow-node-kicker">${escapeHtml(page.kind)}</div>
+            <strong>${escapeHtml(page.title)}</strong>
+            <code>${escapeHtml(page.route)}</code>
+            <footer><span>${inbound} 入</span><span>${outbound} 出</span></footer>
+          </div>`;
+      }).join("");
+      drawEdges();
+    }
+
+    function drawEdges() {
+      const marker = `
+        <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#8f9c97"></path></marker></defs>`;
+      const edges = state.edges.map((edge) => {
+        const path = edgePath(edge.from, edge.to);
+        const from = state.flowNodes[edge.from];
+        const to = state.flowNodes[edge.to];
+        const labelX = (from.x + 210 + to.x) / 2;
+        const labelY = (from.y + to.y) / 2 + 48;
+        return `<path class="flow-edge ${edge.from === state.selectedFlowId || edge.to === state.selectedFlowId ? "active" : ""}" d="${path}" marker-end="url(#arrow)"></path><text class="flow-edge-label" x="${labelX}" y="${labelY}" text-anchor="middle">${escapeHtml(edge.label)}</text>`;
+      }).join("");
+      let temp = "";
+      if (state.connectingFrom && state.connectionPoint) {
+        const start = state.flowNodes[state.connectingFrom];
+        const x1 = start.x + 210;
+        const y1 = start.y + 56;
+        const x2 = state.connectionPoint.x;
+        const y2 = state.connectionPoint.y;
+        const d = Math.max(60, Math.abs(x2 - x1) * 0.4);
+        temp = `<path class="flow-temp" d="M ${x1} ${y1} C ${x1 + d} ${y1}, ${x2 - d} ${y2}, ${x2} ${y2}"></path>`;
+      }
+      els.flowSvg.innerHTML = marker + edges + temp;
+    }
+
+    function renderMode() {
+      document.querySelectorAll("[data-mode]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.mode === state.mode)));
+      els.designStage.classList.toggle("is-hidden", state.mode !== "design");
+      els.flowStage.classList.toggle("is-hidden", state.mode !== "flow");
+      els.modeCrumb.textContent = state.mode === "design" ? "设计" : "业务流程";
+      renderLibrary();
+      renderInspector();
+      if (state.mode === "flow") requestAnimationFrame(renderFlowNodes);
+    }
+
+    function renderAll() {
+      renderPages();
+      renderLibrary();
+      renderPreview();
+      renderChat();
+      renderInspector();
+      if (state.mode === "flow") renderFlowNodes();
+    }
+
+    function openPage(pageId) {
+      if (!state.pages.some((page) => page.id === pageId)) return;
+      state.activePageId = pageId;
+      const blocks = state.blocks[pageId];
+      state.selectedNodeId = blocks[0]?.id || null;
+      state.selectedFlowId = pageId;
+      renderPages();
+      renderPreview();
+      renderInspector();
+    }
+
+    function movePage(pageId, direction) {
+      const from = state.pages.findIndex((page) => page.id === pageId);
+      const to = direction === "up" ? from - 1 : from + 1;
+      if (from < 0 || to < 0 || to >= state.pages.length) return;
+      const next = [...state.pages];
+      const [page] = next.splice(from, 1);
+      next.splice(to, 0, page);
+      state.pages = next;
+      markDirty();
+      renderPages();
+      renderPreview();
+      if (state.mode === "flow") renderFlowNodes();
+      showToast("页面顺序和共享菜单已同步");
+    }
+
+    function reorderPage(dragId, targetId) {
+      if (!dragId || dragId === targetId) return;
+      const next = [...state.pages];
+      const from = next.findIndex((page) => page.id === dragId);
+      const to = next.findIndex((page) => page.id === targetId);
+      if (from < 0 || to < 0) return;
+      const [page] = next.splice(from, 1);
+      next.splice(to, 0, page);
+      state.pages = next;
+      markDirty();
+      renderPages();
+      renderPreview();
+      showToast("页面顺序和共享菜单已同步");
+    }
+
+    function createBlock(type) {
+      const id = `${state.activePageId}-${type}-${Date.now().toString(36)}`;
+      const base = { id, type };
+      if (type === "table") base.title = "新增数据表";
+      state.blocks[state.activePageId] = [...activeBlocks(), base];
+      state.selectedNodeId = id;
+      markDirty();
+      renderPreview();
+      renderInspector();
+      showToast("组件已添加到当前页面");
+    }
+
+    function reorderBlock(dragId, targetId) {
+      if (!dragId || dragId === targetId) return;
+      const next = [...activeBlocks()];
+      const from = next.findIndex((item) => item.id === dragId);
+      const to = next.findIndex((item) => item.id === targetId);
+      if (from < 0 || to < 0) return;
+      const [block] = next.splice(from, 1);
+      next.splice(to, 0, block);
+      state.blocks[state.activePageId] = next;
+      markDirty();
+      renderPreview();
+      renderInspector();
+      showToast("组件顺序已更新");
+    }
+
+    function addPage() {
+      const number = state.pages.length + 1;
+      const id = `page-${Date.now().toString(36)}`;
+      const page = { id, title: `新页面 ${number}`, route: `/page-${number}`, kind: "页面" };
+      state.pages = [...state.pages, page];
+      state.blocks[id] = [{ id: `${id}-heading`, type: "heading", title: page.title, subtitle: "通过 AI 对话或组件面板继续完善页面。" }];
+      state.flowNodes[id] = { x: 680, y: 350 + (state.pages.length - 4) * 145 };
+      markDirty();
+      openPage(id);
+      if (state.mode === "flow") renderFlowNodes();
+      showToast("新页面已加入文档和流程画布");
+    }
+
+    function createPatch(text) {
+      const lower = text.toLowerCase();
+      if (text.includes("绿色") || lower.includes("green") || text.includes("按钮")) {
+        return { kind: "accent", summary: "将当前原型的主要操作色调整为更明确的绿色。", operations: ["setToken preview.accent = #237a45", "re-render active page"] };
+      }
+      if (text.includes("审批页面") || text.includes("新增") || lower.includes("page")) {
+        return { kind: "page", summary: "新增供应商审批页面，并将它加入共享菜单和业务流程画布。", operations: ["insertPage supplier-approval", "updateNavigation", "insertFlowNode"] };
+      }
+      if (text.includes("密度") || text.includes("表格") || lower.includes("compact")) {
+        return { kind: "compact", summary: "收紧所有数据表的行高，提高评审时的信息密度。", operations: ["setDocument tableDensity = compact", "re-render table nodes"] };
+      }
+      const block = findSelectedBlock();
+      return { kind: "rename", summary: block?.type === "heading" ? "更新当前页面标题，同时保留页面路由和流程连接。" : "更新选中组件的展示内容。", operations: [`setProp ${block?.id || state.activePageId}.content`, "validate selected scope"] };
+    }
+
+    function submitAi(text) {
+      const value = text.trim();
+      if (!value || state.busy) return;
+      state.messages.push({ role: "user", text: value });
+      state.messages.push({ role: "assistant", text: "正在生成结构化补丁…", typing: true });
+      state.busy = true;
+      els.chatInput.value = "";
+      renderChat();
+      setTimeout(() => {
+        state.messages.pop();
+        state.pendingPatch = createPatch(value);
+        state.messages.push({ role: "assistant", text: "补丁已通过文档校验并生成隔离预览，确认后才会写入当前草稿。" });
+        state.busy = false;
+        renderChat();
+      }, 680);
+    }
+
+    function applyPatch() {
+      const patch = state.pendingPatch;
+      if (!patch) return;
+      if (patch.kind === "accent") state.previewAccent = "#237a45";
+      if (patch.kind === "compact") state.compactTable = true;
+      if (patch.kind === "page") {
+        const existing = state.pages.find((page) => page.id === "supplier-approval");
+        if (!existing) {
+          state.pages.push({ id: "supplier-approval", title: "供应商审批", route: "/supplier-approval", kind: "审批" });
+          state.blocks["supplier-approval"] = [
+            { id: "supplier-heading", type: "heading", title: "供应商准入审批", subtitle: "核验资质、风险等级和合作条款。" },
+            { id: "supplier-form", type: "form" }
+          ];
+          state.flowNodes["supplier-approval"] = { x: 650, y: 350 };
+        }
+      }
+      if (patch.kind === "rename") {
+        const block = findSelectedBlock();
+        if (block?.type === "heading") block.title = "采购协同运营中心";
+      }
+      state.pendingPatch = null;
+      markDirty();
+      state.messages.push({ role: "assistant", text: "修改已应用到草稿。正式版本仍保持不变，发布后才会形成新修订。" });
+      renderAll();
+      showToast("AI 修改已应用到草稿");
+    }
+
+    function discardPatch() {
+      if (!state.pendingPatch) return;
+      state.pendingPatch = null;
+      state.messages.push({ role: "assistant", text: "修改草稿已丢弃，当前原型没有变化。" });
+      renderChat();
+      showToast("修改草稿已丢弃");
+    }
+
+    function switchMode(mode) {
+      if (mode !== "design" && mode !== "flow") return;
+      state.mode = mode;
+      renderMode();
+    }
+
+    function switchInspector(inspector) {
+      state.inspector = inspector;
+      renderInspector();
+    }
+
+    function closeMobilePanels() {
+      document.querySelector(".left-panel").classList.remove("mobile-open");
+      document.querySelector(".right-panel").classList.remove("mobile-open");
+      els.mobileScrim.classList.remove("show");
+      document.querySelectorAll("[data-mobile-panel]").forEach((button) => button.classList.toggle("active", button.dataset.mobilePanel === "canvas"));
+    }
+
+    document.addEventListener("click", (event) => {
+      const target = event.target.closest("button, [data-node-id]");
+      if (!target) return;
+
+      if (target.dataset.mode) switchMode(target.dataset.mode);
+      if (target.dataset.openPage) { openPage(target.dataset.openPage); closeMobilePanels(); }
+      if (target.dataset.previewPage) openPage(target.dataset.previewPage);
+      if (target.dataset.movePage) movePage(target.dataset.pageId, target.dataset.movePage);
+      if (target.dataset.componentType) createBlock(target.dataset.componentType);
+      if (target.dataset.nodeId) {
+        state.selectedNodeId = target.dataset.nodeId;
+        renderPreview();
+        renderInspector();
+      }
+      if (target.dataset.inspector) switchInspector(target.dataset.inspector);
+      if (target.dataset.accent) {
+        state.previewAccent = target.dataset.accent;
+        markDirty();
+        renderPreview();
+        renderInspector();
+      }
+      if (target.dataset.draftAction === "apply") applyPatch();
+      if (target.dataset.draftAction === "discard") discardPatch();
+      if (target.classList.contains("suggestion")) submitAi(target.textContent);
+      if (target.dataset.flowId && target.classList.contains("flow-node")) {
+        state.selectedFlowId = target.dataset.flowId;
+        state.activePageId = target.dataset.flowId;
+        renderFlowNodes();
+        renderPages();
+        renderInspector();
+      }
+      if (target.dataset.viewport) {
+        state.viewport = target.dataset.viewport;
+        els.prototypeWindow.dataset.viewport = state.viewport;
+        document.querySelectorAll("[data-viewport]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.viewport === state.viewport)));
+      }
+      if (target.dataset.mobilePanel) {
+        const panel = target.dataset.mobilePanel;
+        closeMobilePanels();
+        if (panel === "left" || panel === "right") {
+          document.querySelector(`.${panel}-panel`).classList.add("mobile-open");
+          els.mobileScrim.classList.add("show");
+          target.classList.add("active");
+        }
+      }
+      if (target.dataset.mobilePreviewMenu) {
+        document.querySelector(".left-panel").classList.add("mobile-open");
+        els.mobileScrim.classList.add("show");
+      }
+      if (target.dataset.previewAction === "new-request") showToast("已打开新建申请动作");
+    });
+
+    document.getElementById("add-page-button").addEventListener("click", addPage);
+    document.getElementById("mobile-scrim").addEventListener("click", closeMobilePanels);
+
+    document.getElementById("present-button").addEventListener("click", () => {
+      const presenting = document.body.classList.toggle("presenting");
+      document.getElementById("present-button").textContent = presenting ? "退出预览" : "预览";
+      showToast(presenting ? "已进入原型预览" : "已返回编辑模式");
+    });
+
+    document.getElementById("publish-button").addEventListener("click", () => {
+      state.publishedRevision = state.revision;
+      els.revisionBadge.textContent = `文档 v${state.publishedRevision}`;
+      els.saveStatus.innerHTML = '<span class="status-dot"></span><span>已发布</span>';
+      els.publishButton.textContent = `已发布 v${state.publishedRevision}`;
+      showToast(`文档 v${state.publishedRevision} 已发布`);
+    });
+
+    document.getElementById("chat-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitAi(els.chatInput.value);
+    });
+
+    document.addEventListener("input", (event) => {
+      const block = findSelectedBlock();
+      if (event.target.id === "property-title" && block?.type === "heading") {
+        block.title = event.target.value;
+        markDirty();
+        renderPreview();
+      }
+      if (event.target.id === "property-subtitle" && block?.type === "heading") {
+        block.subtitle = event.target.value;
+        markDirty();
+        renderPreview();
+      }
+      if (event.target.id === "gap-range") {
+        const stack = document.getElementById("block-stack");
+        if (stack) stack.style.gap = `${event.target.value}px`;
+        const output = document.getElementById("gap-output");
+        if (output) output.value = event.target.value;
+      }
+      if (event.target.id === "flow-page-title") {
+        const page = state.pages.find((item) => item.id === state.selectedFlowId);
+        if (page) {
+          page.title = event.target.value;
+          markDirty();
+          renderPages();
+          renderPreview();
+          renderFlowNodes();
+        }
+      }
+    });
+
+    els.pageList.addEventListener("dragstart", (event) => {
+      const row = event.target.closest("[data-page-id]");
+      if (!row) return;
+      state.pageDragId = row.dataset.pageId;
+      event.dataTransfer.effectAllowed = "move";
+    });
+
+    els.pageList.addEventListener("dragover", (event) => {
+      const row = event.target.closest("[data-page-id]");
+      if (!row || !state.pageDragId) return;
+      event.preventDefault();
+      els.pageList.querySelectorAll(".drag-over").forEach((item) => item.classList.remove("drag-over"));
+      row.classList.add("drag-over");
+    });
+
+    els.pageList.addEventListener("drop", (event) => {
+      const row = event.target.closest("[data-page-id]");
+      if (!row) return;
+      event.preventDefault();
+      reorderPage(state.pageDragId, row.dataset.pageId);
+      state.pageDragId = null;
+    });
+
+    els.library.addEventListener("dragstart", (event) => {
+      const item = event.target.closest("[data-component-type]");
+      if (!item) return;
+      state.blockDrag = { kind: "catalog", type: item.dataset.componentType };
+      event.dataTransfer.effectAllowed = "copy";
+    });
+
+    els.previewApp.addEventListener("dragstart", (event) => {
+      const block = event.target.closest("[data-node-id]");
+      if (!block) return;
+      state.blockDrag = { kind: "node", id: block.dataset.nodeId };
+      event.dataTransfer.effectAllowed = "move";
+    });
+
+    els.previewApp.addEventListener("dragover", (event) => {
+      const stack = event.target.closest("#block-stack");
+      if (!stack || !state.blockDrag) return;
+      event.preventDefault();
+      stack.classList.add("drop-active");
+      stack.querySelectorAll(".block-drag-over").forEach((item) => item.classList.remove("block-drag-over"));
+      const targetBlock = event.target.closest("[data-node-id]");
+      if (targetBlock) targetBlock.classList.add("block-drag-over");
+    });
+
+    els.previewApp.addEventListener("dragleave", (event) => {
+      if (!event.relatedTarget || !els.previewApp.contains(event.relatedTarget)) {
+        document.getElementById("block-stack")?.classList.remove("drop-active");
+      }
+    });
+
+    els.previewApp.addEventListener("drop", (event) => {
+      const stack = event.target.closest("#block-stack");
+      if (!stack || !state.blockDrag) return;
+      event.preventDefault();
+      const drag = state.blockDrag;
+      const targetBlock = event.target.closest("[data-node-id]");
+      state.blockDrag = null;
+      if (drag.kind === "catalog") createBlock(drag.type);
+      else if (drag.kind === "node" && targetBlock) reorderBlock(drag.id, targetBlock.dataset.nodeId);
+      stack.classList.remove("drop-active");
+    });
+
+    let flowDrag = null;
+    els.flowCanvas.addEventListener("pointerdown", (event) => {
+      const port = event.target.closest("[data-flow-port]");
+      if (port?.dataset.flowPort === "out") {
+        event.preventDefault();
+        state.connectingFrom = port.dataset.flowId;
+        const rect = els.flowCanvas.getBoundingClientRect();
+        state.connectionPoint = { x: event.clientX - rect.left + els.flowCanvas.scrollLeft, y: event.clientY - rect.top + els.flowCanvas.scrollTop };
+        drawEdges();
+        return;
+      }
+      const node = event.target.closest(".flow-node");
+      if (!node || port) return;
+      state.selectedFlowId = node.dataset.flowId;
+      const point = state.flowNodes[state.selectedFlowId];
+      flowDrag = { id: state.selectedFlowId, node, startX: event.clientX, startY: event.clientY, x: point.x, y: point.y };
+      node.setPointerCapture(event.pointerId);
+      renderInspector();
+    });
+
+    els.flowCanvas.addEventListener("pointermove", (event) => {
+      if (flowDrag) {
+        const nextX = Math.max(24, flowDrag.x + event.clientX - flowDrag.startX);
+        const nextY = Math.max(32, flowDrag.y + event.clientY - flowDrag.startY);
+        state.flowNodes[flowDrag.id] = { x: nextX, y: nextY };
+        flowDrag.node.style.left = `${nextX}px`;
+        flowDrag.node.style.top = `${nextY}px`;
+        drawEdges();
+      }
+      if (state.connectingFrom) {
+        const rect = els.flowCanvas.getBoundingClientRect();
+        state.connectionPoint = { x: event.clientX - rect.left + els.flowCanvas.scrollLeft, y: event.clientY - rect.top + els.flowCanvas.scrollTop };
+        drawEdges();
+      }
+    });
+
+    els.flowCanvas.addEventListener("pointerup", (event) => {
+      if (flowDrag) {
+        flowDrag = null;
+        markDirty();
+      }
+      if (state.connectingFrom) {
+        const targetPort = event.target.closest('[data-flow-port="in"]');
+        const to = targetPort?.dataset.flowId;
+        const from = state.connectingFrom;
+        if (to && from !== to && !state.edges.some((edge) => edge.from === from && edge.to === to)) {
+          state.edges.push({ from, to, label: "下一步" });
+          markDirty();
+          showToast("流程连接已创建");
+        } else if (!to) {
+          showToast("连接未创建：请选择页面输入端口");
+        }
+        state.connectingFrom = null;
+        state.connectionPoint = null;
+        renderFlowNodes();
+        renderLibrary();
+      }
+    });
+
+    els.flowCanvas.addEventListener("keydown", (event) => {
+      const node = event.target.closest(".flow-node");
+      if (!node || !["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      event.preventDefault();
+      const point = state.flowNodes[node.dataset.flowId];
+      const step = event.shiftKey ? 20 : 8;
+      if (event.key === "ArrowUp") point.y = Math.max(24, point.y - step);
+      if (event.key === "ArrowDown") point.y += step;
+      if (event.key === "ArrowLeft") point.x = Math.max(24, point.x - step);
+      if (event.key === "ArrowRight") point.x += step;
+      node.style.left = `${point.x}px`;
+      node.style.top = `${point.y}px`;
+      drawEdges();
+      markDirty();
+    });
+
+    window.addEventListener("resize", () => {
+      if (state.mode === "flow") drawEdges();
+      if (window.innerWidth > 860) closeMobilePanels();
+    });
+
+    renderAll();
+  </script>
+</body>
+</html>

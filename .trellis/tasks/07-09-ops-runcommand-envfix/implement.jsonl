@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/07-09-ops-runcommand-envfix/research/env-schema-validation.md", "reason": "EnvVarSpec 三态模型(必填/可选带默认/可选无默认)+ compose 三态语法解析 + 结构化错误契约 —— 清单构建的核心数据结构依据"}
+{"file": ".trellis/tasks/07-09-ops-runcommand-envfix/research/paas-env-detection.md", "reason": "Coolify 式 compose ${VAR}/${VAR:-default}/${VAR:?err} 解析提取为结构化字段 + 默认值回填 —— 感知层实现参考"}
+{"file": ".trellis/tasks/07-09-ops-runcommand-envfix/research/cloud-dev-env-bootstrap.md", "reason": "Vercel/Replit 式常驻面板 UX + secret 遮蔽 + 感知预填 —— 前端面板与 D2 设计依据"}
+{"file": ".trellis/tasks/07-09-ops-runcommand-envfix/research/ai-agent-auto-setup.md", "reason": "可自动填(端口/host) vs 必须问人(密钥) 二分法 + 绝不瞎编 secret 红线 —— 感知/落盘红线依据"}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "新建 project_env_vars 表 + 加密字段的建表/迁移约定(FastAPI+sqlite 同栈参考)"}
+{"file": ".trellis/spec/vibe-kanban/backend/error-handling.md", "reason": "启动前校验 fail-fast + 缺失必填项中止并返回结构化清单 + 密钥未配明确报错 的错误处理规范"}

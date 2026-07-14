@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/07-09-ops-runcommand-envfix/research/ai-agent-auto-setup.md", "reason": "验收红线:secret 绝不被自动填/瞎编;可自动填 vs 必须问人二分法是 check 的核心断言"}
+{"file": ".trellis/tasks/07-09-ops-runcommand-envfix/research/env-schema-validation.md", "reason": "三态 + fail-fast 校验语义:必填缺失须阻断启动并返回结构化清单 —— 校验行为的验收依据"}
+{"file": ".trellis/spec/vibe-kanban/backend/quality-guidelines.md", "reason": "后端质量门槛(测试覆盖/幂等落盘/零回归)校验基准"}
+{"file": ".trellis/spec/vibe-kanban/backend/database-guidelines.md", "reason": "project_env_vars 建表/加密字段/迁移是否合规的校验依据"}
+{"file": ".trellis/spec/vibe-kanban/backend/observability-guidelines.md", "reason": "物化 .env 动作可审计(启动日志记一条)是否达标的校验依据"}

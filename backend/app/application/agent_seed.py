@@ -92,6 +92,15 @@ _BUILTIN_SPECS: list[tuple[str, str, str, str, str, bool, bool]] = [
         False,
         False,
     ),
+    (
+        "prototype_ui_engineer",
+        "Prototype UI Engineer",
+        "Restores project-backed UI pages as isolated, validated HTML artifacts.",
+        "prototype_staging",
+        "prototype_artifact",
+        False,
+        False,
+    ),
 ]
 
 
@@ -114,6 +123,7 @@ async def seed_builtin_agents(store: AgentSeedStore | None) -> int:
             system_prompt_template=f"[builtin:{role_key}]",
             input_schema=[],
             output_schema={},
+            default_executor="claude" if role_key == "prototype_ui_engineer" else None,
             artifact_subdir=subdir,
             persist_kind=persist_kind,
             agent_tier="managed",

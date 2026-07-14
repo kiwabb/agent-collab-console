@@ -113,6 +113,30 @@ async def test_dispatch_role_creates_task():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_verification_role_includes_confirmed_acceptance_criteria():
+    from app.application.task_dispatcher import dispatch_role
+
+    issue = _make_issue()
+    issue.acceptance_criteria = ["Anonymous requests return 401"]
+    issue.acceptance_criteria_confirmed = True
+    graph = _make_graph(issue.id)
+    store = _make_store(issue, graph, [_make_agent("qa")])
+
+    await dispatch_role(
+        issue=issue,
+        role="qa",
+        prompt_override="Verify the authentication boundary",
+        store=store,
+        task_dispatcher_fn=None,
+    )
+
+    task = store.save_codex_task.call_args.args[0]
+    assert "AUTHORITATIVE ACCEPTANCE CRITERIA" in task.prompt
+    assert "Anonymous requests return 401" in task.prompt
+    assert "criterion_evidence" in task.prompt
+
+
+@pytest.mark.asyncio
 async def test_dispatch_role_uses_shared_issue_worktree_by_default():
     """Regression: without agent_worktree_path, the task uses the shared issue
     worktree path (serial path behaviour must be unchanged)."""

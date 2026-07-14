@@ -3998,3 +3998,123 @@ Wrong: rely on a host `public/` directory and send local caches in the context.
 
 Correct: create the optional directory in the builder and define a narrow
 `.dockerignore` contract.
+
+---
+
+### Scenario: Local-Only Project Service Reachability Probe
+
+#### 1. Scope / Trigger
+
+- Trigger: changing project run status/start endpoints, Operations Engineer
+  `access_url` handling, launch verification, or the HTTP probe used to decide
+  whether a local service is already serving.
+- This is an SSRF-sensitive boundary. A browser-supplied URL, remote/private
+  address, redirect, proxy, or stale analysis result must never expand it into
+  a general network scanner.
+
+#### 2. Signatures
+
+- URL resolver:
+  `resolve_project_access_url(store, project_id, run_command) -> str | None`.
+- URL validator:
+  `canonicalize_local_service_url(raw_url: str) -> str` or
+  `LocalServiceUrlError(reason)`.
+- Probe:
+  `probe_local_service(raw_url, timeout_s=None, transport=None) -> LocalServiceStatus`.
+- Runtime config: `timeouts.project_service_probe_timeout_s() -> float` reads
+  `PROJECT_SERVICE_PROBE_TIMEOUT_S` with a positive default of `0.75` seconds.
+- Run status adds required
+  `service: { state, url, http_status, checked_at, error }` while preserving
+  `running` as the console-owned process flag.
+
+#### 3. Contracts
+
+- Resolve the URL on the backend from the newest successful
+  `project_script_suggestion` task owned by `operations_engineer`. The newest
+  successful result must parse, contain a non-empty URL, and have a normalized
+  `run_command` equal to the project's current command. A mismatch, malformed
+  result, or missing URL yields no target; never fall back to an older URL.
+- Accept only `http` / `https` with exact `localhost` or a literal loopback IP.
+  Normalize `0.0.0.0` to `127.0.0.1` and `[::]` to `[::1]`. Reject userinfo,
+  invalid ports, non-printable characters, remote/private/link-local/metadata
+  hosts, and every other hostname before opening a transport.
+- Disable redirects and environment proxies, do not consume the response body,
+  and allow self-signed local HTTPS because this check proves reachability, not
+  server identity.
+- Any received HTTP response headers, including 3xx/4xx/5xx, mean
+  `state="reachable"`. Redirect targets are never followed.
+- Wrap the complete client/request/header-read lifetime in `asyncio.timeout`.
+  The httpx per-phase timeout alone is insufficient because a slow peer can
+  keep making progress without ever completing the headers.
+- `POST /run/start` performs the same resolved-target probe before environment
+  materialization or process creation. When the service is reachable and the
+  console does not own a running process, return HTTP 409 with
+  `reason="service_already_reachable"`, canonical `url`, and `http_status`.
+
+#### 4. Validation & Error Matrix
+
+- Missing current command or latest access URL -> `not_configured`; make no
+  network request and preserve process-only start behavior.
+- Unsupported/unsafe/malformed URL or `httpx.InvalidURL` -> `invalid_url`; make
+  no request for validation failures and never leak an exception as HTTP 500.
+- Total deadline or httpx timeout -> `unreachable`, `error="timeout"`.
+- Connection/request failure -> `unreachable`, `error="connection_failed"`.
+- Any HTTP response -> `reachable` with its status code, without following a
+  `Location` header or reading the body.
+- Status store unavailable -> `unknown`, `error="store_unavailable"`; do not
+  claim offline.
+- External reachable target at start -> audited 409 refusal before env writes
+  or spawn. Managed process already running -> retain the existing
+  `already_running` ownership path.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `http://0.0.0.0:4000` becomes `http://127.0.0.1:4000`; a 503 response
+  still proves a local listener and blocks a duplicate external start.
+- Base: no analyzed URL returns `not_configured`; the configured command can
+  still be managed by `ProjectRunManager`.
+- Bad: accept `http://192.168.1.20`, follow a localhost redirect to metadata,
+  honor `HTTP_PROXY`, or use a URL supplied in the browser request.
+- Bad: let a slow-drip response reset only per-phase timeouts forever.
+- Bad: skip a newer mismatched/malformed successful analysis and probe a stale
+  URL from an older task.
+
+#### 6. Tests Required
+
+- Validator unit tests cover HTTP(S) loopback/wildcard normalization and reject
+  remote/private/metadata hosts, userinfo, invalid ports, schemes, and control
+  characters before the transport is called.
+- Probe tests assert 200/3xx/4xx/5xx are reachable, redirects are not followed,
+  response bodies are not read, expected network failures are mapped, and a
+  delayed-header transport is cancelled by the total deadline.
+- Resolver tests assert newest-successful selection, current-command matching,
+  no older fallback for missing/malformed/mismatched latest results, and typed
+  full-task loading from raw store rows.
+- API tests assert the additive status payload, missing/invalid URL states, and
+  the external-service 409 occurs before environment materialization/spawn.
+- Launch-verification tests assert it reuses this validator/probe rather than a
+  second network boundary.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+async with httpx.AsyncClient(follow_redirects=True) as client:
+    response = await client.get(request.url)
+return response.status_code == 200
+```
+
+Correct:
+
+```python
+url = canonicalize_local_service_url(resolved_access_url)
+async with asyncio.timeout(project_service_probe_timeout_s()):
+    async with httpx.AsyncClient(
+        follow_redirects=False,
+        trust_env=False,
+        verify=False,
+    ) as client:
+        async with client.stream("GET", url) as response:
+            return reachable_status(url, response.status_code)
+```

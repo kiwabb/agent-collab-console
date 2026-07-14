@@ -15,6 +15,8 @@ function issueFixture(overrides: Partial<CodexIssue>): CodexIssue {
     project_id: null,
     title: "Issue",
     description: null,
+    acceptance_criteria: [],
+    acceptance_criteria_confirmed: false,
     current_phase: "requirements",
     status: "open",
     git_branch: null,

@@ -456,8 +456,14 @@ test("frontend format scripts cover runtime and test TypeScript files", () => {
   const format = packageJson.scripts?.["format"];
   const formatCheck = packageJson.scripts?.["format:check"];
 
-  assert.equal(format, "prettier --write 'src/**/*.{ts,tsx}' 'tests/**/*.{ts,tsx}'");
-  assert.equal(formatCheck, "prettier --check 'src/**/*.{ts,tsx}' 'tests/**/*.{ts,tsx}'");
+  assert.equal(
+    format,
+    "prettier --write 'src/**/*.{ts,tsx}' 'tests/**/*.{ts,tsx}' 'scripts/**/*.{ts,mjs}'",
+  );
+  assert.equal(
+    formatCheck,
+    "prettier --check 'src/**/*.{ts,tsx}' 'tests/**/*.{ts,tsx}' 'scripts/**/*.{ts,mjs}'",
+  );
 });
 
 test("prerendered grid storage helpers guard browser storage access", () => {

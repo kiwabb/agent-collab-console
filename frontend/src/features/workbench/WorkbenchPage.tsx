@@ -350,17 +350,14 @@ function WorkbenchInner({
       .join("|");
   }, [currentIssueTaskIds, executionProcesses]);
   const selectedProcess: ExecutionProcess | null = selectedProcessId
-    ? (executionProcesses.find(
-        (p) => p.id === selectedProcessId,
-      ) ?? (optimisticProcess?.id === selectedProcessId ? optimisticProcess : null))
+    ? (executionProcesses.find((p) => p.id === selectedProcessId) ??
+      (optimisticProcess?.id === selectedProcessId ? optimisticProcess : null))
     : null;
   // Once the WS workspace stream catches up and the real EP appears in
   // executionProcessesAll, drop the placeholder so we don't hold a stale copy.
   useEffect(() => {
     if (!optimisticProcess) return;
-    const arrived = executionProcesses.some(
-      (p) => p.id === optimisticProcess.id,
-    );
+    const arrived = executionProcesses.some((p) => p.id === optimisticProcess.id);
     if (arrived) setOptimisticProcess(null);
   }, [optimisticProcess, executionProcesses]);
   const displayedProcessLogs = useMemo(() => {
@@ -683,10 +680,7 @@ function WorkbenchInner({
   const handleSelectTask = useCallback(
     (id: string) => {
       const task = tasks.find((t) => t.id === id);
-      const localProcess = pickLatestExecutionProcessForTask(
-        executionProcesses,
-        id,
-      );
+      const localProcess = pickLatestExecutionProcessForTask(executionProcesses, id);
 
       if (localProcess) {
         setSelectedProcessId(localProcess.id);
@@ -1435,7 +1429,9 @@ function WorkbenchInner({
                         helpRequests={helpRequests.filter(
                           (h) => h.parent_task_id === currentTaskId,
                         )}
-                        executionProcesses={executionProcesses.filter((p) => p.task_id === currentTaskId)}
+                        executionProcesses={executionProcesses.filter(
+                          (p) => p.task_id === currentTaskId,
+                        )}
                         onSelectTask={handleSelectTask}
                         onSelectProcess={setSelectedProcessId}
                       />

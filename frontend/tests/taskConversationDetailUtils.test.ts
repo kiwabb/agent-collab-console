@@ -256,7 +256,6 @@ test("buildTaskConversationDetail derives merged logs and messages from executio
   );
 });
 
-
 test("buildTaskConversationDetail tolerates process views without messages or logs", () => {
   const detail = buildTaskConversationDetail([], [executionProcessFixture({ id: "proc-empty" })]);
 

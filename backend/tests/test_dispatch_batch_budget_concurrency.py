@@ -169,6 +169,7 @@ async def _measure_peak_concurrency(reg, n_agents):
         agent_worktree_path=None,
         batch_key=None,
         register_completion=False,
+        trace_id=None,
     ):
         nonlocal dispatch_count
         dispatch_count += 1

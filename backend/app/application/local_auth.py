@@ -162,10 +162,8 @@ def authorize_http_request(connection: HTTPConnection) -> LocalAuthFailure | Non
     return None
 
 
-def authorize_external_capability_transport(
-    connection: HTTPConnection,
-) -> LocalAuthFailure | None:
-    """Validate the local transport; the endpoint validates its own bearer capability."""
+def authorize_loopback_request(connection: HTTPConnection) -> LocalAuthFailure | None:
+    """Apply host restrictions for a capability-authenticated internal endpoint."""
     try:
         config = load_local_auth_config()
     except LocalAuthConfigError:

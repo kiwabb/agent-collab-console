@@ -87,6 +87,17 @@ test("workspace console strings come from i18n keys", () => {
   });
 
   [
+    't("workspace.console.acceptanceCriteria")',
+    't("workspace.console.acceptanceCriteriaPlaceholder")',
+    't("workspace.console.acceptanceCriteriaConfirm")',
+    'type="checkbox"',
+    "checked={acceptanceCriteriaConfirmed}",
+    "disabled={acceptanceCriteria.length === 0}",
+  ].forEach((needle) => {
+    assert.match(modal, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+
+  [
     't("workspace.console.emptyTitle")',
     't("workspace.console.filter")',
     't("workspace.console.sort")',

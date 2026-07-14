@@ -1,12 +1,13 @@
 """Tests for /api/codex/tasks/{id}/chat endpoint (P2)."""
 
-from datetime import datetime  # noqa: I001
+import os
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.domain.models import CodexSession, CodexTask, ExecutionProcess
 import app.interfaces.api as api_module
+from app.domain.models import CodexSession, CodexTask, ExecutionProcess
 from app.main import app
 
 
@@ -104,7 +105,13 @@ def _make_session(workspace_path):
 
 @pytest.fixture
 def isolated_client():
-    return TestClient(app)
+    return TestClient(
+        app,
+        headers={
+            "X-Console-Token": os.environ["CONSOLE_AUTH_TOKEN"],
+            "Origin": "http://testserver",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

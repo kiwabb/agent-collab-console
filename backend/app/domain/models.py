@@ -109,6 +109,20 @@ class Project(BaseModel):
     updated_at: datetime | None = None
 
 
+class ProjectStartupService(BaseModel):
+    project_id: str
+    service_id: str
+    name: str
+    working_directory: str
+    setup_command: str
+    run_command: str
+    access_url: str | None = None
+    depends_on: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class Prototype(BaseModel):
     """A low-risk prototype artifact and its current generated version pointer."""
 

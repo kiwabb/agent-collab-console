@@ -98,6 +98,13 @@ class CodexProcessManager:
     def check_availability(self) -> bool:
         return bool(self._codex_runtime.check_availability())
 
+    def check_executor_availability(self, executor: str) -> bool:
+        if executor == "codex":
+            return bool(self._codex_runtime.check_availability())
+        if executor == "claude":
+            return bool(self._claude_runtime.check_availability())
+        raise ValueError(f"unknown executor availability probe: {executor}")
+
     async def launch(
         self,
         workspace_id: str | None = None,

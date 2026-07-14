@@ -152,9 +152,7 @@ export function CollabFeedTab({ issueId, active }: Props) {
           <div className="flex flex-col items-center justify-center h-40 text-center text-text-muted text-[12px] gap-2">
             <MessageSquareQuote size={28} strokeWidth={1.2} className="opacity-30" />
             <span>{t("collab.emptyTitle")}</span>
-            <span className="text-[11px] opacity-60">
-              {t("collab.emptyDescription")}
-            </span>
+            <span className="text-[11px] opacity-60">{t("collab.emptyDescription")}</span>
           </div>
         )}
 

@@ -327,9 +327,7 @@ export function TasksRunsTab({ issueId, issue }: Props) {
                 icon="log"
                 title={selectedTaskId ? t("run.noRunsTitle") : t("run.noRunsNoTask")}
                 description={
-                  selectedTaskId
-                    ? t("run.noRunsDescription")
-                    : t("run.noRunsNoTaskDescription")
+                  selectedTaskId ? t("run.noRunsDescription") : t("run.noRunsNoTaskDescription")
                 }
               />
             </div>

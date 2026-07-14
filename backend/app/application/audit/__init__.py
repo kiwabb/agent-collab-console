@@ -40,6 +40,7 @@ from app.application.audit.recorders import (
     record_conductor_turn,
     record_event,
     record_git_command,
+    record_mcp_call,
 )
 from app.application.audit.writer import AuditLogger, _serialize_payload, audit_logger, default_sink
 
@@ -66,4 +67,5 @@ __all__ = [
     "record_conductor_turn",
     "record_event",
     "record_git_command",
+    "record_mcp_call",
 ]

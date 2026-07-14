@@ -122,7 +122,31 @@ export interface GitBranch {
   last_commit_sha: string | null;
 }
 
-export type { Prototype, PrototypeDetail, PrototypeVersion } from "./types/prototypes";
+export type {
+  Prototype,
+  PrototypeDetail,
+  PrototypeVersion,
+  PrototypePlan,
+  PrototypePlanAction,
+  PrototypePlanConfidence,
+  PrototypePlanDiscoveryOrigin,
+  PrototypePlanAnalysisPhase,
+  PrototypePlanEvidence,
+  PrototypePlanEvidenceKind,
+  PrototypePlanItem,
+  PrototypePlanOutputLocale,
+  PrototypePlanReviewStatus,
+  PrototypePlanScope,
+  PrototypePlanStatus,
+  PrototypePlanSurfaceKind,
+  PrototypeProjectContext,
+  PrototypeGenerationRun,
+  PrototypeGenerationRunItem,
+  PrototypeGenerationRunStatus,
+  PrototypeGenerationItemPhase,
+  PrototypeGenerationItemStatus,
+  PrototypeStreamHeartbeat,
+} from "./types/prototypes";
 export type {
   BenchmarkDiff,
   BenchmarkDiffFixture,
@@ -147,6 +171,8 @@ export type {
   ProjectRunEnvError,
   ProjectRunLogLine,
   ProjectRunLogsResponse,
+  ProjectRunServiceState,
+  ProjectRunServiceStatus,
   ProjectRunStartReason,
   ProjectRunStatus,
   ProjectRemoteStatus,
@@ -440,6 +466,37 @@ export interface ProjectScriptTaskResponse {
   title: string;
   execution_process_id?: string | null;
   reused: boolean;
+}
+
+export interface ProjectStartupService {
+  project_id: string;
+  service_id: string;
+  name: string;
+  working_directory: string;
+  setup_command: string;
+  run_command: string;
+  access_url: string | null;
+  depends_on: string[];
+  evidence: string[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ProjectStartupConfig {
+  project_id: string;
+  task_id: string | null;
+  notes: string[];
+  updated_at: string | null;
+  services: ProjectStartupService[];
+}
+
+export interface ProjectServiceRunResult {
+  service_id: string;
+  status: import("./types/projects").ProjectRunStatus;
+}
+
+export interface ProjectServicesRunResponse {
+  services: ProjectServiceRunResult[];
 }
 
 export interface MergeIssueResult {

@@ -335,6 +335,37 @@ def record_cli_spawn(
         logger.debug("audit cli spawn recording failed", exc_info=True)
 
 
+def record_mcp_call(
+    *,
+    server_id: str,
+    tool_id: str,
+    scope_id: str,
+    task_id: str | None,
+    started: float,
+    is_error: bool,
+    sink: AuditSink | None = None,
+) -> None:
+    """Record one MCP tool outcome without retaining arguments or output."""
+    try:
+        _sink(sink).record(
+            cat.CATEGORY_TOOL_RESULT,
+            actor=f"mcp:{server_id}",
+            task_id=task_id,
+            correlation_id=scope_id,
+            status="error" if is_error else "ok",
+            duration_ms=int((time.monotonic() - started) * 1000),
+            payload={
+                "transport": "mcp",
+                "server_id": server_id,
+                "tool_id": tool_id,
+                "scope_id": scope_id,
+            },
+            error="MCP tool returned an error" if is_error else None,
+        )
+    except Exception:  # noqa: BLE001, RUF100
+        logger.exception("audit MCP call recording failed: server_id=%s", server_id)
+
+
 # --- conductor turn --------------------------------------------------------
 
 # A conductor turn `kind` maps 1:1 onto an audit category: `llm_request` is the

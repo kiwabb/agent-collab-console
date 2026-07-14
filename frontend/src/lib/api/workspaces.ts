@@ -1,6 +1,6 @@
 // AUTO-SPLIT from lib/api.ts by domain (frontend lib split).
 
-import { API_BASE, WS_BASE, apiJsonRequest, apiRequest } from "./fetch";
+import { API_BASE, apiJsonRequest, apiRequest, getWebSocketBase } from "./fetch";
 import type { CreateWorkspaceRequest, Workspace } from "../types";
 
 export async function getWorkspaces(projectId: string | null = null): Promise<Workspace[]> {
@@ -53,5 +53,5 @@ export const deleteCodexSession = deleteWorkspace;
 export const deleteAllCodexSessions = deleteAllWorkspaces;
 // WebSocket URL builders
 export function getWorkspaceStreamUrl(workspaceId: string): string {
-  return `${WS_BASE}/api/workspaces/${workspaceId}/execution_processes/ws`;
+  return `${getWebSocketBase()}/api/workspaces/${workspaceId}/execution_processes/ws`;
 }

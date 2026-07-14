@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 import app.application.llm_runner as llm_runner_module
 from app.application.llm_runner import (
+    LLMOutputTokenLimitError,
     StreamingPlanContext,
+    build_llm_runner,
     call_llm_with_tools_streaming,
     stream_llm,
 )
+from app.application.runtime_catalog_service import RuntimeCatalogService
+from app.domain.models import RuntimeCatalog, RuntimeExecutorConfig
 
 
 class _FakeStreamResponse:
@@ -74,6 +80,80 @@ class _NoisyStreamClient:
                 'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"ok"}}',
                 'data: {"type":"message_stop"}',
             ]
+        )
+
+
+class _CatalogService:
+    async def load_catalog(self) -> RuntimeCatalog:
+        return RuntimeCatalog(
+            executors=[
+                RuntimeExecutorConfig(
+                    id="minimax",
+                    label="MiniMax",
+                    api_endpoint="https://example.test",
+                    api_key="secret",
+                    default_model="MiniMax-M3",
+                )
+            ]
+        )
+
+
+class _JsonResponse:
+    status_code = 200
+    text = ""
+
+    def __init__(self, payload: object) -> None:
+        self.payload = payload
+
+    def json(self) -> object:
+        return self.payload
+
+
+class _PrefillRetryClient:
+    payloads: list[dict[str, object]] = []
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def post(self, url, headers=None, json=None):  # noqa: ANN001, RUF100
+        assert isinstance(json, dict)
+        self.payloads.append(json)
+        if len(self.payloads) == 1:
+            return _JsonResponse({"content": None, "stop_reason": "end_turn"})
+        return _JsonResponse(
+            {
+                "content": [{"type": "text", "text": '{"items":[]}'}],
+                "stop_reason": "end_turn",
+            }
+        )
+
+
+class _MaxTokenClient:
+    payloads: list[dict[str, object]] = []
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def post(self, url, headers=None, json=None):  # noqa: ANN001, RUF100
+        assert isinstance(json, dict)
+        self.payloads.append(json)
+        return _JsonResponse(
+            {
+                "content": [{"type": "text", "text": '{"items":['}],
+                "stop_reason": "max_tokens",
+            }
         )
 
 
@@ -144,3 +224,41 @@ async def test_llm_http_client_ignores_invalid_ipv6_no_proxy(monkeypatch):
 
     async with llm_runner_module._llm_http_client(1.0) as client:
         assert client.timeout.connect == 1.0
+
+
+@pytest.mark.asyncio
+async def test_build_llm_runner_keeps_minimax_m3_retry_prefill_free(monkeypatch):
+    _PrefillRetryClient.payloads = []
+    monkeypatch.setattr(llm_runner_module.httpx, "AsyncClient", _PrefillRetryClient)
+
+    catalog_service = cast(RuntimeCatalogService, _CatalogService())
+    result = await build_llm_runner(catalog_service)("Plan it")
+
+    assert result == '{"items":[]}'
+    assert len(_PrefillRetryClient.payloads) == 2
+    assert _PrefillRetryClient.payloads[0]["messages"] == [
+        {"role": "user", "content": "Plan it"},
+    ]
+    assert _PrefillRetryClient.payloads[1]["messages"] == [
+        {"role": "user", "content": "Plan it"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_build_llm_runner_surfaces_max_tokens_without_returning_truncated_text(
+    monkeypatch,
+):
+    _MaxTokenClient.payloads = []
+    monkeypatch.setattr(llm_runner_module.httpx, "AsyncClient", _MaxTokenClient)
+    catalog_service = cast(RuntimeCatalogService, _CatalogService())
+    runner = build_llm_runner(
+        catalog_service,
+        max_tokens=16_384,
+        raise_on_max_tokens=True,
+    )
+
+    with pytest.raises(LLMOutputTokenLimitError, match="max_tokens=16384"):
+        await runner("Plan it")
+
+    assert len(_MaxTokenClient.payloads) == 1
+    assert _MaxTokenClient.payloads[0]["max_tokens"] == 16_384

@@ -96,3 +96,24 @@ async def test_recovers_from_shared_failure_status():
 
     assert recovered is True
     assert task.status == "done"
+
+
+@pytest.mark.asyncio
+async def test_qa_downgrade_is_not_reported_as_recovered():
+    task = _task(status="failed")
+
+    async def fake_refresh(t):
+        t.status = "failed"
+        t.result = '{"status":"unverified","execution_results":[]}'
+
+    store = MagicMock()
+    store.load_codex_task = AsyncMock(return_value=task)
+    store.save_codex_task = AsyncMock()
+    pm = MagicMock()
+    pm.refresh_task_result = AsyncMock(side_effect=fake_refresh)
+
+    recovered = await _recover_nudge_result(store, pm, "task-n")
+
+    assert recovered is False
+    assert task.status == "failed"
+    store.save_codex_task.assert_awaited_once_with(task)

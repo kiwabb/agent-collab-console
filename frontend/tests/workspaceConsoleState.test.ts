@@ -21,6 +21,8 @@ function makeIssue(overrides: Partial<CodexIssue> = {}): CodexIssue {
     project_id: null,
     title: "Issue 1",
     description: null,
+    acceptance_criteria: [],
+    acceptance_criteria_confirmed: false,
     current_phase: "requirements",
     status: "open",
     git_branch: null,

@@ -2,6 +2,10 @@
 
 import { memo, useEffect, useRef } from "react";
 
+import { isRecord } from "@/lib/utils";
+
+import { injectPrototypeNavigationBridge } from "./prototypeNavigation";
+
 /**
  * Renders an HTML string inside a hardened sandbox.
  *
@@ -19,10 +23,25 @@ import { memo, useEffect, useRef } from "react";
 interface Props {
   html: string;
   versionKey: string | number;
+  onNavigate: (route: string) => void;
 }
 
-function PreviewFrameBase({ html, versionKey }: Props) {
+function PreviewFrameBase({ html, versionKey, onNavigate }: Props) {
   const ref = useRef<HTMLIFrameElement | null>(null);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent<unknown>) => {
+      if (event.source !== ref.current?.contentWindow) return;
+      const payload = isRecord(event.data) ? event.data : null;
+      if (!payload) return;
+      if (payload["type"] !== "prototype:navigate" || typeof payload["route"] !== "string") {
+        return;
+      }
+      onNavigate(payload["route"]);
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [onNavigate]);
 
   // srcDoc re-renders automatically when `html` changes, but we also
   // explicitly null+restore when the versionKey changes so any cached
@@ -43,8 +62,8 @@ function PreviewFrameBase({ html, versionKey }: Props) {
       ref={ref}
       title="prototype-preview"
       sandbox="allow-scripts"
-      srcDoc={html}
-      className="h-full w-full rounded-lg border border-border-subtle bg-white"
+      srcDoc={injectPrototypeNavigationBridge(html)}
+      className="h-full w-full bg-white"
     />
   );
 }

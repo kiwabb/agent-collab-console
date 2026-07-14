@@ -4,7 +4,7 @@ import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 
 import aiosqlite
 import httpx
@@ -332,16 +332,29 @@ async def test_mcp_lists_only_pairing_permissions_and_audits_denial(tmp_path: Pa
             },
         )
         assert initialized.body is not None
-        assert initialized.body["result"]["protocolVersion"] == "2025-06-18"
+        initialized_result = initialized.body["result"]
+        assert isinstance(initialized_result, dict)
+        assert initialized_result["protocolVersion"] == "2025-06-18"
         listed = await handler.handle(
             issued.pairing,
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         )
         assert listed.body is not None
-        names = {tool["name"] for tool in listed.body["result"]["tools"]}
+        listed_result = listed.body["result"]
+        assert isinstance(listed_result, dict)
+        tools = listed_result["tools"]
+        assert isinstance(tools, list)
+        tool_records: list[dict[str, object]] = []
+        for tool in tools:
+            assert isinstance(tool, dict)
+            tool_records.append(tool)
+        names = {tool["name"] for tool in tool_records}
         assert "get_active_design_context" in names
         assert "submit_command_proposal" not in names
-        assert all(tool["inputSchema"]["additionalProperties"] is False for tool in listed.body["result"]["tools"])
+        for tool in tool_records:
+            input_schema = tool["inputSchema"]
+            assert isinstance(input_schema, dict)
+            assert input_schema["additionalProperties"] is False
 
         denied = await handler.handle(
             issued.pairing,
@@ -353,8 +366,14 @@ async def test_mcp_lists_only_pairing_permissions_and_audits_denial(tmp_path: Pa
             },
         )
         assert denied.body is not None
-        assert denied.body["result"]["isError"] is True
-        assert denied.body["result"]["structuredContent"]["error"]["code"] == "tool_not_allowed"
+        denied_result = denied.body["result"]
+        assert isinstance(denied_result, dict)
+        assert denied_result["isError"] is True
+        structured_content = denied_result["structuredContent"]
+        assert isinstance(structured_content, dict)
+        error = structured_content["error"]
+        assert isinstance(error, dict)
+        assert error["code"] == "tool_not_allowed"
 
         async with aiosqlite.connect(tmp_path / "permissions.db") as connection:
             row = await (
@@ -494,9 +513,13 @@ async def test_audit_and_submission_storage_exclude_prompt_and_command_bodies(
     try:
         issued = await service.create_pairing(pairing_request())
         arguments = submission_arguments(message=marker)
-        cast(dict[str, object], cast(dict[str, object], arguments["batch"])["commands"][0])[
-            "value"
-        ] = marker
+        batch = arguments["batch"]
+        assert isinstance(batch, dict)
+        commands = batch["commands"]
+        assert isinstance(commands, list)
+        command = commands[0]
+        assert isinstance(command, dict)
+        command["value"] = marker
         await service.invoke_tool(
             issued.pairing,
             "submit_command_proposal",

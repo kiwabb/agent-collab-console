@@ -1,6 +1,7 @@
 """Tests for /api/codex/tasks/{id}/refine endpoint (P3) — generic across 4 roles."""
 
 import json  # noqa: I001
+import os
 from datetime import datetime
 from pathlib import Path  # noqa: F401
 from typing import cast
@@ -146,7 +147,13 @@ def _write_qa_artifact(tmp_path, issue_id):
 
 @pytest.fixture
 def isolated_client():
-    return TestClient(app)
+    return TestClient(
+        app,
+        headers={
+            "X-Console-Token": os.environ["CONSOLE_AUTH_TOKEN"],
+            "Origin": "http://testserver",
+        },
+    )
 
 
 def _install_runner_stub(monkeypatch, store):

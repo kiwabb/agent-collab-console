@@ -12,12 +12,15 @@ import type {
   ProjectPullResult,
   ProjectRemoteStatus,
   ProjectRunLogsResponse,
+  ProjectRunEnvError,
   ProjectRunStartReason,
   ProjectRunStatus,
   ProjectScriptSuggestionRequest,
   ProjectScriptSuggestionResponse,
   ProjectScriptTaskRequest,
   ProjectScriptTaskResponse,
+  ProjectStartupConfig,
+  ProjectServicesRunResponse,
   ProjectStats,
   UpdateProjectRequest,
 } from "../types";
@@ -112,10 +115,18 @@ export async function pullProject(projectId: string): Promise<ProjectPullResult>
  * branch on the reason without catching a thrown error.
  */
 export type StartProjectRunResult =
-  ProjectRunStatus | { error: ProjectRunStartReason; pattern?: string | undefined };
+  | ProjectRunStatus
+  | {
+      error: ProjectRunStartReason;
+      pattern?: string | undefined;
+      errors?: ProjectRunEnvError[] | undefined;
+      message?: string | undefined;
+      url?: string | null | undefined;
+      http_status?: number | null | undefined;
+    };
 export function isProjectRunStartError(
   result: StartProjectRunResult,
-): result is { error: ProjectRunStartReason; pattern?: string | undefined } {
+): result is Exclude<StartProjectRunResult, ProjectRunStatus> {
   return "error" in result;
 }
 export async function startProjectRun(projectId: string): Promise<StartProjectRunResult> {
@@ -124,11 +135,25 @@ export async function startProjectRun(projectId: string): Promise<StartProjectRu
     return (await response.json()) as ProjectRunStatus;
   }
   if (response.status === 409) {
-    // FastAPI wraps the refusal payload as {detail: {reason, pattern?}}.
+    // FastAPI wraps the refusal payload as {detail: {reason, pattern?, errors?, message?}}.
     const body = (await response.json()) as {
-      detail: { reason: ProjectRunStartReason; pattern?: string };
+      detail: {
+        reason: ProjectRunStartReason;
+        pattern?: string;
+        errors?: ProjectRunEnvError[];
+        message?: string;
+        url?: string | null;
+        http_status?: number | null;
+      };
     };
-    return { error: body.detail.reason, pattern: body.detail.pattern };
+    return {
+      error: body.detail.reason,
+      ...(body.detail.pattern !== undefined ? { pattern: body.detail.pattern } : {}),
+      ...(body.detail.errors !== undefined ? { errors: body.detail.errors } : {}),
+      ...(body.detail.message !== undefined ? { message: body.detail.message } : {}),
+      ...(body.detail.url !== undefined ? { url: body.detail.url } : {}),
+      ...(body.detail.http_status !== undefined ? { http_status: body.detail.http_status } : {}),
+    };
   }
   // 404 / 500 etc. are genuine errors — surface them.
   return handleResponse<ProjectRunStatus>(response);
@@ -148,6 +173,58 @@ export async function getProjectRunLogs(
   return apiRequest<ProjectRunLogsResponse>(
     `${API_BASE}/projects/${projectId}/run/logs?after=${after}`,
   );
+}
+export async function getProjectStartupConfig(projectId: string): Promise<ProjectStartupConfig> {
+  return apiRequest<ProjectStartupConfig>(`${API_BASE}/projects/${projectId}/startup-config`);
+}
+export async function getProjectServiceRunStatus(
+  projectId: string,
+  serviceId: string,
+): Promise<ProjectRunStatus> {
+  return apiRequest<ProjectRunStatus>(
+    `${API_BASE}/projects/${projectId}/services/${encodeURIComponent(serviceId)}/run/status`,
+  );
+}
+export async function getProjectServiceRunLogs(
+  projectId: string,
+  serviceId: string,
+  after = 0,
+): Promise<ProjectRunLogsResponse> {
+  return apiRequest<ProjectRunLogsResponse>(
+    `${API_BASE}/projects/${projectId}/services/${encodeURIComponent(serviceId)}/run/logs?after=${after}`,
+  );
+}
+export async function startProjectServiceRun(
+  projectId: string,
+  serviceId: string,
+): Promise<ProjectRunStatus> {
+  return apiRequest<ProjectRunStatus>(
+    `${API_BASE}/projects/${projectId}/services/${encodeURIComponent(serviceId)}/run/start`,
+    { method: "POST" },
+  );
+}
+export async function stopProjectServiceRun(
+  projectId: string,
+  serviceId: string,
+): Promise<ProjectRunStatus> {
+  return apiRequest<ProjectRunStatus>(
+    `${API_BASE}/projects/${projectId}/services/${encodeURIComponent(serviceId)}/run/stop`,
+    { method: "POST" },
+  );
+}
+export async function startAllProjectServices(
+  projectId: string,
+): Promise<ProjectServicesRunResponse> {
+  return apiRequest<ProjectServicesRunResponse>(`${API_BASE}/projects/${projectId}/run/start-all`, {
+    method: "POST",
+  });
+}
+export async function stopAllProjectServices(
+  projectId: string,
+): Promise<ProjectServicesRunResponse> {
+  return apiRequest<ProjectServicesRunResponse>(`${API_BASE}/projects/${projectId}/run/stop-all`, {
+    method: "POST",
+  });
 }
 export async function getProjectConductorState(projectId: string): Promise<ProjectConductorState> {
   return apiRequest<ProjectConductorState>(
@@ -230,7 +307,9 @@ export async function getProjectEnvVars(projectId: string): Promise<{
 
 export async function putProjectEnvVars(
   projectId: string,
-  body: { name: string; value: string; secret?: boolean; source?: string } | { vars: Array<{ name: string; value: string; secret?: boolean; source?: string }> },
+  body:
+    | { name: string; value: string; secret?: boolean; source?: string }
+    | { vars: Array<{ name: string; value: string; secret?: boolean; source?: string }> },
 ): Promise<{ saved: string[] }> {
   return apiJsonRequest(`${API_BASE}/projects/${projectId}/env`, "PUT", body);
 }

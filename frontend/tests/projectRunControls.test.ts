@@ -62,6 +62,9 @@ test("ProjectWorkspacesPage wires the start/stop/logs run controls", () => {
   assert.match(page, /lastSeqRef/);
   assert.match(page, /logsOpen/);
   assert.match(page, /t\("projects\.runLogsTitle"\)/);
+  assert.match(page, /setInterval\(tick, SERVICE_STATUS_POLL_MS\)/);
+  assert.match(page, /setInterval\(tick, RUN_LOG_POLL_MS\)/);
+  assert.match(page, /updateProjectRunRefreshError/);
 });
 
 test("ProjectsPage exposes a RunCommandCard for editing run_command", () => {
@@ -73,18 +76,37 @@ test("ProjectsPage exposes a RunCommandCard for editing run_command", () => {
   assert.match(page, /t\("projects\.runCommandLabel"\)/);
 });
 
-const SCRIPT_TASK_KEYS = [
-  "projects.generateStartupScripts",
-  "projects.generatingStartupScripts",
-  "projects.scriptSuggestionSuccess",
-  "projects.scriptSuggestionCompleted",
-  "projects.scriptSuggestionAlreadyRunning",
-  "projects.scriptSuggestionStillRunning",
-  "projects.scriptSuggestionFailed",
+const STARTUP_CONFIG_KEYS = [
+  "startupConfig.open",
+  "startupConfig.title",
+  "startupConfig.analyze",
+  "startupConfig.reanalyze",
+  "startupConfig.analyzing",
+  "startupConfig.analysisCompleted",
+  "startupConfig.analysisFailed",
+  "startupConfig.stepAnalyze",
+  "startupConfig.stepConfigure",
+  "startupConfig.stepRun",
+  "startupConfig.envTitle",
+  "startupConfig.readyTitle",
+  "startupConfig.runSubmitted",
+  "startupConfig.failedTitle",
+  "startupConfig.failedDetail",
+  "startupConfig.retryRun",
+  "startupConfig.runLogsTitle",
+  "startupConfig.runLogsExited",
+  "startupConfig.serviceAlreadyReachable",
+  "startupConfig.externalServiceTitle",
+  "startupConfig.serviceStartingTitle",
+  "startupConfig.serviceOfflineTitle",
+  "startupConfig.serviceOfflineDetail",
+  "startupConfig.serviceUnknownTitle",
+  "startupConfig.serviceUnknownDetail",
+  "startupConfig.openService",
 ] as const;
 
-test("operations engineer startup script i18n keys exist in both zh-CN and en-US", () => {
-  for (const key of SCRIPT_TASK_KEYS) {
+test("startup configuration i18n keys exist in both zh-CN and en-US", () => {
+  for (const key of STARTUP_CONFIG_KEYS) {
     const zh = getDictionaryValue("zh-CN", key as never);
     const en = getDictionaryValue("en-US", key as never);
     assert.ok(zh && zh !== key, `zh-CN missing or fell back for ${key}`);
@@ -92,63 +114,53 @@ test("operations engineer startup script i18n keys exist in both zh-CN and en-US
   }
 });
 
-test("ProjectsPage wires operations engineer startup-script task flow", () => {
-  const page = readSource("features/projects/ProjectsPage.tsx");
+test("ProjectsPage links to Startup Config instead of starting analysis", () => {
+  const projectsPage = readSource("features/projects/ProjectsPage.tsx");
 
-  assert.match(page, /startProjectScriptTask/);
-  assert.match(page, /getCodexTask/);
-  assert.match(page, /suggestingTaskId/);
-  assert.match(page, /describeScriptTaskTerminalStatus/);
-  assert.match(page, /projects\.generateStartupScripts/);
-  assert.match(page, /projects\.generatingStartupScripts/);
-  assert.match(page, /projects\.scriptSuggestionAlreadyRunning/);
-  assert.match(page, /projects\.scriptSuggestionSuccess/);
-  assert.match(page, /projects\.scriptSuggestionCompleted/);
-  assert.match(page, /projects\.scriptSuggestionStillRunning/);
-  assert.match(page, /task\.reused \? t\("projects\.scriptSuggestionAlreadyRunning"\)/);
-  assert.match(page, /if \(!activeProject \|\| suggestingProjectId\) return;/);
-  assert.match(page, /handledScriptTaskIdsRef\.current\.delete\(task\.task_id\)/);
-  assert.match(page, /setSuggestingTaskId\(task\.task_id\)/);
-  assert.match(page, /lastEvent\.project_id !== suggestingProjectId/);
-  assert.match(page, /lastEvent\.task_kind !== "project_script_suggestion"/);
-  assert.match(page, /lastEvent\.role !== "operations_engineer"/);
-  assert.match(page, /generating=\{suggestingProjectId !== null\}/);
-  assert.match(page, /setSelectedProjectId\(p\.id\);\s*setActiveId\(p\.id\);/);
-  assert.match(page, /useContext\(ExecutionProcessesContext\)/);
-  assert.match(page, /useDataEvent\("projects:changed", refreshFromProjectEvent\)/);
-  assert.match(
-    page,
-    /const refreshFromProjectEvent = useCallback\(\(\) => \{\s*void refresh\(\);\s*\}, \[refresh\]\);/,
-  );
-  assert.doesNotMatch(page, /setTimeout\(\(\) => \{\s*setSuggestingProjectId/);
-  assert.doesNotMatch(page, /setTimeout\(\(\) => \{\s*setSuggestingTaskId/);
-  assert.doesNotMatch(page, /useExecutionProcessesContext/);
-  assert.doesNotMatch(page, /suggestProjectScript\(/);
+  assert.match(projectsPage, /startupConfigHref=\{`\/projects\/\$\{activeProject\.id\}\/env`\}/);
+  assert.match(projectsPage, /t\("startupConfig\.open"\)/);
+  assert.doesNotMatch(projectsPage, /startProjectScriptTask/);
+  assert.doesNotMatch(projectsPage, /suggestingTaskId/);
 });
 
-test("ProjectsPage script task poll timeout does not report failure", () => {
-  const page = readSource("features/projects/ProjectsPage.tsx");
-  const timeoutBranch = page.slice(
-    page.indexOf("Date.now() - startedAt > SCRIPT_TASK_POLL_LIMIT_MS"),
-    page.indexOf("try {", page.indexOf("Date.now() - startedAt > SCRIPT_TASK_POLL_LIMIT_MS")),
-  );
+test("Startup Config owns analysis polling and project run actions", () => {
+  const hook = readSource("features/projects/useProjectStartupConfig.ts");
+  const page = readSource("features/projects/ProjectStartupConfigPage.tsx");
+  const runPanel = readSource("features/projects/ProjectRunStatusPanel.tsx");
 
-  assert.match(timeoutBranch, /projects\.scriptSuggestionStillRunning/);
-  assert.doesNotMatch(timeoutBranch, /projects\.scriptSuggestionFailed/);
+  assert.match(hook, /startProjectScriptTask/);
+  assert.match(hook, /getCodexTask\(analysisTaskId\)/);
+  assert.match(hook, /setAnalysisTaskId\(response\.task_id\)/);
+  assert.match(hook, /response\.reused/);
+  assert.match(hook, /startupConfig\.analysisStillRunning|still_running/);
+  assert.match(hook, /startProjectRun/);
+  assert.match(hook, /stopProjectRun/);
+  assert.match(hook, /getProjectRunStatus/);
+  assert.match(hook, /getProjectRunLogs/);
+  assert.match(hook, /shouldPollProjectServiceStatus\(runStatus\)/);
+  assert.match(hook, /service_already_reachable/);
+  assert.match(hook, /lastRunLogSeqRef/);
+  assert.match(hook, /window\.setInterval\(pollStatus, SERVICE_STATUS_POLL_MS\)/);
+  assert.match(hook, /window\.setInterval\(pollLogs, RUN_LOG_POLL_MS\)/);
+  assert.match(hook, /updateProjectRunRefreshError/);
+  assert.match(page, /ProjectEnvVarEditor/);
+  assert.match(page, /startupConfig\.stepAnalyze/);
+  assert.match(page, /startupConfig\.stepConfigure/);
+  assert.match(page, /startupConfig\.stepRun/);
+  assert.match(page, /ProjectRunStatusPanel/);
+  assert.match(runPanel, /startupConfig\.failedDetail/);
+  assert.match(runPanel, /startupConfig\.runLogsTitle/);
+  assert.match(runPanel, /externalReachable/);
+  assert.match(runPanel, /managedRunning/);
+  assert.match(runPanel, /startupConfig\.openService/);
 });
 
-test("ProjectsPage handles script task terminal events by task id first", () => {
-  const page = readSource("features/projects/ProjectsPage.tsx");
-  const taskIdGuard = page.indexOf("!suggestingTaskId");
-  const taskIdMatch = page.indexOf("lastEvent.task_id !== suggestingTaskId");
-  const projectIdCheck = page.indexOf("lastEvent.project_id !== suggestingProjectId");
+test("project run status keeps managed ownership separate from service reachability", () => {
+  const types = readSource("lib/types/projects.ts");
 
-  assert.ok(taskIdGuard > -1, "script task terminal handling should wait for a task id");
-  assert.ok(taskIdMatch > taskIdGuard, "terminal events should match the tracked task id");
-  assert.ok(
-    projectIdCheck > taskIdMatch,
-    "project id should only narrow after exact task-id matching",
-  );
+  assert.match(types, /export interface ProjectRunServiceStatus/);
+  assert.match(types, /service: ProjectRunServiceStatus/);
+  assert.match(types, /service_already_reachable/);
 });
 
 test("ProjectScriptTaskResponse keeps reused as a required boolean", () => {

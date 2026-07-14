@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>仪表盘 · Northstar 管理后台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+<style>
+  :root {
+    font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    color: #172033;
+    background: #f4f6f9;
+    --primary: #3157d5;
+    --primary-soft: #edf1ff;
+    --border: #dfe4ec;
+    --muted: #667085;
+    --surface: #ffffff;
+    --sidebar: #19202d;
+    --danger: #b42318;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-width: 320px; min-height: 100vh; }
+  button, input { font: inherit; letter-spacing: 0; }
+  button { cursor: pointer; }
+  a { color: inherit; text-decoration: none; }
+  svg { display: block; }
+
+  .app-shell { min-height: 100vh; display: grid; grid-template-columns: 232px minmax(0, 1fr); }
+  .sidebar { position: sticky; top: 0; height: 100vh; padding: 22px 14px 16px; color: #f8fafc; background: var(--sidebar); display: flex; flex-direction: column; z-index: 30; }
+  .brand { height: 54px; display: flex; align-items: center; gap: 11px; padding: 0 8px 18px; border-bottom: 1px solid #303847; }
+  .brand__mark { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 7px; background: #4968d8; color: #fff; }
+  .brand__mark svg { width: 20px; height: 20px; }
+  .brand div, .sidebar__footer div { display: flex; flex-direction: column; min-width: 0; }
+  .brand strong { font-size: 15px; color: #f8fafc; }
+  .brand span { color: #9ba5b5; font-size: 12px; }
+  .sidebar__close { display: none; margin-left: auto; color: #fff; }
+  .navigation { display: grid; gap: 5px; padding-top: 20px; }
+  .navigation__link { height: 42px; padding: 0 12px; display: flex; align-items: center; gap: 12px; color: #aeb7c5; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 500; }
+  .navigation__link:hover { color: #fff; background: #242d3b; }
+  .navigation__link.is-active { color: #fff; background: #3157d5; }
+  .navigation__link svg { width: 19px; height: 19px; }
+  .sidebar__footer { margin-top: auto; padding: 15px 8px 2px; border-top: 1px solid #303847; display: flex; align-items: center; gap: 10px; }
+  .sidebar__footer strong { font-size: 13px; color: #f8fafc; }
+  .sidebar__footer span { color: #9ba5b5; font-size: 12px; }
+  .avatar { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; border-radius: 50%; color: #2744a2; background: #e6ebff; font-size: 13px; font-weight: 700; }
+  .main-column { min-width: 0; }
+  .topbar { height: 64px; position: sticky; top: 0; z-index: 20; display: flex; align-items: center; padding: 0 28px; background: rgba(255,255,255,.96); border-bottom: 1px solid var(--border); }
+  .topbar__context { font-size: 13px; color: var(--muted); }
+  .topbar__actions { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+  .icon-button { width: 36px; height: 36px; border: 0; background: transparent; color: #596275; border-radius: 6px; display: grid; place-items: center; }
+  .icon-button:hover { background: #eef1f5; color: #172033; }
+  .icon-button svg { width: 19px; height: 19px; }
+  .mobile-menu { display: none; }
+  .environment { display: inline-flex; align-items: center; gap: 7px; color: #475467; font-size: 12px; }
+  .environment i { width: 7px; height: 7px; border-radius: 50%; background: #1f9d68; box-shadow: 0 0 0 3px #dcf5e9; display: inline-block; }
+
+  .page-container { width: min(1180px, 100%); margin: 0 auto; padding: 34px 32px 48px; }
+  .page-heading { min-height: 72px; margin-bottom: 28px; display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+  .eyebrow { color: var(--primary); font-size: 12px; font-weight: 700; }
+  h1 { margin: 4px 0 5px; font-size: 26px; line-height: 1.25; font-weight: 700; }
+  h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+  .date-label { margin-top: 23px; color: var(--muted); font-size: 12px; }
+
+  .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+  .metric { min-height: 128px; padding: 20px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; display: flex; gap: 14px; }
+  .metric__icon { width: 38px; height: 38px; flex: 0 0 38px; display: grid; place-items: center; border-radius: 7px; }
+  .metric__icon svg { width: 19px; height: 19px; }
+  .metric__icon--blue { color: #3157d5; background: #edf1ff; }
+  .metric__icon--amber { color: #b35c00; background: #fff1dc; }
+  .metric__icon--green { color: #087a50; background: #dff7eb; }
+  .metric__icon--violet { color: #754bb7; background: #f1e9ff; }
+  .metric div { display: flex; flex-direction: column; }
+  .metric span { color: var(--muted); font-size: 12px; }
+  .metric strong { margin: 6px 0 5px; font-size: 23px; font-variant-numeric: tabular-nums; color: #172033; font-weight: 700; }
+  .metric small { color: #4f647f; font-size: 11px; }
+
+  .content-section { margin-top: 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .section-heading { min-height: 70px; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--border); }
+  .section-heading p { margin-top: 4px; font-size: 12px; }
+
+  .activity-row { min-height: 65px; padding: 12px 20px; display: flex; align-items: center; gap: 13px; border-bottom: 1px solid #edf0f4; }
+  .activity-row:last-child { border-bottom: 0; }
+  .activity-row__dot { width: 9px; height: 9px; border-radius: 50%; background: #3157d5; box-shadow: 0 0 0 4px #edf1ff; flex: 0 0 9px; }
+  .activity-row__dot[data-type="order"] { background: #087a50; box-shadow: 0 0 0 4px #dff7eb; }
+  .activity-row__dot[data-type="system"] { background: #b35c00; box-shadow: 0 0 0 4px #fff1dc; }
+  .activity-row div { display: flex; flex-direction: column; gap: 4px; }
+  .activity-row strong { font-size: 13px; font-weight: 600; color: #172033; }
+  .activity-row span { color: var(--muted); font-size: 11px; }
+
+  .scrim { display: none; }
+
+  @media (max-width: 960px) {
+    .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 720px) {
+    .app-shell { display: block; }
+    .sidebar { position: fixed; left: 0; transform: translateX(-100%); width: 250px; transition: transform .2s ease-out; }
+    .sidebar.is-open { transform: translateX(0); }
+    .sidebar__close, .mobile-menu { display: grid !important; }
+    .icon-button.mobile-menu svg { width: 21px; height: 21px; }
+    .scrim { display: block; position: fixed; inset: 0; z-index: 25; background: rgba(15,23,42,.42); visibility: hidden; }
+    .scrim.is-visible { visibility: visible; }
+    .topbar { padding: 0 16px; }
+    .mobile-menu { margin-right: 8px; display: grid; }
+    .page-container { padding: 24px 16px 36px; }
+    .page-heading { margin-bottom: 20px; flex-wrap: wrap; }
+    .date-label { margin-top: 0; }
+    h1 { font-size: 23px; }
+    .metric-grid { grid-template-columns: 1fr; }
+    .metric { min-height: 110px; }
+  }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar is-open" id="sidebar">
+    <div class="brand">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L18 10.5l-6 3.5-6-3.5Z"/><path d="M7 16.5l-4.74-2.85"/><path d="M7 16.5v5.17"/><path d="M12 13.92l4.74-2.85"/><path d="M17 16.5v5.17"/><path d="M17 16.5l4.74-2.85"/><path d="M12 8l-6-3.5"/><path d="M12 8V2.83"/><path d="M6 4.5l6 3.5"/><path d="M18 4.5l-6 3.5"/></svg>
+      </span>
+      <div>
+        <strong>Northstar</strong>
+        <span>运营管理平台</span>
+      </div>
+      <button class="icon-button sidebar__close" id="sidebarClose" aria-label="关闭导航" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+
+    <nav class="navigation" aria-label="主导航">
+      <a class="navigation__link is-active" data-prototype-route="/dashboard" href="/dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+        <span>仪表盘</span>
+      </a>
+      <a class="navigation__link" data-prototype-route="/users" href="/users">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span>用户管理</span>
+      </a>
+      <a class="navigation__link" data-prototype-route="/orders" href="/orders">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21H8.5a3.5 3.5 0 0 1 0-7H11"/><path d="M13 21V11"/><path d="M13 7V3"/><path d="M16 13V5a2 2 0 0 1 2-2h0a2 2 0 0 1 2 2v12"/><path d="M16 8h4"/><circle cx="16" cy="16" r="2"/><circle cx="6" cy="16" r="2"/></svg>
+        <span>订单管理</span>
+      </a>
+    </nav>
+
+    <div class="sidebar__footer">
+      <span class="avatar">陈</span>
+      <div><strong>陈晓宁</strong><span>系统管理员</span></div>
+    </div>
+  </aside>
+
+  <div class="scrim" id="scrim"></div>
+
+  <section class="main-column">
+    <header class="topbar">
+      <button class="icon-button mobile-menu" id="mobileMenu" aria-label="打开导航" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+      </button>
+      <span class="topbar__context">企业运营中心</span>
+      <div class="topbar__actions">
+        <button class="icon-button" aria-label="查看通知" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+        </button>
+        <span class="environment"><i />生产环境</span>
+      </div>
+    </header>
+
+    <main id="main-content" class="page-container">
+      <section>
+        <div class="page-heading">
+          <div><span class="eyebrow">业务概览</span><h1>仪表盘</h1><p>查看团队当前的核心运营指标。</p></div>
+          <span class="date-label">数据更新于今天 09:30</span>
+        </div>
+
+        <div class="metric-grid">
+          <article class="metric">
+            <span class="metric__icon metric__icon--blue" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0"/><polyline points="16 11 18 13 22 9"/></svg>
+            </span>
+            <div><span>用户总数</span><strong>2,846</strong><small>较上月 +8.2%</small></div>
+          </article>
+          <article class="metric">
+            <span class="metric__icon metric__icon--amber" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+            </span>
+            <div><span>进行中订单</span><strong>128</strong><small>12 个等待处理</small></div>
+          </article>
+          <article class="metric">
+            <span class="metric__icon metric__icon--green" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></svg>
+            </span>
+            <div><span>本月营收</span><strong>¥368,420</strong><small>较上月 +12.4%</small></div>
+          </article>
+          <article class="metric">
+            <span class="metric__icon metric__icon--violet" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+            </span>
+            <div><span>转化率</span><strong>26.8%</strong><small>目标 28%</small></div>
+          </article>
+        </div>
+
+        <section class="content-section">
+          <div class="section-heading">
+            <div><h2>最近动态</h2><p>系统内最新的业务活动</p></div>
+          </div>
+          <div class="activity-list">
+            <article class="activity-row">
+              <span class="activity-row__dot" data-type="user"></span>
+              <div><strong>林悦加入了企业账号</strong><span>10 分钟前</span></div>
+            </article>
+            <article class="activity-row">
+              <span class="activity-row__dot" data-type="order"></span>
+              <div><strong>订单 NS-20260712-1042 已完成支付</strong><span>32 分钟前</span></div>
+            </article>
+            <article class="activity-row">
+              <span class="activity-row__dot" data-type="system"></span>
+              <div><strong>系统已完成每日数据备份</strong><span>1 小时前</span></div>
+            </article>
+            <article class="activity-row">
+              <span class="activity-row__dot" data-type="user"></span>
+              <div><strong>周子昂的账号权限已更新</strong><span>2 小时前</span></div>
+            </article>
+          </div>
+        </section>
+      </section>
+    </main>
+  </section>
+</div>
+
+<script>
+  (function () {
+    var sidebar = document.getElementById('sidebar');
+    var scrim = document.getElementById('scrim');
+    var openBtn = document.getElementById('mobileMenu');
+    var closeBtn = document.getElementById('sidebarClose');
+
+    function openMenu() {
+      sidebar.classList.add('is-open');
+      scrim.classList.add('is-visible');
+    }
+    function closeMenu() {
+      sidebar.classList.remove('is-open');
+      scrim.classList.remove('is-visible');
+    }
+
+    if (openBtn) openBtn.addEventListener('click', openMenu);
+    if (closeBtn) closeBtn.addEventListener('click', closeMenu);
+    if (scrim) scrim.addEventListener('click', closeMenu);
+
+    // Reset sidebar state when viewport widens past mobile breakpoint
+    window.addEventListener('resize', function () {
+      if (window.innerWidth > 720) {
+        scrim.classList.remove('is-visible');
+      }
+    });
+
+    // Block internal route navigation (sandbox)
+    document.querySelectorAll('a[data-prototype-route]').forEach(function (a) {
+      a.addEventListener('click', function (e) { e.preventDefault(); closeMenu(); });
+    });
+  })();
+</script>
+</body>
+</html>

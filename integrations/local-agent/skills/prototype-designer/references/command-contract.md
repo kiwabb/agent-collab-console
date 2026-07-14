@@ -20,7 +20,7 @@ Use the exact JSON Schema returned by `tools/list`. The envelope has this shape:
 }
 ```
 
-The example shows the envelope only. Never submit the illustrative command kind. Copy a supported command kind and its required fields from the active context's command catalog.
+The example shows the envelope only. Never submit the illustrative command kind. Use `supportedCommandKinds` to choose an operation and `context.commandBatchSchema` for its exact required fields.
 
 For submission, add:
 

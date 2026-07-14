@@ -59,7 +59,7 @@ def _seed_log_event_for_api(event: LogEvent) -> None:
     from app.interfaces import api as api_module
 
     assert api_module.codex_store is not None
-    append_log_event = getattr(api_module.codex_store, "append_log_event")
+    append_log_event = api_module.codex_store.append_log_event
     asyncio.run(append_log_event(event))
 
 

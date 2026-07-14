@@ -8,6 +8,7 @@ tasks (no issue_id) also get a worktree, scoped to the task itself.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 import shutil
@@ -93,6 +94,16 @@ def _chat_branch_name(task: CodexTask) -> str:
 
 def _agent_branch_name(issue: CodexIssue, agent_key: str) -> str:
     return f"swarm/{issue.id[:8]}-{_slugify(agent_key)}"
+
+
+def _prototype_key(run_item_id: str) -> str:
+    if not run_item_id.strip():
+        raise WorktreeError("prototype run item id is required")
+    return hashlib.sha256(run_item_id.encode("utf-8")).hexdigest()[:20]
+
+
+def _prototype_branch_name(run_item_id: str) -> str:
+    return f"prototype/{_prototype_key(run_item_id)}"
 
 
 def _worktree_path(project: Project, kind: str, item_id: str) -> Path:
@@ -399,6 +410,139 @@ class WorktreeManager:
                 await self.git.prune_worktrees(repo_path)
             except GitError:
                 pass
+
+    # ---- Prototype generation (ephemeral, one worktree per run item) ----
+
+    async def prepare_prototype_worktree(
+        self,
+        project: Project,
+        run_item_id: str,
+        *,
+        source_paths: tuple[str, ...] = (),
+    ) -> tuple[str, str, str]:
+        """Create an isolated worktree for one prototype task.
+
+        Repository-backed tasks pass explicit ``source_paths`` and start from
+        the current tracked snapshot with non-ignored untracked files overlaid.
+        Requirements-only tasks pass no paths and start from ``HEAD`` without
+        scanning or copying unrelated dirty/untracked project state.
+        """
+        key = _prototype_key(run_item_id)
+        lock = await self._lock_for(f"prototype:{key}")
+        async with lock:
+            project_lock = await self._lock_for(f"prototype-project:{project.id}")
+            async with project_lock:
+                branch = _prototype_branch_name(run_item_id)
+                worktree = _worktree_path(project, "prototype", key)
+                if worktree.exists():
+                    await self._cleanup_path(project.repo_path, str(worktree))
+                await self.git.delete_branch(project.repo_path, branch)
+
+                project_prefix = await self.git.repository_prefix(project.repo_path)
+                if source_paths:
+                    base_revision = await self.git.working_tree_snapshot_revision(
+                        project.repo_path
+                    )
+                    untracked = await self.git.list_untracked_files(project.repo_path)
+                else:
+                    base_revision = await self.git.head_commit(project.repo_path)
+                    untracked = []
+                await self.git.create_worktree(
+                    repo_path=project.repo_path,
+                    branch=branch,
+                    worktree_path=worktree,
+                    base_branch=base_revision,
+                )
+                project_worktree = worktree / project_prefix if project_prefix else worktree
+                try:
+                    project_worktree.mkdir(parents=True, exist_ok=True)
+                    generated_outputs = project_worktree / "prototypes"
+                    if generated_outputs.is_symlink() or generated_outputs.is_file():
+                        generated_outputs.unlink()
+                    elif generated_outputs.exists():
+                        shutil.rmtree(generated_outputs)
+                    for relative_path in untracked:
+                        if self._skip_prototype_snapshot_path(relative_path):
+                            continue
+                        source = Path(project.repo_path) / relative_path
+                        if source.is_symlink() or not source.is_file():
+                            continue
+                        self._copy_prototype_snapshot_path(project, project_worktree, relative_path)
+                    for relative_path in source_paths:
+                        self._copy_prototype_snapshot_path(project, project_worktree, relative_path)
+                    if project_prefix:
+                        base_revision = await self.git.initialize_snapshot_repository(
+                            project_worktree
+                        )
+                    await inject_worktree_claude_hooks(project_worktree)
+                except (OSError, WorktreeError):
+                    await self._cleanup_path(project.repo_path, str(worktree))
+                    await self.git.delete_branch(project.repo_path, branch)
+                    raise
+                return branch, str(project_worktree), base_revision
+
+    async def cleanup_prototype_worktree(
+        self,
+        project: Project,
+        run_item_id: str,
+    ) -> None:
+        """Remove a generator-owned worktree and its dedicated branch."""
+        key = _prototype_key(run_item_id)
+        lock = await self._lock_for(f"prototype:{key}")
+        async with lock:
+            worktree = _worktree_path(project, "prototype", key)
+            await self._cleanup_path(project.repo_path, str(worktree))
+            branch = _prototype_branch_name(run_item_id)
+            if not branch.startswith("prototype/"):
+                raise WorktreeError("refusing to delete a non-prototype branch")
+            await self.git.delete_branch(project.repo_path, branch)
+
+    @staticmethod
+    def _skip_prototype_snapshot_path(relative_path: str) -> bool:
+        parts = Path(relative_path).parts
+        return bool(
+            not parts
+            or parts[0] in {".agent-collab", ".claude", ".codex", ".git", "prototypes"}
+            or any(part in {"node_modules", ".next", "build", "dist"} for part in parts)
+        )
+
+    @staticmethod
+    def _copy_prototype_snapshot_path(
+        project: Project,
+        worktree: Path,
+        relative_path: str,
+    ) -> None:
+        relative = Path(relative_path)
+        if (
+            not relative_path
+            or relative.is_absolute()
+            or ".." in relative.parts
+            or relative.parts[0] in {".git", ".agent-collab", "prototypes"}
+        ):
+            raise WorktreeError(f"unsafe prototype source path: {relative_path}")
+
+        source_root = Path(project.repo_path).resolve()
+        target_root = worktree.resolve()
+        source = source_root / relative
+        target = target_root / relative
+        if source.is_symlink():
+            raise WorktreeError(f"prototype source path is a symlink: {relative_path}")
+        if not source.exists():
+            if target.is_symlink():
+                raise WorktreeError(f"prototype target path is a symlink: {relative_path}")
+            if target.is_file():
+                target.unlink()
+            return
+        resolved_source = source.resolve()
+        if not resolved_source.is_relative_to(source_root) or not resolved_source.is_file():
+            raise WorktreeError(f"prototype source path is not a safe file: {relative_path}")
+        if target.is_symlink():
+            raise WorktreeError(f"prototype target path is a symlink: {relative_path}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        resolved_parent = target.parent.resolve()
+        if not resolved_parent.is_relative_to(target_root):
+            raise WorktreeError(f"prototype target path escapes worktree: {relative_path}")
+        shutil.copy2(resolved_source, target)
 
     async def _collect_conflict(
         self,

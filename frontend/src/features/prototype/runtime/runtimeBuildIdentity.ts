@@ -1,0 +1,2 @@
+export const RUNTIME_CORE_SOURCE_HASH =
+  "sha256:a004c5b10a2e55c277debd7f615a0bf2666ba5c20c9ff50182881fedf309d204";

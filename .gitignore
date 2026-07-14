@@ -22,6 +22,9 @@ backend/codex.db-wal
 backend/*.db
 backend/*.db-shm
 backend/*.db-wal
+/benchmark.db
+/backend/agent_collab_backend.egg-info/
+/backend/structured-prototype-data/
 
 # Local Trellis / agent runtime state
 .trellis/.developer
@@ -45,6 +48,10 @@ backend/*.db-wal
 # Task workspaces
 .task-workspaces/
 .worktrees/
+/examples/admin-demo-worktrees/
+/examples/**/node_modules/
+/examples/**/dist/
+/examples/**/target/
 
 # Issue artifacts produced by role workflows at runtime (PRD / system_design /
 # implementation reports etc). Local-only; never commit.

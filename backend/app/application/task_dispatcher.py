@@ -14,6 +14,10 @@ from inspect import isawaitable
 from typing import Protocol
 from uuid import uuid4
 
+from app.application.verification_evidence import (
+    VERIFICATION_EVIDENCE_ROLES,
+    append_acceptance_criteria_context,
+)
 from app.domain.models import (
     Agent,
     AgentMessage,
@@ -145,6 +149,12 @@ async def dispatch_role(
         issue_body = (issue.description or "").strip()
         effective_prompt = f"{issue.title}\n\n{issue_body}" if issue_body else (issue.title or "")
         is_fallback_prompt = True
+    if role in VERIFICATION_EVIDENCE_ROLES:
+        effective_prompt = append_acceptance_criteria_context(
+            effective_prompt,
+            issue.acceptance_criteria,
+            confirmed=issue.acceptance_criteria_confirmed,
+        )
 
     # The issue-level executor selection (chosen at creation) wins over the agent
     # catalog defaults. When the issue specifies an executor we take its

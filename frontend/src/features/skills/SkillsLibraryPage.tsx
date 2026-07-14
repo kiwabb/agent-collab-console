@@ -184,13 +184,7 @@ export function SkillsLibraryPage() {
     return skills.filter((s) => {
       if (activeCategory && s.category !== activeCategory) return false;
       if (!q) return true;
-      const hay = [
-        s.name,
-        s.description ?? "",
-        s.link,
-        s.category ?? "",
-        s.tags.join(" "),
-      ]
+      const hay = [s.name, s.description ?? "", s.link, s.category ?? "", s.tags.join(" ")]
         .join(" ")
         .toLowerCase();
       return hay.includes(q);

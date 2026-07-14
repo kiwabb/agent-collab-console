@@ -28,7 +28,8 @@ test("settings views use i18n keys for newly added settings copy", () => {
     't("runtime.catalog.validationFailed")',
     't("runtime.catalog.unknownError")',
     't("runtime.catalog.validate")',
-    't("runtime.catalog.test")',
+    't("runtime.catalog.testApi")',
+    't("runtime.catalog.testCli")',
   ].forEach((needle) => {
     assert.match(runtime, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });

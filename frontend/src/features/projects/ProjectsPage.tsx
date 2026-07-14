@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
@@ -10,25 +11,20 @@ import {
   GitBranch as GitBranchIcon,
   Plus,
   RefreshCw,
+  Settings2,
   Trash2,
   Wrench,
-  Wand2,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InteractionEmptyState } from "@/components/ui/interaction-empty-state";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/providers/I18nProvider";
-import {
-  ExecutionProcessesContext,
-  isBusTaskStatusEvent,
-} from "@/contexts/ExecutionProcessesContext";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
-import { getCodexTask } from "@/lib/api/tasks";
 import {
   deleteProject,
   getProjectAudit,
@@ -38,7 +34,6 @@ import {
   listProjects,
   pullProject,
   repairProject,
-  startProjectScriptTask,
   updateProject,
 } from "@/lib/api/projects";
 import { emitDataEvent, useDataEvent } from "@/lib/dataEvents";
@@ -52,12 +47,9 @@ import { BranchListView } from "./BranchListView";
 import { STATS_LABELS } from "./statsLabels";
 import { RemoteUpdateBadge } from "./RemoteUpdateBadge";
 import { describePullResult } from "./projectRemoteStatus";
-import { describeScriptTaskTerminalStatus } from "./scriptTaskStatus";
 
 // How often to silently re-check the selected project against its remote.
 const REMOTE_POLL_MS = 5 * 60_000;
-const SCRIPT_TASK_POLL_MS = 5_000;
-const SCRIPT_TASK_POLL_LIMIT_MS = 3 * 60_000;
 
 function SetupScriptCard({
   project,
@@ -138,13 +130,11 @@ function SetupScriptCard({
 function RunCommandCard({
   project,
   onUpdated,
-  onGenerate,
-  generating,
+  startupConfigHref,
 }: {
   project: Project;
   onUpdated: (next: Project) => void;
-  onGenerate: () => void;
-  generating: boolean;
+  startupConfigHref: string;
 }) {
   const { t } = useI18n();
   const { addToast } = useToast();
@@ -176,19 +166,13 @@ function RunCommandCard({
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <CardTitle className="text-base">{t("projects.runCommandLabel")}</CardTitle>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={onGenerate}
-            disabled={generating}
-            aria-label={t("projects.generateStartupScripts")}
-            title={t("projects.generateStartupScripts")}
+          <Link
+            href={startupConfigHref}
+            className={buttonVariants({ variant: "outline", size: "sm", className: "gap-2" })}
           >
-            <Wand2 size={14} className={cn("mr-1", generating && "animate-spin")} />
-            {generating
-              ? t("projects.generatingStartupScripts")
-              : t("projects.generateStartupScripts")}
-          </Button>
+            <Settings2 size={14} />
+            {t("startupConfig.open")}
+          </Link>
         </div>
         <CardDescription>{t("projects.runCommandHelp")}</CardDescription>
       </CardHeader>
@@ -258,8 +242,6 @@ export function ProjectsPage() {
   const router = useRouter();
   const { t } = useI18n();
   const { addToast } = useToast();
-  const executionProcessesContext = useContext(ExecutionProcessesContext);
-  const lastEvent = executionProcessesContext?.lastEvent ?? null;
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -273,9 +255,6 @@ export function ProjectsPage() {
   const [remoteStatus, setRemoteStatus] = useState<ProjectRemoteStatus | null>(null);
   const [remoteChecking, setRemoteChecking] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [suggestingProjectId, setSuggestingProjectId] = useState<string | null>(null);
-  const [suggestingTaskId, setSuggestingTaskId] = useState<string | null>(null);
-  const handledScriptTaskIdsRef = useRef(new Set<string>());
   // Tick state: bumps every 60s so the "5m ago" labels stay reasonably fresh
   // without re-fetching the audit log. Used implicitly by formatRelative since
   // each render recomputes against Date.now().
@@ -337,76 +316,6 @@ export function ProjectsPage() {
   }, [refresh]);
 
   useDataEvent("projects:changed", refreshFromProjectEvent);
-
-  useEffect(() => {
-    if (!suggestingProjectId || !suggestingTaskId || !lastEvent || !isBusTaskStatusEvent(lastEvent))
-      return;
-    if (lastEvent.task_id !== suggestingTaskId) return;
-    if (lastEvent.project_id !== suggestingProjectId) return;
-    if (lastEvent.task_kind !== "project_script_suggestion") return;
-    if (lastEvent.role !== "operations_engineer") return;
-    const terminalStatus = describeScriptTaskTerminalStatus(lastEvent.status);
-    if (!terminalStatus.terminal) {
-      return;
-    }
-    if (!lastEvent.task_id) return;
-    if (handledScriptTaskIdsRef.current.has(lastEvent.task_id)) return;
-    handledScriptTaskIdsRef.current.add(lastEvent.task_id);
-    addToast({
-      type: terminalStatus.success ? "success" : "error",
-      title: terminalStatus.success
-        ? t("projects.scriptSuggestionCompleted")
-        : t("projects.scriptSuggestionFailed"),
-    });
-    setSuggestingProjectId(null);
-    setSuggestingTaskId(null);
-    void refresh();
-  }, [addToast, lastEvent, refresh, suggestingProjectId, suggestingTaskId, t]);
-
-  useEffect(() => {
-    if (!suggestingTaskId || !suggestingProjectId) return;
-    let cancelled = false;
-    const startedAt = Date.now();
-
-    async function pollScriptTask() {
-      if (cancelled || !suggestingTaskId) return;
-      if (Date.now() - startedAt > SCRIPT_TASK_POLL_LIMIT_MS) {
-        addToast({ type: "success", title: t("projects.scriptSuggestionStillRunning") });
-        setSuggestingProjectId((current) => (current === suggestingProjectId ? null : current));
-        setSuggestingTaskId((current) => (current === suggestingTaskId ? null : current));
-        void refresh();
-        return;
-      }
-      try {
-        const task = await getCodexTask(suggestingTaskId);
-        if (cancelled) return;
-        const terminalStatus = describeScriptTaskTerminalStatus(task.status);
-        if (terminalStatus.terminal) {
-          if (handledScriptTaskIdsRef.current.has(task.id)) return;
-          handledScriptTaskIdsRef.current.add(task.id);
-          addToast({
-            type: terminalStatus.success ? "success" : "error",
-            title: terminalStatus.success
-              ? t("projects.scriptSuggestionCompleted")
-              : t("projects.scriptSuggestionFailed"),
-          });
-          setSuggestingProjectId(null);
-          setSuggestingTaskId(null);
-          void refresh();
-        }
-      } catch {
-        // Keep the delayed refresh fallback alive; transient task lookup errors
-        // should not strand the button in loading state.
-      }
-    }
-
-    void pollScriptTask();
-    const id = window.setInterval(pollScriptTask, SCRIPT_TASK_POLL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [addToast, refresh, suggestingProjectId, suggestingTaskId, t]);
 
   useEffect(() => {
     if (!activeId) {
@@ -517,50 +426,6 @@ export function ProjectsPage() {
       setSyncing(false);
     }
   }, [activeProject, addToast, loadRemoteStatus, syncing, t]);
-
-  const handleGenerateOperationsScripts = useCallback(async () => {
-    if (!activeProject || suggestingProjectId) return;
-    const projectId = activeProject.id;
-    setSuggestingProjectId(projectId);
-    try {
-      const task = await startProjectScriptTask(projectId, {
-        setup_script: activeProject.setup_script ?? "",
-        run_command: activeProject.run_command ?? "",
-      });
-      handledScriptTaskIdsRef.current.delete(task.task_id);
-      setSuggestingTaskId(task.task_id);
-      const initialStatus = describeScriptTaskTerminalStatus(task.status);
-      if (initialStatus.terminal) {
-        handledScriptTaskIdsRef.current.add(task.task_id);
-        setSuggestingProjectId(null);
-        setSuggestingTaskId(null);
-        void refresh();
-        addToast({
-          type: initialStatus.success ? "success" : "error",
-          title: initialStatus.success
-            ? t("projects.scriptSuggestionCompleted")
-            : t("projects.scriptSuggestionFailed"),
-          message: `Task ${task.task_id.slice(0, 8)} · ${task.status}`,
-        });
-        return;
-      }
-      for (const delayMs of [5000, 15000, 30000]) {
-        window.setTimeout(() => void refresh(), delayMs);
-      }
-      addToast({
-        type: "success",
-        title: task.reused
-          ? t("projects.scriptSuggestionAlreadyRunning")
-          : t("projects.scriptSuggestionSuccess"),
-        message: `Task ${task.task_id.slice(0, 8)} · ${task.status}`,
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : t("projects.scriptSuggestionFailed");
-      addToast({ type: "error", title: msg });
-      setSuggestingProjectId(null);
-      setSuggestingTaskId(null);
-    }
-  }, [activeProject, addToast, refresh, suggestingProjectId, t]);
 
   const performDelete = useCallback(
     async (project: Project, force: boolean) => {
@@ -828,8 +693,7 @@ export function ProjectsPage() {
               onUpdated={(next) => {
                 setProjects((prev) => (prev ?? []).map((p) => (p.id === next.id ? next : p)));
               }}
-              onGenerate={handleGenerateOperationsScripts}
-              generating={suggestingProjectId !== null}
+              startupConfigHref={`/projects/${activeProject.id}/env`}
             />
             <Card className="enterprise-card rounded-2xl overflow-hidden">
               <CardHeader>

@@ -17,6 +17,8 @@ import {
   DownloadCloud,
   Play,
   Square,
+  AlertTriangle,
+  ExternalLink,
   X,
 } from "lucide-react";
 
@@ -45,7 +47,7 @@ import type {
   ProjectRunStatus,
   Workspace,
 } from "@/lib/types";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
@@ -66,12 +68,19 @@ import { useI18n } from "@/providers/I18nProvider";
 import { ProjectShell } from "@/features/projects/ProjectShell";
 import { RemoteUpdateBadge } from "./RemoteUpdateBadge";
 import { describePullResult } from "./projectRemoteStatus";
+import {
+  selectProjectRunRefreshError,
+  shouldPollProjectServiceStatus,
+  updateProjectRunRefreshError,
+} from "./projectStartupConfig";
+import type { ProjectRunRefreshErrors } from "./projectStartupConfig";
 
 // How often to silently re-check the selected project against its remote.
 const REMOTE_POLL_MS = 5 * 60_000;
 
 // How often to poll for new lines from a running project process.
 const RUN_LOG_POLL_MS = 2_000;
+const SERVICE_STATUS_POLL_MS = 5_000;
 
 interface Props {
   projectId: string;
@@ -122,9 +131,27 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   const [runStatus, setRunStatus] = useState<ProjectRunStatus | null>(null);
   const [runBusy, setRunBusy] = useState(false);
   const [runLogs, setRunLogs] = useState<ProjectRunLogLine[]>([]);
+  const [runRefreshErrors, setRunRefreshErrors] = useState<ProjectRunRefreshErrors>({
+    status: null,
+    logs: null,
+  });
   const [logsOpen, setLogsOpen] = useState(false);
   const lastSeqRef = useRef(0);
   const logEndRef = useRef<HTMLDivElement | null>(null);
+
+  const reportRunRefreshFailure = useCallback(
+    (
+      source: keyof ProjectRunRefreshErrors,
+      context: "status load" | "service status poll" | "log poll" | "status resync",
+      err: unknown,
+    ) => {
+      console.error(`project run ${context} failed:`, err);
+      const message = err instanceof Error ? err.message : String(err);
+      setRunRefreshErrors((current) => updateProjectRunRefreshError(current, source, message));
+    },
+    [],
+  );
+  const runLoadError = selectProjectRunRefreshError(runRefreshErrors);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -239,6 +266,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
     let cancelled = false;
     setRunStatus(null);
     setRunLogs([]);
+    setRunRefreshErrors({ status: null, logs: null });
     setLogsOpen(false);
     lastSeqRef.current = 0;
     void (async () => {
@@ -246,21 +274,46 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
         const status = await getProjectRunStatus(projectId);
         if (!cancelled) {
           setRunStatus(status);
+          setRunRefreshErrors((current) => updateProjectRunRefreshError(current, "status", null));
           if (status.running) setLogsOpen(true);
         }
-      } catch {
-        // Non-fatal — the run controls just stay in their default state.
+      } catch (err) {
+        if (cancelled) return;
+        reportRunRefreshFailure("status", "status load", err);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, reportRunRefreshFailure]);
 
   // While the process is running, poll for new log lines (~2s). The `running` /
   // `exit_code` from each response keep `runStatus` fresh; once the process
   // stops, `running` flips false and the effect tears down the interval.
   const running = runStatus?.running ?? false;
+  const externalServiceReachable = !running && runStatus?.service.state === "reachable";
+  const pollServiceStatus = shouldPollProjectServiceStatus(runStatus);
+  useEffect(() => {
+    if (!pollServiceStatus) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const status = await getProjectRunStatus(projectId);
+        if (cancelled) return;
+        setRunStatus(status);
+        setRunRefreshErrors((current) => updateProjectRunRefreshError(current, "status", null));
+      } catch (err) {
+        if (cancelled) return;
+        reportRunRefreshFailure("status", "service status poll", err);
+      }
+    };
+    const id = setInterval(tick, SERVICE_STATUS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [pollServiceStatus, projectId, reportRunRefreshFailure]);
+
   useEffect(() => {
     if (!running) return;
     let cancelled = false;
@@ -275,8 +328,10 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
         setRunStatus((prev) =>
           prev ? { ...prev, running: res.running, exit_code: res.exit_code } : prev,
         );
-      } catch {
-        // Transient — retry on the next tick.
+        setRunRefreshErrors((current) => updateProjectRunRefreshError(current, "logs", null));
+      } catch (err) {
+        if (cancelled) return;
+        reportRunRefreshFailure("logs", "log poll", err);
       }
     };
     void tick();
@@ -285,7 +340,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
       cancelled = true;
       clearInterval(id);
     };
-  }, [running, projectId]);
+  }, [running, projectId, reportRunRefreshFailure]);
 
   // Keep the log panel scrolled to the newest line.
   useEffect(() => {
@@ -298,11 +353,22 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
     try {
       const result = await startProjectRun(projectId);
       if (isProjectRunStartError(result)) {
-        if (result.error === "already_running") {
+        if (result.error === "already_running" || result.error === "service_already_reachable") {
           // Re-sync with the live status rather than show a hard error.
-          const status = await getProjectRunStatus(projectId).catch(() => null);
-          if (status) setRunStatus(status);
-          addToast({ type: "info", title: t("projects.runAlreadyRunning") });
+          try {
+            const status = await getProjectRunStatus(projectId);
+            setRunStatus(status);
+            setRunRefreshErrors((current) => updateProjectRunRefreshError(current, "status", null));
+          } catch (err) {
+            reportRunRefreshFailure("status", "status resync", err);
+          }
+          addToast({
+            type: "info",
+            title:
+              result.error === "service_already_reachable"
+                ? t("startupConfig.serviceAlreadyReachable")
+                : t("projects.runAlreadyRunning"),
+          });
         } else if (result.error === "no_run_command") {
           addToast({ type: "error", title: t("projects.runNoCommand") });
         } else {
@@ -319,6 +385,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
       lastSeqRef.current = 0;
       setRunLogs([]);
       setRunStatus(result);
+      setRunRefreshErrors({ status: null, logs: null });
       setLogsOpen(true);
     } catch (err) {
       const msg = err instanceof Error ? err.message : t("projects.runStartFailed");
@@ -326,7 +393,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
     } finally {
       setRunBusy(false);
     }
-  }, [projectId, runBusy, addToast, t]);
+  }, [projectId, runBusy, reportRunRefreshFailure, addToast, t]);
 
   const handleStopRun = useCallback(async () => {
     if (runBusy) return;
@@ -334,6 +401,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
     try {
       const status = await stopProjectRun(projectId);
       setRunStatus(status);
+      setRunRefreshErrors({ status: null, logs: null });
       addToast({ type: "success", title: t("projects.runStopped") });
     } catch (err) {
       const msg = err instanceof Error ? err.message : t("projects.runStopFailed");
@@ -522,6 +590,16 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
             <Square size={14} />
             {runBusy ? t("projects.runStopping") : t("projects.runStop")}
           </Button>
+        ) : externalServiceReachable && runStatus?.service.url ? (
+          <a
+            href={runStatus.service.url}
+            target="_blank"
+            rel="noreferrer"
+            className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1")}
+          >
+            <ExternalLink size={14} />
+            {t("startupConfig.openService")}
+          </a>
         ) : (
           <Button
             size="sm"
@@ -544,6 +622,19 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
           <Plus size={14} /> {t("workspace.projectPage.new")}
         </Button>
       </div>
+
+      {runLoadError && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-lg border border-status-failed/40 bg-status-failed/10 px-3 py-2 text-[12px]"
+        >
+          <AlertTriangle size={14} aria-hidden className="mt-0.5 shrink-0 text-status-failed" />
+          <div className="min-w-0">
+            <p className="font-medium text-status-failed">{t("projects.runRefreshFailed")}</p>
+            <p className="break-words text-text-secondary">{runLoadError}</p>
+          </div>
+        </div>
+      )}
 
       {/* Run log panel */}
       {logsOpen && runLogs.length > 0 && (

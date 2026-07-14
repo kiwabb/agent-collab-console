@@ -29,8 +29,13 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from app.application.embedding_service import EmbeddingService
     from app.application.knowledge_index_service import ArtifactRow
-    from app.application.project_script_suggestions import ProjectScriptSuggestion
     from app.domain.models import CodexIssue, CodexTask, Project, ProjectEnvVar
+
+
+class ProjectStartupMcpResultProvider(Protocol):
+    def finalized_result(self, task_id: str) -> dict[str, object] | None: ...
+
+    def close_task_session(self, task_id: str) -> None: ...
 
 
 class RoleWorkflowStore(KnowledgeStore, SpecialistStore, TeamNotesStore, Protocol):
@@ -66,13 +71,18 @@ MANAGED_ROLES = frozenset({"product_manager", "architect", "qa"}) | ENGINEER_ROL
 class RoleWorkflowService:
     """Dispatches role-specific prompt building and result persistence."""
 
-    def __init__(self, codex_store: RoleWorkflowStore | None = None) -> None:
+    def __init__(
+        self,
+        codex_store: RoleWorkflowStore | None = None,
+        project_startup_mcp_service: ProjectStartupMcpResultProvider | None = None,
+    ) -> None:
         self._pm_service = ProductManagerService()
         self._architect_service = ArchitectWorkflow()
         self._engineer_service = EngineerWorkflow()
         self._qa_service = QAWorkflow()
         self._specialist_service = GenericSpecialistWorkflow()
         self.codex_store = codex_store
+        self.project_startup_mcp_service = project_startup_mcp_service
 
     def is_managed_role(self, role: str | None) -> bool:
         return role in MANAGED_ROLES or self._is_specialist_role(role)
@@ -436,24 +446,27 @@ class RoleWorkflowService:
             project = None
         if project is None:
             return self._fallback_operations_prompt(task)
-        try:
-            from app.application.project_script_suggestions import (
-                build_project_script_suggestion_prompt,
-                collect_project_script_context,
-            )
-
-            repo_context = collect_project_script_context(project.repo_path)
-            request_context = self._read_operations_request_context(task)
-            return str(
-                build_project_script_suggestion_prompt(
-                    project=project,
-                    repo_context=repo_context,
-                    existing_setup_script=request_context.get("setup_script", project.setup_script),
-                    existing_run_command=request_context.get("run_command", project.run_command),
-                )
-            )
-        except Exception:  # noqa: BLE001, RUF100
-            return self._fallback_operations_prompt(task)
+        request_context = self._read_operations_request_context(task)
+        existing_setup = request_context.get("setup_script", project.setup_script or "")
+        existing_run = request_context.get("run_command", project.run_command or "")
+        return "\n".join(
+            [
+                "You are the Operations Engineer analyzing a local repository's startup topology.",
+                f"Project name: {project.name}",
+                f"Repository root: {project.repo_path}",
+                f"Existing setup script: {existing_setup.strip() or '(empty)'}",
+                f"Existing run command: {existing_run.strip() or '(empty)'}",
+                "Inspect the repository directly with Glob, Grep, and Read. Follow references instead of relying on a fixed file list.",
+                "Identify every long-running local service required for the usable application, including frontend, backend, workers, and required local infrastructure.",
+                "For each service, determine a stable lowercase service_id, working directory relative to the repository root, setup command, run command, access URL, dependencies, and the repository-relative evidence files you actually read.",
+                "Commands are executed inside working_directory. Use bare commands such as `mvn spring-boot:run` or `npm run dev`; do not add cd, shell operators, or grouping.",
+                "Evidence entries must use repository-root-relative paths in the path field and put explanations only in the detail field.",
+                "Do not execute setup or run commands and do not modify repository files.",
+                "When the complete dependency graph is ready, call project-startup.save_startup_config exactly once.",
+                "The MCP save is the only accepted result. A JSON object in your final text does not save the configuration.",
+                "After the MCP tool confirms saved=true, briefly summarize what was saved.",
+            ]
+        )
 
     @staticmethod
     def _read_operations_request_context(task: CodexTask) -> dict[str, str]:
@@ -502,9 +515,29 @@ class RoleWorkflowService:
             f"User/project request:\n{task.prompt or ''}"
         )
 
-    async def _persist_operations_engineer_result(
-        self, task: CodexTask
-    ) -> ProjectScriptSuggestion:
+    async def _persist_operations_engineer_result(self, task: CodexTask) -> object:
+        if self.project_startup_mcp_service is not None:
+            try:
+                result = self.project_startup_mcp_service.finalized_result(task.id)
+                if result is None:
+                    raise ValueError(
+                        "Operations Engineer did not save startup configuration through MCP"
+                    )
+                task.result = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+                services = result.get("services")
+                service_count = len(services) if isinstance(services, list) else 0
+                task.review_comment = (
+                    "[OPERATIONS STARTUP CONFIG SAVED]\n"
+                    f"services: {service_count}\n"
+                    "authority: project-startup MCP"
+                )
+                task.updated_at = datetime.now()
+                if self.codex_store:
+                    await self.codex_store.save_codex_task(task)
+                return result
+            finally:
+                self.project_startup_mcp_service.close_task_session(task.id)
+
         from app.application.project_script_suggestions import parse_project_script_suggestion
 
         raw_result = task.result or ""

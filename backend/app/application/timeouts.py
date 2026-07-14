@@ -34,6 +34,7 @@ The ladder, innermost → outermost, and what each layer protects against::
 Env-var names and defaults are unchanged from the pre-refactor call sites, so
 this module is behaviour-preserving on its own.
 """
+
 from __future__ import annotations
 
 import logging
@@ -56,6 +57,7 @@ DEFAULT_CODEX_APP_SERVER_MODEL = "gpt-5.4-mini"
 DEFAULT_CODEX_AUTO_APPROVE = True
 DEFAULT_WORKFLOW_DAG_ENABLED = True
 DEFAULT_SQLITE_DB_PATH = "console.db"
+DEFAULT_STRUCTURED_PROTOTYPE_DATA_ROOT = "structured-prototype-data"
 DEFAULT_USE_SQLITE = True
 DEFAULT_CODEX_LAUNCH_ENABLED = True
 DEFAULT_REAL_CLI = True
@@ -91,13 +93,15 @@ DEFAULT_ESTIMATED_AGENT_COST_USD = 1.0
 DEFAULT_EST_COST_PER_AGENT_USD = DEFAULT_ESTIMATED_AGENT_COST_USD
 DEFAULT_QA_COMMAND_TIMEOUT_S = 120
 DEFAULT_QA_TOTAL_BUDGET_S = 300
-DEFAULT_QA_EXECUTE_COMMANDS = False
+DEFAULT_QA_EXECUTE_COMMANDS = True
 DEFAULT_PROJECT_REVIEW_INTERVAL_S = 3600
 DEFAULT_PROJECT_REVIEW_LIMIT = 25
 DEFAULT_SELF_IMPROVEMENT_PROPOSAL_INTERVAL_S = 3600
 DEFAULT_SELF_IMPROVEMENT_PROPOSAL_LIMIT = 25
 DEFAULT_PROJECT_SCRIPT_SUGGESTION_TIMEOUT_S = 60
 DEFAULT_PROJECT_SCRIPT_VERIFICATION_TIMEOUT_S = 180
+DEFAULT_PROJECT_SCRIPT_LOG_CAPTURE_TIMEOUT_S = 0.5
+DEFAULT_PROJECT_SERVICE_PROBE_TIMEOUT_S = 0.75
 DEFAULT_EVENT_BUS_BUFFER_SIZE = 1000
 DEFAULT_AUDIT_LOG_MAX_QUEUE = 10000
 DEFAULT_WS_WORKSPACE_QUEUE_MAXSIZE = 256
@@ -106,6 +110,27 @@ DEFAULT_WS_MESSAGE_QUEUE_MAXSIZE = 512
 DEFAULT_MAX_CONCURRENT_INSTANCES_PER_ROLE = 2
 DEFAULT_ROLE_SLOT_WAIT_S = 30
 DEFAULT_CONDUCTOR_LOOP_MAX_S = 7200
+DEFAULT_PROTOTYPE_GENERATION_ENABLED = True
+DEFAULT_PROTOTYPE_PLANNING_TIMEOUT_S = 120.0
+DEFAULT_PROTOTYPE_PLANNING_MAX_TOKENS = 16_384
+DEFAULT_PROTOTYPE_GENERATION_MAX_CANDIDATES = 100
+DEFAULT_PROTOTYPE_GENERATION_ESTIMATED_USD_PER_PAGE = 0.25
+DEFAULT_PROTOTYPE_GENERATION_MAX_ESTIMATED_USD = 25.0
+DEFAULT_PROTOTYPE_GENERATION_GLOBAL_CONCURRENCY = 2
+DEFAULT_PROTOTYPE_GENERATION_MAX_TOKENS = 16_384
+DEFAULT_PROTOTYPE_ARTIFACT_MAX_BYTES = 1_000_000
+DEFAULT_PROTOTYPE_PLANNING_MCP_ENDPOINT = (
+    "http://127.0.0.1:9000/api/internal/prototype-planning-mcp"
+)
+DEFAULT_STRUCTURED_PROTOTYPE_AI_MCP_ENDPOINT = (
+    "http://127.0.0.1:9000/api/internal/structured-prototype-ai-mcp"
+)
+DEFAULT_STRUCTURED_PROTOTYPE_GENERATION_MCP_ENDPOINT = (
+    "http://127.0.0.1:9000/api/internal/structured-prototype-generation-mcp"
+)
+DEFAULT_PROJECT_STARTUP_MCP_ENDPOINT = (
+    "http://127.0.0.1:9000/api/internal/project-startup-mcp"
+)
 
 # Minimum lease-pulse cadence floor (mirrors the historical
 # ``max(15, lease_ttl // 3)`` expression in conductor_main_loop).
@@ -244,6 +269,13 @@ def workflow_dag_enabled() -> bool:
 
 def sqlite_db_path() -> str:
     return _env_str("SQLITE_DB_PATH") or DEFAULT_SQLITE_DB_PATH
+
+
+def structured_prototype_data_root() -> str:
+    return (
+        _env_str("STRUCTURED_PROTOTYPE_DATA_ROOT")
+        or DEFAULT_STRUCTURED_PROTOTYPE_DATA_ROOT
+    )
 
 
 def use_sqlite() -> bool:
@@ -392,7 +424,9 @@ def stall_cooldown_s() -> int:
 
 # --- Budget / concurrency ---------------------------------------------------
 def max_parallel_dispatch_per_batch() -> int:
-    return max(1, _env_int("MAX_PARALLEL_DISPATCH_PER_BATCH", DEFAULT_MAX_PARALLEL_DISPATCH_PER_BATCH))
+    return max(
+        1, _env_int("MAX_PARALLEL_DISPATCH_PER_BATCH", DEFAULT_MAX_PARALLEL_DISPATCH_PER_BATCH)
+    )
 
 
 def conductor_max_dispatches_per_role() -> int:
@@ -499,6 +533,115 @@ def max_concurrent_instances_per_role() -> int:
     )
 
 
+def prototype_generation_enabled() -> bool:
+    return _env_bool(
+        "PROTOTYPE_GENERATION_ENABLED",
+        DEFAULT_PROTOTYPE_GENERATION_ENABLED,
+    )
+
+
+def prototype_planning_timeout_s() -> float:
+    return max(
+        1.0,
+        _env_float(
+            "PROTOTYPE_PLANNING_TIMEOUT_S",
+            DEFAULT_PROTOTYPE_PLANNING_TIMEOUT_S,
+        ),
+    )
+
+
+def prototype_planning_max_tokens() -> int:
+    return max(
+        16_384,
+        _env_int(
+            "PROTOTYPE_PLANNING_MAX_TOKENS",
+            DEFAULT_PROTOTYPE_PLANNING_MAX_TOKENS,
+        ),
+    )
+
+
+def prototype_planning_mcp_endpoint() -> str:
+    return _env_str("PROTOTYPE_PLANNING_MCP_ENDPOINT") or DEFAULT_PROTOTYPE_PLANNING_MCP_ENDPOINT
+
+
+def structured_prototype_ai_mcp_endpoint() -> str:
+    return (
+        _env_str("STRUCTURED_PROTOTYPE_AI_MCP_ENDPOINT")
+        or DEFAULT_STRUCTURED_PROTOTYPE_AI_MCP_ENDPOINT
+    )
+
+
+def structured_prototype_generation_mcp_endpoint() -> str:
+    return (
+        _env_str("STRUCTURED_PROTOTYPE_GENERATION_MCP_ENDPOINT")
+        or DEFAULT_STRUCTURED_PROTOTYPE_GENERATION_MCP_ENDPOINT
+    )
+
+
+def project_startup_mcp_endpoint() -> str:
+    return _env_str("PROJECT_STARTUP_MCP_ENDPOINT") or DEFAULT_PROJECT_STARTUP_MCP_ENDPOINT
+
+
+def prototype_generation_max_candidates() -> int:
+    return max(
+        1,
+        _env_int(
+            "PROTOTYPE_GENERATION_MAX_CANDIDATES",
+            DEFAULT_PROTOTYPE_GENERATION_MAX_CANDIDATES,
+        ),
+    )
+
+
+def prototype_generation_estimated_usd_per_page() -> float:
+    return max(
+        0.01,
+        _env_float(
+            "PROTOTYPE_GENERATION_ESTIMATED_USD_PER_PAGE",
+            DEFAULT_PROTOTYPE_GENERATION_ESTIMATED_USD_PER_PAGE,
+        ),
+    )
+
+
+def prototype_generation_max_estimated_usd() -> float:
+    return max(
+        0.01,
+        _env_float(
+            "PROTOTYPE_GENERATION_MAX_ESTIMATED_USD",
+            DEFAULT_PROTOTYPE_GENERATION_MAX_ESTIMATED_USD,
+        ),
+    )
+
+
+def prototype_generation_global_concurrency() -> int:
+    return max(
+        1,
+        _env_int(
+            "PROTOTYPE_GENERATION_GLOBAL_CONCURRENCY",
+            DEFAULT_PROTOTYPE_GENERATION_GLOBAL_CONCURRENCY,
+        ),
+    )
+
+
+def prototype_generation_max_tokens() -> int:
+    return max(
+        16_384,
+        _env_int(
+            "PROTOTYPE_GENERATION_MAX_TOKENS",
+            DEFAULT_PROTOTYPE_GENERATION_MAX_TOKENS,
+        ),
+    )
+
+
+def prototype_artifact_max_bytes() -> int:
+    return max(
+        1,
+        _env_int(
+            "PROTOTYPE_ARTIFACT_MAX_BYTES",
+            DEFAULT_PROTOTYPE_ARTIFACT_MAX_BYTES,
+        ),
+    )
+
+
 def role_slot_wait_s() -> int:
     return max(1, _env_int("ROLE_SLOT_WAIT_S", DEFAULT_ROLE_SLOT_WAIT_S))
 
@@ -513,7 +656,16 @@ def qa_total_budget_s() -> int:
 
 
 def qa_execute_commands() -> bool:
-    return _env_bool("QA_EXECUTE_COMMANDS", DEFAULT_QA_EXECUTE_COMMANDS)
+    raw = os.getenv("QA_EXECUTE_COMMANDS")
+    if raw is None or raw.strip() == "":
+        return real_cli_enabled()
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    # Invalid governance configuration must not accidentally execute commands.
+    return False
 
 
 # --- Background schedulers --------------------------------------------------
@@ -544,7 +696,9 @@ def self_improvement_proposal_limit() -> int:
 def project_script_suggestion_timeout_s() -> int:
     return max(
         1,
-        _env_int("PROJECT_SCRIPT_SUGGESTION_TIMEOUT_S", DEFAULT_PROJECT_SCRIPT_SUGGESTION_TIMEOUT_S),
+        _env_int(
+            "PROJECT_SCRIPT_SUGGESTION_TIMEOUT_S", DEFAULT_PROJECT_SCRIPT_SUGGESTION_TIMEOUT_S
+        ),
     )
 
 
@@ -556,6 +710,19 @@ def project_script_verification_timeout_s() -> int:
             DEFAULT_PROJECT_SCRIPT_VERIFICATION_TIMEOUT_S,
         ),
     )
+
+
+def project_script_log_capture_timeout_s() -> float:
+    value = _env_float(
+        "PROJECT_SCRIPT_LOG_CAPTURE_TIMEOUT_S",
+        DEFAULT_PROJECT_SCRIPT_LOG_CAPTURE_TIMEOUT_S,
+    )
+    return value if value > 0 else DEFAULT_PROJECT_SCRIPT_LOG_CAPTURE_TIMEOUT_S
+
+
+def project_service_probe_timeout_s() -> float:
+    value = _env_float("PROJECT_SERVICE_PROBE_TIMEOUT_S", DEFAULT_PROJECT_SERVICE_PROBE_TIMEOUT_S)
+    return value if value > 0 else DEFAULT_PROJECT_SERVICE_PROBE_TIMEOUT_S
 
 
 def check_invariants() -> list[str]:
@@ -614,6 +781,10 @@ def check_invariants() -> list[str]:
         ("PROCESS_MAX_TIMEOUT", process_max_timeout_s()),
         ("WORKFLOW_ORCHESTRATOR_TIMEOUT", workflow_orchestrator_timeout_s()),
         ("WORKFLOW_ORCHESTRATOR_MAX_TOKENS", workflow_orchestrator_max_tokens()),
+        ("PROTOTYPE_PLANNING_TIMEOUT_S", prototype_planning_timeout_s()),
+        ("PROTOTYPE_PLANNING_MAX_TOKENS", prototype_planning_max_tokens()),
+        ("PROTOTYPE_GENERATION_MAX_TOKENS", prototype_generation_max_tokens()),
+        ("PROTOTYPE_ARTIFACT_MAX_BYTES", prototype_artifact_max_bytes()),
         ("CONDUCTOR_LLM_TIMEOUT", conductor_llm_timeout_s()),
         ("CONDUCTOR_LLM_MAX_TOKENS", conductor_llm_max_tokens()),
         ("EMBEDDING_TIMEOUT_S", embedding_timeout_s()),
@@ -635,6 +806,8 @@ def check_invariants() -> list[str]:
         ("SELF_IMPROVEMENT_PROPOSAL_LIMIT", self_improvement_proposal_limit()),
         ("PROJECT_SCRIPT_SUGGESTION_TIMEOUT_S", project_script_suggestion_timeout_s()),
         ("PROJECT_SCRIPT_VERIFICATION_TIMEOUT_S", project_script_verification_timeout_s()),
+        ("PROJECT_SCRIPT_LOG_CAPTURE_TIMEOUT_S", project_script_log_capture_timeout_s()),
+        ("PROJECT_SERVICE_PROBE_TIMEOUT_S", project_service_probe_timeout_s()),
     ):
         if value <= 0:
             violations.append(f"{name} ({value}) must be > 0.")

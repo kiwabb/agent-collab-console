@@ -154,6 +154,21 @@ will not work — Tailwind v4 resolves utility colors at theme build time.
 
 ## Common Mistakes
 
+### Scenario: Project Prototype Navigation
+
+- Source-backed prototypes read `route_patterns` from validated
+  `source_meta_json` through `safeJsonRecord`; malformed metadata contributes
+  no routes.
+- The preview host exposes one compact project-route selector and keeps the
+  outer project page mounted while switching the active prototype.
+- Dynamic patterns such as `/collections/:id` match concrete routes, while an
+  exact static route wins over a dynamic sibling.
+- The sandbox remains `allow-scripts` without `allow-same-origin`. Its injected
+  bridge intercepts internal anchors and `data-prototype-route`, then the host
+  accepts messages only from the current iframe's `contentWindow`.
+- An unknown route produces a visible error toast; it must not silently leave
+  the user on the wrong prototype.
+
 - **Self-referential `useCallback` deps.** Adding a `connect` callback to
   its own dependency array — directly or via a helper. TypeScript catches
   it as `Block-scoped variable used before declaration`; ESLint may pass.
@@ -176,3 +191,100 @@ will not work — Tailwind v4 resolves utility colors at theme build time.
   shadow opacity there — these become drift magnets. New visual
   patterns go through `globals.css` so the next component picks them up
   by design.
+
+### Scenario: Prototype Workbench and Generation Completion
+
+#### 1. Scope / Trigger
+
+- Trigger: changing the project prototype main page, its responsive layout,
+  plan generation completion behavior, or prototype list metadata.
+
+#### 2. Signatures
+
+- Page coordinator: `ProjectPrototypesPage({ projectId, project })`.
+- Page rail: `PrototypePageRail({ prototypes, activeId, onSelect, onCreate })`.
+- Preview work area: `PrototypeCanvas({ prototype, versions, routeTargets,
+  activeRoutePattern, onNavigate, onVersionsChanged, onPrototypeDeleted })`.
+- Completion rule:
+  `shouldOpenPrototypeWorkbench(run, navigationRunId) -> boolean`.
+
+#### 3. Contracts
+
+- Desktop uses three operational regions: a compact page rail, a dominant
+  preview/code stage, and an inspector for version history, iteration, and
+  destructive actions. The preview is the largest region.
+- Small screens keep the same information order but render one column. The
+  page rail becomes horizontally scrollable and the document itself must not
+  overflow horizontally.
+- Each page row exposes title, first validated route pattern, current version,
+  source kind, and an `aria-current` active state.
+- Project-driven generation is the one primary action. Manual creation,
+  latest-plan access, and batch regeneration remain available as subordinate
+  actions.
+- A plan page tracks the `run_id` returned by the generation or retry request.
+  It navigates to `/projects/{projectId}/prototypes` only when that exact run
+  reaches `completed`.
+- Loading an already-completed historical plan never auto-navigates. An active
+  run recovered after reload may become the tracked navigation run.
+- `partial`, `failed`, and `interrupted` runs remain on the plan page so retry
+  controls and failure details stay available.
+- Prototype list/detail refresh failures preserve the last valid list and
+  preview and render explicit recovery feedback.
+
+#### 4. Validation & Error Matrix
+
+- Tracked run becomes `completed` -> navigate once to the workbench.
+- Completed run ID differs from the tracked ID -> remain on the plan page.
+- Historical completed run loads with no tracked ID -> remain on the plan page.
+- Tracked run becomes `partial`, `failed`, or `interrupted` -> remain and show
+  recovery UI.
+- List/detail refresh fails -> preserve stale data, log with identity/context,
+  and show a visible retry/error message.
+- Unknown preview route -> retain the current prototype and show the existing
+  route-not-found toast.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: a new three-page generation reaches `completed` and returns to a
+  workbench where all three route-backed pages are immediately selectable.
+- Base: opening "latest plan" for a historical completed run leaves the review
+  page visible.
+- Base: a 390 CSS-pixel viewport scrolls page choices horizontally while the
+  main preview and inspector remain a single readable column.
+- Bad: `useEffect(() => run?.status === "completed" && navigate(), [run])`,
+  because historical completed plans become impossible to inspect.
+- Bad: clearing `prototypes` or `detail` after a transient refresh error.
+
+#### 6. Tests Required
+
+- Pure tests cover tracked completed, untracked completed, wrong run ID,
+  partial, and null run inputs.
+- Source/component tests assert the page rail exposes route/source/version,
+  active selection, mobile horizontal scrolling, and desktop preview-first
+  grid tracks.
+- Browser checks cover page selection, Preview/Code switching, route selection,
+  historical completed-plan access, and no document overflow on desktop and
+  narrow viewports.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```tsx
+useEffect(() => {
+  if (generationRun?.status === "completed") {
+    window.location.assign(`/projects/${projectId}/prototypes`);
+  }
+}, [generationRun, projectId]);
+```
+
+Correct:
+
+```tsx
+useEffect(() => {
+  if (!shouldOpenPrototypeWorkbench(generationRun, navigationRunIdRef.current)) return;
+  if (navigatedRunIdRef.current === generationRun.id) return;
+  navigatedRunIdRef.current = generationRun.id;
+  window.location.assign(`/projects/${projectId}/prototypes`);
+}, [generationRun, projectId]);
+```

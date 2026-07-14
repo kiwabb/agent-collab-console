@@ -224,6 +224,16 @@ export { getPendingApprovals, resolveApproval } from "./api/approvals";
 export { getAuditLog } from "./api/audit";
 export type { AuditLog, AuditLogCategory, AuditLogPage } from "./api/audit";
 
+export { getMcpCatalog } from "./api/mcp";
+export type {
+  McpAvailability,
+  McpCatalogResponse,
+  McpRecentCall,
+  McpRiskLevel,
+  McpServerCatalogEntry,
+  McpToolCatalogEntry,
+} from "./api/mcp";
+
 export {
   fetchSkillContent,
   createSkill,

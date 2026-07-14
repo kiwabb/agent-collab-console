@@ -104,6 +104,12 @@ class _Store:
     async def load_project(self, project_id):
         return object()
 
+    async def list_codex_tasks(self, issue_id=None):
+        return []
+
+    async def list_execution_processes(self, task_id=None):
+        return []
+
 
 class _WorktreeManager:
     def __init__(self):
@@ -233,6 +239,7 @@ async def test_concurrent_dispatches_share_issue_start_lock(monkeypatch):
         agent_worktree_path=None,
         batch_key=None,
         register_completion=False,
+        trace_id=None,
     ):
         store._graph.nodes.append(_node(role))
         return f"task-{len(store._graph.nodes)}", store._graph.nodes[-1].id

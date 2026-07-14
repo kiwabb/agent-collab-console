@@ -1,6 +1,7 @@
 """Tests for /api/codex/tasks/{id}/send endpoint (P3) — auto chat/refine routing."""
 
 import json  # noqa: I001
+import os
 from datetime import datetime
 
 import pytest
@@ -139,7 +140,13 @@ def _write_pm_artifact(tmp_path, issue_id):
 
 @pytest.fixture
 def isolated_client():
-    return TestClient(app)
+    return TestClient(
+        app,
+        headers={
+            "X-Console-Token": os.environ["CONSOLE_AUTH_TOKEN"],
+            "Origin": "http://testserver",
+        },
+    )
 
 
 def test_send_auto_routes_chat_input_to_chat(isolated_client, monkeypatch, tmp_path):

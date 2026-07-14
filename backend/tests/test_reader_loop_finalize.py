@@ -68,6 +68,32 @@ class StoreStub:
         return None
 
 
+class TerminalSaveGateStore(StoreStub):
+    """Keep loaded task objects detached so the test observes real saves."""
+
+    def __init__(self, task: CodexTask, workspace: CodexSession, process: ExecutionProcess):
+        super().__init__(task.model_copy(deep=True), workspace, process)
+        self.terminal_save_started = asyncio.Event()
+        self.allow_terminal_save = asyncio.Event()
+        self._blocked_terminal_save = False
+
+    async def load_codex_task(self, task_id):
+        if task_id != self.task.id:
+            return None
+        return self.task.model_copy(deep=True)
+
+    async def save_codex_task(self, task):
+        if (
+            task.status == "done"
+            and task.result == '{"schema_version":"prototype-artifact/v1"}'
+            and not self._blocked_terminal_save
+        ):
+            self._blocked_terminal_save = True
+            self.terminal_save_started.set()
+            await self.allow_terminal_save.wait()
+        self.task = task.model_copy(deep=True)
+
+
 class LogStoreStub:
     async def append_log_event(self, event: LogEvent) -> None:
         return None
@@ -177,6 +203,44 @@ def _fixture(returncode=None, stdout=None, stderr=None):
         task_id="task-1",
     )
     return runtime, store, entry, proc
+
+
+@pytest.mark.asyncio
+async def test_reader_waiter_releases_only_after_terminal_result_is_persisted():
+    manifest = '{"schema_version":"prototype-artifact/v1"}'
+    frames = [
+        b'{"type":"result","is_error":false,"result":'
+        b'"{\\"schema_version\\":\\"prototype-artifact/v1\\"}"}\n',
+        b"",
+    ]
+
+    async def terminal_then_eof():
+        return frames.pop(0)
+
+    runtime, original_store, entry, _ = _fixture(
+        returncode=0,
+        stdout=FakeStdout(terminal_then_eof),
+        stderr=FakeStderr(data=b""),
+    )
+    process = original_store.processes["ep-1"]
+    store = TerminalSaveGateStore(original_store.task, original_store.workspace, process)
+    runtime.codex_store = store
+    waiter = asyncio.Event()
+    entry.pending_waiters.append(waiter)
+
+    reader = asyncio.create_task(runtime._reader_loop("workspace-1", entry, "task-1"))
+    await asyncio.wait_for(store.terminal_save_started.wait(), timeout=1)
+
+    assert waiter.is_set() is False
+    assert store.task.status == "responding"
+    assert store.task.result is None
+
+    store.allow_terminal_save.set()
+    await asyncio.wait_for(waiter.wait(), timeout=1)
+
+    assert store.task.status == "done"
+    assert store.task.result == manifest
+    await asyncio.wait_for(reader, timeout=1)
 
 
 @pytest.mark.asyncio

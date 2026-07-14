@@ -19,12 +19,54 @@ from app.adapters.codex_cli_adapter import CodexCliAdapter
 from app.adapters.sqlite_store import SQLiteStore
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
 from app.adapters.external_prototype_agent_store import AsyncExternalPrototypeAgentStore
+from app.adapters.prototype_object_store import PrototypeObjectStore
+from app.adapters.prototype_render_artifact_store import PrototypeRenderArtifactStore
+from app.adapters.prototype_renderer_worker import (
+    PrototypeRendererWorker,
+    PrototypeRendererWorkerError,
+)
+from app.adapters.prototype_runtime_worker import (
+    PrototypeRuntimeWorker,
+    PrototypeRuntimeWorkerError,
+)
+from app.adapters.structured_prototype_store import AsyncStructuredPrototypeStore
 from app.application.codex_task_runner import CodexTaskRunner
 from app.application.help_orchestrator import HelpOrchestrator, HelpTaskRunner
 from app.application.role_workflow_service import RoleWorkflowService, RoleWorkflowStore
 from app.application.git_service import GitService
 from app.application.project_service import ProjectService
+from app.application.mcp_registry import McpRegistry
+from app.application.project_startup_mcp import (
+    PROJECT_STARTUP_MCP_DESCRIPTOR,
+    ProjectStartupMcpService,
+)
+from app.application.project_startup_service import ProjectStartupConfigService
 from app.application.prototype_service import PrototypeService
+from app.application.prototype_artifact_generator import PrototypeArtifactGenerator
+from app.application.prototype_planning_service import PrototypePlanService
+from app.application.prototype_planning_mcp import (
+    PROTOTYPE_PLANNING_MCP_DESCRIPTOR,
+    PrototypePlanningMcpService,
+)
+from app.application.prototype_generation_service import PrototypeGenerationService
+from app.application.structured_prototype_service import StructuredPrototypeService
+from app.application.structured_prototype_ai_mcp import (
+    PROTOTYPE_AI_MCP_DESCRIPTOR,
+    PrototypeAiMcpService,
+)
+from app.application.structured_prototype_ai_runtime import PrototypeUiEngineerRuntime
+from app.application.structured_prototype_ai_service import StructuredPrototypeAiService
+from app.application.structured_prototype_generation_mcp import (
+    GENERATION_MCP_DESCRIPTOR,
+    StructuredPrototypeGenerationMcpService,
+)
+from app.application.structured_prototype_generation_runtime import (
+    StructuredPrototypeGenerationRuntime,
+)
+from app.application.structured_prototype_generation_service import (
+    StructuredPrototypeGenerationService,
+)
+from app.application.project_evidence_service import ProjectEvidenceService
 from app.application.runtime_catalog_service import RuntimeCatalogService
 from app.application.skill_service import SkillService
 from app.application import timeouts
@@ -32,6 +74,9 @@ from app.application.worktree_manager import WorktreeManager
 from app.application.external_prototype_agent_service import (
     ExternalPrototypeAgentService,
     UnavailableStructuredPrototypeCollaborationPort,
+)
+from app.application.structured_prototype_external_collaboration import (
+    StructuredPrototypeExternalCollaboration,
 )
 from app.domain.models import CodexSession, CodexTask, LogEvent
 
@@ -120,6 +165,47 @@ else:
 use_sqlite = timeouts.use_sqlite()
 store = SQLiteStore(db_path) if use_sqlite else None
 async_store = AsyncSQLiteStore(db_path) if use_sqlite else None
+structured_prototype_data_root_str = timeouts.structured_prototype_data_root()
+if not os.path.isabs(structured_prototype_data_root_str):
+    structured_prototype_data_root = (
+        Path(__file__).parent.parent / structured_prototype_data_root_str
+    )
+else:
+    structured_prototype_data_root = Path(structured_prototype_data_root_str)
+structured_prototype_store = AsyncStructuredPrototypeStore(db_path) if use_sqlite else None
+structured_prototype_object_store = (
+    PrototypeObjectStore(structured_prototype_data_root) if use_sqlite else None
+)
+structured_prototype_artifact_store = (
+    PrototypeRenderArtifactStore(structured_prototype_data_root) if use_sqlite else None
+)
+try:
+    structured_prototype_runtime_worker = PrototypeRuntimeWorker() if use_sqlite else None
+except PrototypeRuntimeWorkerError as exc:
+    logger.warning(
+        "prototype runtime worker unavailable: code=%s",
+        exc.code,
+    )
+    structured_prototype_runtime_worker = None
+try:
+    structured_prototype_renderer_worker = PrototypeRendererWorker() if use_sqlite else None
+except PrototypeRendererWorkerError as exc:
+    logger.warning(
+        "prototype renderer worker unavailable: code=%s",
+        exc.code,
+    )
+    structured_prototype_renderer_worker = None
+structured_prototype_service = (
+    StructuredPrototypeService(
+        store=structured_prototype_store,
+        object_store=structured_prototype_object_store,
+        runtime_worker=structured_prototype_runtime_worker,
+        renderer_worker=structured_prototype_renderer_worker,
+        artifact_store=structured_prototype_artifact_store,
+    )
+    if structured_prototype_store is not None and structured_prototype_object_store is not None
+    else None
+)
 external_prototype_agent_store = (
     AsyncExternalPrototypeAgentStore(db_path) if use_sqlite else None
 )
@@ -213,6 +299,39 @@ prototype_service = (
     if async_store is not None and runtime_catalog_service is not None
     else None
 )
+prototype_plan_service: PrototypePlanService | None = None
+prototype_planning_mcp_service: PrototypePlanningMcpService | None = None
+project_startup_config_service = (
+    ProjectStartupConfigService(async_store) if async_store is not None else None
+)
+project_startup_mcp_service = (
+    ProjectStartupMcpService(project_startup_config_service)
+    if project_startup_config_service is not None
+    else None
+)
+
+
+async def prototype_generation_governance_gate(count: int) -> None:
+    if not timeouts.prototype_generation_enabled():
+        raise RuntimeError("project prototype generation is disabled")
+    if count < 1:
+        raise RuntimeError("prototype generation requires at least one candidate")
+    if count > timeouts.prototype_generation_max_candidates():
+        raise RuntimeError("prototype generation candidate limit exceeded")
+    estimated_cost = count * timeouts.prototype_generation_estimated_usd_per_page()
+    if estimated_cost > timeouts.prototype_generation_max_estimated_usd():
+        raise RuntimeError(
+            f"prototype generation estimated cost ${estimated_cost:.2f} exceeds budget"
+        )
+
+
+prototype_generation_service: PrototypeGenerationService | None = None
+prototype_artifact_generator: PrototypeArtifactGenerator | None = None
+prototype_task_runner: CodexTaskRunner | None = None
+structured_prototype_ai_mcp_service: PrototypeAiMcpService | None = None
+structured_prototype_ai_service: StructuredPrototypeAiService | None = None
+structured_prototype_generation_mcp_service: StructuredPrototypeGenerationMcpService | None = None
+structured_prototype_generation_service: StructuredPrototypeGenerationService | None = None
 
 # Codex process manager - lazy imported to avoid pty dependency on import
 codex_process_manager: CodexProcessManager | MockCodexProcessManager | None = None
@@ -250,6 +369,11 @@ class MockCodexProcessManager:
 
     def check_availability(self) -> bool:
         return True  # Pretend available so availability checks pass
+
+    def check_executor_availability(self, executor: str) -> bool:
+        if executor not in {"codex", "claude"}:
+            raise ValueError(f"unknown executor availability probe: {executor}")
+        return True
 
     def _get_log_path(self, session_id: str) -> str:
         return os.path.join(self._data_dir, f"mock_session_{session_id}.log")
@@ -374,7 +498,9 @@ class MockCodexProcessManager:
                 await self.terminate(session_id)
                 terminated.append(session_id)
             except Exception:
-                logger.debug("mock process termination failed: session_id=%s", session_id, exc_info=True)
+                logger.debug(
+                    "mock process termination failed: session_id=%s", session_id, exc_info=True
+                )
         return terminated
 
     async def terminate_task(self, task_id: str) -> None:
@@ -481,9 +607,16 @@ def get_codex_process_manager() -> CodexProcessManager | MockCodexProcessManager
     return codex_process_manager
 
 
+def check_claude_available() -> bool:
+    return get_codex_process_manager().check_executor_availability("claude")
+
+
 task_runner = None
 help_orchestrator = None
-role_workflow_service = RoleWorkflowService(codex_store=cast(RoleWorkflowStore | None, codex_store))
+role_workflow_service = RoleWorkflowService(
+    codex_store=cast(RoleWorkflowStore | None, codex_store),
+    project_startup_mcp_service=project_startup_mcp_service,
+)
 
 
 def get_task_runner(refresh_task_result: RefreshTaskResult) -> CodexTaskRunner:
@@ -514,3 +647,106 @@ def get_help_orchestrator(refresh_task_result: RefreshTaskResult) -> HelpOrchest
             task_runner=cast(HelpTaskRunner, get_task_runner(refresh_task_result)),
         )
     return help_orchestrator
+
+
+async def _refresh_prototype_task_result(_task: CodexTask) -> object:
+    # The process runtime has already captured the strict manifest in task.result.
+    # This unmanaged role intentionally has no role-workflow artifact persistence.
+    return None
+
+
+if async_store is not None and runtime_catalog_service is not None:
+    prototype_task_runner_factory = cast(TaskRunnerFactory, CodexTaskRunner)
+    prototype_task_runner = prototype_task_runner_factory(
+        codex_store=async_store,
+        event_bus=event_bus,
+        process_manager_factory=get_codex_process_manager,
+        mock_manager_cls=MockCodexProcessManager,
+        refresh_task_result=_refresh_prototype_task_result,
+        help_orchestrator_factory=None,
+        role_workflow_service=role_workflow_service,
+    )
+    prototype_artifact_generator = PrototypeArtifactGenerator(
+        store=async_store,
+        task_runner=prototype_task_runner,
+        worktree_manager=worktree_manager,
+        claude_availability_probe=check_claude_available,
+    )
+    prototype_plan_service = PrototypePlanService(
+        store=async_store,
+        evidence_service=ProjectEvidenceService(),
+        ui_engineer=prototype_artifact_generator,
+    )
+    prototype_planning_mcp_service = PrototypePlanningMcpService(prototype_plan_service)
+    prototype_plan_service.mcp_service = prototype_planning_mcp_service
+    prototype_generation_service = PrototypeGenerationService(
+        store=async_store,
+        evidence_service=ProjectEvidenceService(),
+        governance_gate=prototype_generation_governance_gate,
+        artifact_generator=prototype_artifact_generator,
+        concurrency=2,
+        global_concurrency=timeouts.prototype_generation_global_concurrency(),
+    )
+    if (
+        structured_prototype_store is not None
+        and structured_prototype_object_store is not None
+        and structured_prototype_service is not None
+        and structured_prototype_renderer_worker is not None
+        and structured_prototype_artifact_store is not None
+    ):
+        structured_prototype_ai_mcp_service = PrototypeAiMcpService()
+        structured_prototype_ai_runtime = PrototypeUiEngineerRuntime(
+            generator=prototype_artifact_generator,
+            mcp_service=structured_prototype_ai_mcp_service,
+        )
+        structured_prototype_ai_service = StructuredPrototypeAiService(
+            store=structured_prototype_store,
+            project_store=async_store,
+            object_store=structured_prototype_object_store,
+            structured_service=structured_prototype_service,
+            runtime=structured_prototype_ai_runtime,
+            renderer_worker=structured_prototype_renderer_worker,
+            artifact_store=structured_prototype_artifact_store,
+        )
+        if structured_prototype_runtime_worker is not None:
+            structured_prototype_generation_mcp_service = (
+                StructuredPrototypeGenerationMcpService()
+            )
+            structured_prototype_generation_runtime = StructuredPrototypeGenerationRuntime(
+                generator=prototype_artifact_generator,
+                mcp_service=structured_prototype_generation_mcp_service,
+                object_store=structured_prototype_object_store,
+            )
+            structured_prototype_generation_service = StructuredPrototypeGenerationService(
+                store=structured_prototype_store,
+                project_store=async_store,
+                object_store=structured_prototype_object_store,
+                runtime=structured_prototype_generation_runtime,
+                runtime_worker=structured_prototype_runtime_worker,
+                renderer=structured_prototype_renderer_worker,
+                artifact_store=structured_prototype_artifact_store,
+            )
+
+if (
+    external_prototype_agent_store is not None
+    and structured_prototype_store is not None
+    and structured_prototype_service is not None
+    and structured_prototype_ai_service is not None
+):
+    external_prototype_agent_service = ExternalPrototypeAgentService(
+        store=external_prototype_agent_store,
+        collaboration=StructuredPrototypeExternalCollaboration(
+            store=structured_prototype_store,
+            structured_service=structured_prototype_service,
+            ai_service=structured_prototype_ai_service,
+        ),
+    )
+
+mcp_registry = McpRegistry()
+mcp_registry.register(PROJECT_STARTUP_MCP_DESCRIPTOR, project_startup_mcp_service)
+mcp_registry.register(PROTOTYPE_PLANNING_MCP_DESCRIPTOR, prototype_planning_mcp_service)
+mcp_registry.register(PROTOTYPE_AI_MCP_DESCRIPTOR, structured_prototype_ai_mcp_service)
+mcp_registry.register(
+    GENERATION_MCP_DESCRIPTOR,
+    structured_prototype_generation_mcp_service,
+)

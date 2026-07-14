@@ -71,6 +71,12 @@ class _Store:
     async def load_workflow_graph_for_issue(self, issue_id):
         return None  # never exhaust the re-dispatch budget
 
+    async def list_codex_tasks(self, issue_id=None):
+        return []
+
+    async def list_execution_processes(self, task_id=None):
+        return []
+
 
 class _WorktreeManagerStub:
     """Hands out a unique worktree path per agent_key and records cleanups.
@@ -158,6 +164,7 @@ def _patch_dispatch(monkeypatch, *, run, register_only=True):
         agent_worktree_path=None,
         batch_key=None,
         register_completion=False,
+        trace_id=None,
     ):
         counter["n"] += 1
         task_id = f"task-{counter['n']}"

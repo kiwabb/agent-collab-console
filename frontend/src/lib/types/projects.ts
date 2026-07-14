@@ -13,12 +13,24 @@ export interface Project {
 }
 
 /** Live status of a project's one-click `run_command` dev process. */
+export type ProjectRunServiceState =
+  "reachable" | "unreachable" | "not_configured" | "invalid_url" | "unknown";
+
+export interface ProjectRunServiceStatus {
+  state: ProjectRunServiceState;
+  url: string | null;
+  http_status: number | null;
+  checked_at: string | null;
+  error: string | null;
+}
+
 export interface ProjectRunStatus {
   running: boolean;
   command: string | null;
   pid: number | null;
   started_at: string | null;
   exit_code: number | null;
+  service: ProjectRunServiceStatus;
 }
 
 /** One captured line from a running project process. */
@@ -38,7 +50,14 @@ export interface ProjectRunLogsResponse {
 }
 
 /** Refusal reason returned (409) by `POST /run/start`. */
-export type ProjectRunStartReason = "no_run_command" | "already_running" | "refused";
+export type ProjectRunStartReason =
+  "no_run_command" | "already_running" | "service_already_reachable" | "refused" | "env_incomplete";
+
+export interface ProjectRunEnvError {
+  name: string;
+  reason: string;
+  description: string;
+}
 
 export interface CreateProjectRequest {
   name: string;

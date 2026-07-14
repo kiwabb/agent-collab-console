@@ -84,6 +84,9 @@ def test_seed_builtin_agents_adds_specialists_with_tier(tmp_path: Path):
 
     assert created >= 10
     assert by_role["product_manager"].agent_tier == "managed"
+    assert by_role["prototype_ui_engineer"].default_executor == "claude"
+    assert by_role["prototype_ui_engineer"].default_provider is None
+    assert by_role["prototype_ui_engineer"].default_model is None
     assert by_role["specialist:security_reviewer"].agent_tier == "specialist"
     assert by_role["specialist:security_reviewer"].default_executor == "claude"
     assert by_role["specialist:security_reviewer"].persist_kind == "specialist"

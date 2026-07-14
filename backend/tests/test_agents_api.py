@@ -39,6 +39,7 @@ def test_seed_creates_managed_and_specialist_builtin_agents(client):
     builtins = [a for a in agents if a["is_builtin"]]
     role_keys = {a["role_key"] for a in builtins}
     assert {"architect", "engineer", "product_manager", "qa"} <= role_keys
+    assert "prototype_ui_engineer" in role_keys
     assert "specialist:security_reviewer" in role_keys
     assert "specialist:performance_reviewer" in role_keys
     assert {a["agent_tier"] for a in builtins} == {"managed", "specialist"}
@@ -52,7 +53,7 @@ def test_seed_is_idempotent(client):
     _run_async(seed_builtin_agents(bootstrap_module.async_store))
     resp = client.get("/api/agents")
     builtins = [a for a in resp.json() if a["is_builtin"]]
-    assert len(builtins) == 17
+    assert len(builtins) == 18
 
 
 def test_builtin_pm_and_architect_trigger_replan_on_done(client):

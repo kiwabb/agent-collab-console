@@ -26,21 +26,10 @@ function auditEntry(overrides: Partial<AuditLog> = {}): AuditLog {
   };
 }
 
-test("getBestAuditTrace falls back to audit-row runtime logs when trace collection is empty", async () => {
+test("getBestAuditTrace prefers row-specific runtime detail", async () => {
   await withMockFetch(
     (input) => {
       const url = String(input);
-      if (url.endsWith("/codex/traces/trace-cli")) {
-        return new Response(
-          JSON.stringify({
-            available: false,
-            trace_id: "trace-cli",
-            reason: "trace_not_recorded",
-            items: [],
-          }),
-          { status: 200 },
-        );
-      }
       if (url.endsWith("/codex/audit-log/audit-cli/trace")) {
         return new Response(
           JSON.stringify({
@@ -77,16 +66,28 @@ test("getBestAuditTrace falls back to audit-row runtime logs when trace collecti
       assert.equal(result.kind, "runtime_logs");
       assert.deepEqual(
         calls.map((call) => call.input),
-        ["/api/codex/traces/trace-cli", "/api/codex/audit-log/audit-cli/trace"],
+        ["/api/codex/audit-log/audit-cli/trace"],
       );
     },
   );
 });
 
-test("getBestAuditTrace keeps saved trace collections without audit-row fallback", async () => {
+test("getBestAuditTrace uses saved trace collection when row detail is unavailable", async () => {
   await withMockFetch(
-    () =>
-      new Response(
+    (input) => {
+      const url = String(input);
+      if (url.endsWith("/codex/audit-log/audit-cli/trace")) {
+        return new Response(
+          JSON.stringify({
+            available: false,
+            audit_log_id: "audit-cli",
+            trace_id: "trace-llm",
+            reason: "trace_not_recorded",
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(
         JSON.stringify({
           available: true,
           trace_id: "trace-llm",
@@ -114,14 +115,17 @@ test("getBestAuditTrace keeps saved trace collections without audit-row fallback
           ],
         }),
         { status: 200 },
-      ),
+      );
+    },
     async (calls) => {
       const result = await getBestAuditTrace(auditEntry({ trace_id: "trace-llm" }));
 
       assert.equal(result.available, true);
       assert.equal("items" in result, true);
-      assert.equal(calls.length, 1);
-      assert.equal(calls[0]?.input, "/api/codex/traces/trace-llm");
+      assert.deepEqual(
+        calls.map((call) => call.input),
+        ["/api/codex/audit-log/audit-cli/trace", "/api/codex/traces/trace-llm"],
+      );
     },
   );
 });

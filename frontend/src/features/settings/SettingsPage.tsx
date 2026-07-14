@@ -7,6 +7,7 @@ import { useI18n } from "@/providers/I18nProvider";
 import { getRuntimeCatalog, updateRuntimeCatalog } from "@/lib/api/runtime";
 import { RuntimeCatalogEditor } from "@/components/runtime/RuntimeCatalogEditor";
 import { AgentCatalogPanel } from "@/features/workflow/AgentCatalogPanel";
+import { McpManagementPanel } from "@/features/settings/McpManagementPanel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -26,11 +27,17 @@ import {
   Zap,
   LayoutGrid,
   Bot,
+  PlugZap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Locale } from "@/lib/i18n";
 import type { RuntimeCatalog } from "@/lib/types";
 import { PageFrame } from "@/features/workbench/components/PageFrame";
+
+const settingsTabClassName =
+  "w-full flex items-center justify-center lg:justify-start gap-1.5 lg:gap-3 px-2 lg:px-4 py-2.5 lg:py-3 rounded-lg lg:rounded-xl text-[10px] lg:text-xs font-bold transition-all data-[state=active]:bg-brand/10 data-[state=active]:text-brand hover:bg-surface-hover hover:text-foreground text-text-secondary group border border-transparent data-[state=active]:border-brand/20";
+const settingsTabIconClassName =
+  "size-7 lg:size-8 rounded-lg bg-surface-raised flex items-center justify-center group-data-[state=active]:bg-brand/20 group-data-[state=active]:shadow-inner transition-colors";
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -101,46 +108,46 @@ export function SettingsPage() {
       actions={<AutoSaveIndicator status={saveStatus} error={saveError} />}
       contentClassName="flex overflow-hidden"
     >
-      <div className="flex-1 flex overflow-hidden">
-        <Tabs defaultValue="general" className="flex-1 flex overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <Tabs
+          defaultValue="general"
+          className="flex min-w-0 flex-1 flex-col overflow-hidden lg:flex-row"
+        >
           {/* Sidebar */}
-          <aside className="w-settings-sidebar shrink-0 border-r border-border-subtle bg-surface/30 p-6 flex flex-col gap-8">
+          <aside className="flex w-full shrink-0 flex-col gap-0 border-b border-border-subtle bg-surface/30 p-2 lg:w-settings-sidebar lg:gap-8 lg:border-b-0 lg:border-r lg:p-6">
             <div>
-              <h2 className="px-4 text-[10px] font-black uppercase tracking-[0.25em] text-text-muted mb-4">
+              <h2 className="mb-4 hidden px-4 text-[10px] font-black uppercase tracking-[0.25em] text-text-muted lg:block">
                 {t("settings.preferences")}
               </h2>
-              <TabsList className="flex flex-col h-auto bg-transparent p-0 gap-1">
-                <TabsTrigger
-                  value="general"
-                  className="w-full flex items-center justify-start gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all data-[state=active]:bg-brand/10 data-[state=active]:text-brand hover:bg-surface-hover hover:text-foreground text-text-secondary group border border-transparent data-[state=active]:border-brand/20"
-                >
-                  <div className="size-8 rounded-lg bg-surface-raised flex items-center justify-center group-data-[state=active]:bg-brand/20 group-data-[state=active]:shadow-inner transition-colors">
+              <TabsList className="grid h-auto grid-cols-4 gap-1 bg-transparent p-0 lg:flex lg:flex-col">
+                <TabsTrigger value="general" className={settingsTabClassName}>
+                  <div className={settingsTabIconClassName}>
                     <Palette size={14} />
                   </div>
                   {t("settings.general")}
                 </TabsTrigger>
-                <TabsTrigger
-                  value="runtime"
-                  className="w-full flex items-center justify-start gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all data-[state=active]:bg-brand/10 data-[state=active]:text-brand hover:bg-surface-hover hover:text-foreground text-text-secondary group border border-transparent data-[state=active]:border-brand/20"
-                >
-                  <div className="size-8 rounded-lg bg-surface-raised flex items-center justify-center group-data-[state=active]:bg-brand/20 group-data-[state=active]:shadow-inner transition-colors">
+                <TabsTrigger value="runtime" className={settingsTabClassName}>
+                  <div className={settingsTabIconClassName}>
                     <Database size={14} />
                   </div>
                   {t("settings.runtime")}
                 </TabsTrigger>
-                <TabsTrigger
-                  value="agents"
-                  className="w-full flex items-center justify-start gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all data-[state=active]:bg-brand/10 data-[state=active]:text-brand hover:bg-surface-hover hover:text-foreground text-text-secondary group border border-transparent data-[state=active]:border-brand/20"
-                >
-                  <div className="size-8 rounded-lg bg-surface-raised flex items-center justify-center group-data-[state=active]:bg-brand/20 group-data-[state=active]:shadow-inner transition-colors">
+                <TabsTrigger value="agents" className={settingsTabClassName}>
+                  <div className={settingsTabIconClassName}>
                     <Bot size={14} />
                   </div>
                   {t("settings.agents")}
                 </TabsTrigger>
+                <TabsTrigger value="mcp" className={settingsTabClassName}>
+                  <div className={settingsTabIconClassName}>
+                    <PlugZap size={14} />
+                  </div>
+                  {t("settings.mcp.title")}
+                </TabsTrigger>
               </TabsList>
             </div>
 
-            <div className="mt-auto">
+            <div className="mt-auto hidden lg:block">
               <div className="p-4 rounded-2xl bg-gradient-to-br from-brand/10 to-transparent border border-brand/10">
                 <p className="text-[10px] font-bold text-brand uppercase tracking-widest mb-1">
                   {t("settings.generalStatus")}
@@ -153,7 +160,7 @@ export function SettingsPage() {
           </aside>
 
           {/* Tab Content */}
-          <main className="flex-1 overflow-y-auto no-scrollbar scroll-smooth bg-surface/10">
+          <main className="min-w-0 flex-1 overflow-y-auto no-scrollbar scroll-smooth bg-surface/10">
             <div className="w-full min-h-full">
               <TabsContent
                 value="general"
@@ -487,6 +494,19 @@ export function SettingsPage() {
                   <p className="text-xs text-text-muted">{t("settings.agentsDesc")}</p>
                 </div>
                 <AgentCatalogPanel />
+              </TabsContent>
+
+              <TabsContent
+                value="mcp"
+                className="w-full p-4 sm:p-8 mt-0 outline-none animate-in fade-in slide-in-from-bottom-4 duration-500"
+              >
+                <div className="mb-6">
+                  <h2 className="text-2xl font-black tracking-tight text-foreground mb-1 italic">
+                    {t("settings.mcp.title")}
+                  </h2>
+                  <p className="text-xs text-text-muted">{t("settings.mcp.description")}</p>
+                </div>
+                <McpManagementPanel />
               </TabsContent>
             </div>
           </main>

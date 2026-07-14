@@ -39,6 +39,9 @@ function splitApiExportNames(moduleName: string): Set<string> | null {
     for (const match of source.matchAll(/export\s+(?:interface|type)\s+(\w+)/g)) {
       if (match[1]) names.add(match[1]);
     }
+    for (const match of source.matchAll(/export\s+(?:abstract\s+)?class\s+(\w+)/g)) {
+      if (match[1]) names.add(match[1]);
+    }
     for (const match of source.matchAll(/export\s+(?:type\s+)?\{([^}]+)\}/g)) {
       for (const part of (match[1] ?? "").split(",")) {
         const raw = part.trim();

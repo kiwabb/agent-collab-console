@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>订单管理 · Northstar 管理后台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    color: #172033;
+    background: #f4f6f9;
+    font-synthesis: none;
+    letter-spacing: 0;
+    --primary: #3157d5;
+    --primary-soft: #edf1ff;
+    --border: #dfe4ec;
+    --muted: #667085;
+    --surface: #ffffff;
+    --sidebar: #19202d;
+    --danger: #b42318;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-width: 320px; min-height: 100vh; }
+  button, input { font: inherit; letter-spacing: 0; }
+  button { cursor: pointer; }
+  .app-shell { min-height: 100vh; display: grid; grid-template-columns: 232px minmax(0, 1fr); }
+  .sidebar { position: sticky; top: 0; height: 100vh; padding: 22px 14px 16px; color: #f8fafc; background: var(--sidebar); display: flex; flex-direction: column; z-index: 30; }
+  .brand { height: 54px; display: flex; align-items: center; gap: 11px; padding: 0 8px 18px; border-bottom: 1px solid #303847; }
+  .brand__mark { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 7px; background: #4968d8; color: #f8fafc; }
+  .brand__mark svg { width: 20px; height: 20px; }
+  .brand div, .sidebar__footer div { display: flex; flex-direction: column; min-width: 0; }
+  .brand strong { font-size: 15px; }
+  .brand span, .sidebar__footer span { color: #9ba5b5; font-size: 12px; }
+  .sidebar__close { display: none !important; margin-left: auto; color: #fff !important; }
+  .navigation { display: grid; gap: 5px; padding-top: 20px; }
+  .navigation__link { height: 42px; padding: 0 12px; display: flex; align-items: center; gap: 12px; color: #aeb7c5; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 500; }
+  .navigation__link:hover { color: #fff; background: #242d3b; }
+  .navigation__link.is-active { color: #fff; background: #3157d5; }
+  .sidebar__footer { margin-top: auto; padding: 15px 8px 2px; border-top: 1px solid #303847; display: flex; align-items: center; gap: 10px; }
+  .sidebar__footer strong { font-size: 13px; }
+  .avatar { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; border-radius: 50%; color: #2744a2; background: #e6ebff; font-size: 13px; font-weight: 700; }
+  .main-column { min-width: 0; }
+  .topbar { height: 64px; position: sticky; top: 0; z-index: 20; display: flex; align-items: center; padding: 0 28px; background: rgba(255,255,255,.96); border-bottom: 1px solid var(--border); }
+  .topbar__context { font-size: 13px; color: var(--muted); }
+  .topbar__actions { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+  .icon-button { width: 36px; height: 36px; border: 0; background: transparent; color: #596275; border-radius: 6px; display: grid; place-items: center; }
+  .icon-button:hover { background: #eef1f5; color: #172033; }
+  .mobile-menu { display: none; }
+  .environment { display: inline-flex; align-items: center; gap: 7px; color: #475467; font-size: 12px; }
+  .environment i { width: 7px; height: 7px; border-radius: 50%; background: #1f9d68; box-shadow: 0 0 0 3px #dcf5e9; font-style: normal; display: inline-block; }
+  .page-container { width: min(1180px, 100%); margin: 0 auto; padding: 34px 32px 48px; }
+  .page-heading { min-height: 72px; margin-bottom: 28px; display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+  .eyebrow { color: var(--primary); font-size: 12px; font-weight: 700; }
+  h1 { margin: 4px 0 5px; font-size: 26px; line-height: 1.25; }
+  h2 { margin: 0; font-size: 16px; }
+  p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+  .primary-button, .secondary-button { min-height: 38px; padding: 0 14px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-weight: 600; font-size: 13px; }
+  .primary-button { color: #fff; border: 1px solid var(--primary); background: var(--primary); }
+  .secondary-button { color: #344054; border: 1px solid #cfd5df; background: #fff; }
+  .content-section { margin-top: 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .section-heading { min-height: 70px; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--border); }
+  .section-heading p { margin-top: 4px; font-size: 12px; }
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; min-width: 700px; border-collapse: collapse; text-align: left; }
+  th { padding: 11px 20px; color: #667085; background: #f8f9fb; font-size: 11px; text-transform: uppercase; font-weight: 700; }
+  td { padding: 14px 20px; border-top: 1px solid #edf0f4; color: #475467; font-size: 13px; }
+  .status { padding: 4px 8px; border-radius: 999px; color: #087a50; background: #dff7eb; font-size: 11px; font-weight: 700; white-space: nowrap; }
+  .status[data-status="refunded"] { color: #5d6675; background: #edf0f4; }
+  .status[data-status="pending"] { color: #9b5100; background: #fff1dc; }
+  .order-id { color: #3157d5; font-variant-numeric: tabular-nums; }
+  .number { color: #172033; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .scrim { display: none; }
+  @media (max-width: 720px) {
+    .app-shell { display: block; }
+    .sidebar { position: fixed; left: 0; transform: translateX(-100%); width: 250px; transition: transform .2s ease-out; }
+    .sidebar--open { transform: translateX(0); }
+    .sidebar__close, .mobile-menu { display: grid !important; }
+    .scrim { display: block; position: fixed; inset: 0; z-index: 25; background: rgba(15,23,42,.42); }
+    .topbar { padding: 0 16px; }
+    .mobile-menu { margin-right: 8px; }
+    .page-container { padding: 24px 16px 36px; }
+    .page-heading { margin-bottom: 20px; flex-wrap: wrap; }
+    h1 { font-size: 23px; }
+  }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z"/><path d="m7 16.5-4.74-2.85"/><path d="m7 16.5 5-3"/><path d="M17 16.5 21.74 13.65"/><path d="M17 16.5v5.17"/><path d="M17 16.5 12 13.5v5.5l5 3 1.94-1.16"/><path d="M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z"/><path d="M12 8 7.26 5.15"/><path d="M12 8l4.74-2.85"/><path d="M12 8v5.5"/></svg>
+      </span>
+      <div>
+        <strong>Northstar</strong>
+        <span>运营管理平台</span>
+      </div>
+      <button class="icon-button sidebar__close" aria-label="关闭导航" id="closeNav" type="button">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+
+    <nav class="navigation" aria-label="主导航">
+      <a href="/dashboard" data-prototype-route="/dashboard" class="navigation__link">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+        <span>仪表盘</span>
+      </a>
+      <a href="/users" data-prototype-route="/users" class="navigation__link">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span>用户管理</span>
+      </a>
+      <a href="/orders" data-prototype-route="/orders" class="navigation__link is-active">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+        <span>订单管理</span>
+      </a>
+    </nav>
+
+    <div class="sidebar__footer">
+      <span class="avatar">陈</span>
+      <div><strong>陈晓宁</strong><span>系统管理员</span></div>
+    </div>
+  </aside>
+
+  <div class="scrim" id="scrim"></div>
+
+  <section class="main-column">
+    <header class="topbar">
+      <button class="icon-button mobile-menu" aria-label="打开导航" id="openNav" type="button">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+      </button>
+      <span class="topbar__context">企业运营中心</span>
+      <div class="topbar__actions">
+        <button class="icon-button" aria-label="查看通知" type="button">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+        </button>
+        <span class="environment"><i></i>生产环境</span>
+      </div>
+    </header>
+
+    <main id="main-content" class="page-container">
+      <section>
+        <div class="page-heading">
+          <div>
+            <span class="eyebrow">交易与履约</span>
+            <h1>订单管理</h1>
+            <p>跟踪近期订单金额和处理状态。</p>
+          </div>
+          <button class="secondary-button" type="button">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            导出订单
+          </button>
+        </div>
+
+        <section class="content-section">
+          <div class="section-heading">
+            <div>
+              <h2>全部订单</h2>
+              <p>最近创建的 <span id="orderCount">5</span> 笔订单</p>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr><th>订单号</th><th>客户</th><th>商品</th><th>金额</th><th>状态</th><th>创建时间</th></tr>
+              </thead>
+              <tbody id="orderTbody">
+                <tr><td><strong class="order-id">NS-20260712-1042</strong></td><td>远望科技</td><td>企业协作专业版</td><td class="number">¥12,999</td><td><span class="status" data-status="paid">已支付</span></td><td>2026-07-12 09:18</td></tr>
+                <tr><td><strong class="order-id">NS-20260712-1041</strong></td><td>嘉禾零售</td><td>数据分析扩展包</td><td class="number">¥3,680</td><td><span class="status" data-status="pending">待支付</span></td><td>2026-07-12 08:42</td></tr>
+                <tr><td><strong class="order-id">NS-20260711-1038</strong></td><td>清源设计</td><td>企业协作基础版</td><td class="number">¥4,999</td><td><span class="status" data-status="paid">已支付</span></td><td>2026-07-11 17:26</td></tr>
+                <tr><td><strong class="order-id">NS-20260711-1035</strong></td><td>星洲物流</td><td>自动化工作流套件</td><td class="number">¥8,600</td><td><span class="status" data-status="refunded">已退款</span></td><td>2026-07-11 14:08</td></tr>
+                <tr><td><strong class="order-id">NS-20260710-1029</strong></td><td>北辰教育</td><td>企业协作专业版</td><td class="number">¥12,999</td><td><span class="status" data-status="paid">已支付</span></td><td>2026-07-10 11:35</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+  </section>
+</div>
+<script>
+  (function () {
+    var sidebar = document.getElementById('sidebar');
+    var scrim = document.getElementById('scrim');
+    var openNav = document.getElementById('openNav');
+    var closeNav = document.getElementById('closeNav');
+
+    function open() { sidebar.classList.add('sidebar--open'); }
+    function close() { sidebar.classList.remove('sidebar--open'); }
+
+    openNav.addEventListener('click', open);
+    closeNav.addEventListener('click', close);
+    scrim.addEventListener('click', close);
+
+    // Navigation anchors stay as real internal routes; intercept to keep prototype sandbox-only.
+    var navLinks = document.querySelectorAll('.navigation__link');
+    navLinks.forEach(function (a) {
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        // In a real Vue app this would route via Vue Router; the prototype keeps the current Orders view.
+        navLinks.forEach(function (n) { n.classList.remove('is-active'); });
+        a.classList.add('is-active');
+        close();
+      });
+    });
+  })();
+</script>
+</body>
+</html>

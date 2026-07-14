@@ -10,6 +10,7 @@ import {
   getGlobalEventsStreamUrl,
   getIssueBudget,
   getIssueOrchestrationPolicy,
+  getMcpCatalog,
   getProcessLogsUrl,
   getProcessMessagesUrl,
   getProjectResume,
@@ -40,6 +41,7 @@ import {
   updateRuntimeCatalog as splitUpdateRuntimeCatalog,
   validateRuntimeCatalog as splitValidateRuntimeCatalog,
 } from "../src/lib/api/runtime";
+import { getMcpCatalog as splitGetMcpCatalog } from "../src/lib/api/mcp";
 import {
   getEmbeddingStatus as splitGetEmbeddingStatus,
   getTeamNotes as splitGetTeamNotes,
@@ -62,6 +64,7 @@ test("monolithic api entrypoint preserves split knowledge/stats compatibility ex
   assert.equal(typeof getCodexCostStats, "function");
   assert.equal(typeof getIssueBudget, "function");
   assert.equal(typeof getIssueOrchestrationPolicy, "function");
+  assert.equal(typeof getMcpCatalog, "function");
   assert.equal(typeof autoStartIssueGraph, "function");
   assert.equal(typeof getProjectResume, "function");
   assert.equal(typeof importProjectResumePdf, "function");
@@ -96,6 +99,7 @@ test("split api modules expose runtime-critical functions directly", () => {
   assert.equal(typeof splitUpdateRuntimeCatalog, "function");
   assert.equal(typeof splitValidateRuntimeCatalog, "function");
   assert.equal(typeof splitTestRuntimeExecutor, "function");
+  assert.equal(typeof splitGetMcpCatalog, "function");
   assert.equal(typeof splitGetEmbeddingStatus, "function");
   assert.equal(typeof splitSearchKnowledge, "function");
   assert.equal(typeof splitTriggerKnowledgeReindex, "function");

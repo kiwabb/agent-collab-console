@@ -10,10 +10,14 @@ import signal
 from pathlib import Path
 from typing import Awaitable, Callable, Literal  # noqa: UP035
 
-import httpx
 from pydantic import BaseModel, Field
 
 from app.application import timeouts
+from app.application.local_service_probe import (
+    LocalServiceUrlError,
+    canonicalize_local_service_url,
+    probe_local_service,
+)
 from app.application.project_command import (
     ProjectCommandError,
     build_project_child_env,
@@ -421,13 +425,20 @@ def _candidate_access_urls(
     root: Path, suggestion: ProjectScriptSuggestion, logs: list[str]
 ) -> list[str]:
     urls: list[str] = []
+    raw_urls: list[str] = []
     if suggestion.access_url:
-        urls.append(_normalize_local_url(suggestion.access_url))
+        raw_urls.append(suggestion.access_url)
     for line in logs:
-        urls.extend(_normalize_local_url(match) for match in _LOCAL_URL_RE.findall(line))
+        raw_urls.extend(_normalize_local_url(match) for match in _LOCAL_URL_RE.findall(line))
     inferred = _infer_access_url(root, suggestion.run_command)
     if inferred:
-        urls.append(inferred)
+        raw_urls.append(inferred)
+
+    for raw_url in raw_urls:
+        try:
+            urls.append(canonicalize_local_service_url(raw_url.rstrip(".,;")))
+        except LocalServiceUrlError:
+            continue
 
     seen: set[str] = set()
     unique: list[str] = []
@@ -444,9 +455,11 @@ async def _read_process_lines(
     tag: str,
     logs: list[str],
     redactor: SecretOutputRedactor,
+    first_line_or_eof: asyncio.Event,
     limit: int = 80,
 ) -> None:
     if stream is None:
+        first_line_or_eof.set()
         return
     try:
         while len(logs) < limit:
@@ -455,6 +468,7 @@ async def _read_process_lines(
                 break
             line = raw.decode("utf-8", errors="replace").rstrip("\n")
             logs.append(redactor.redact(f"{tag}: {line}")[:1000])
+            first_line_or_eof.set()
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -463,6 +477,18 @@ async def _read_process_lines(
             tag,
             exc_info=True,
         )
+    finally:
+        first_line_or_eof.set()
+
+
+async def _wait_for_process_startup_output(signals: list[asyncio.Event]) -> None:
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*(signal.wait() for signal in signals)),
+            timeout=timeouts.project_script_log_capture_timeout_s(),
+        )
+    except asyncio.TimeoutError:  # noqa: UP041
+        return
 
 
 async def _terminate_process(proc: asyncio.subprocess.Process) -> None:
@@ -487,17 +513,15 @@ async def _terminate_process(proc: asyncio.subprocess.Process) -> None:
 async def _probe_access_urls(urls: list[str]) -> tuple[str | None, str | None]:
     if not urls:
         return None, "No local access URL or port was discoverable."
-    async with httpx.AsyncClient(timeout=1.5, follow_redirects=True, trust_env=False) as client:
-        last_error = None
-        for url in urls:
-            try:
-                response = await client.get(url)
-            except Exception as exc:  # noqa: BLE001, RUF100
-                last_error = str(exc)
-                continue
-            if response.status_code < 500:
-                return url, f"Access check reached {url} with HTTP {response.status_code}."
-            last_error = f"HTTP {response.status_code}"
+    last_error: str | None = None
+    for url in urls:
+        result = await probe_local_service(url)
+        if result["state"] == "reachable":
+            return (
+                result["url"],
+                f"Access check reached {result['url']} with HTTP {result['http_status']}.",
+            )
+        last_error = result["error"] or result["state"]
     return None, f"Access checks failed for {', '.join(urls)}: {last_error or 'unreachable'}."
 
 
@@ -561,9 +585,14 @@ async def verify_project_launch(
             ),
         )
 
+    reader_signals = [asyncio.Event(), asyncio.Event()]
     readers = [
-        asyncio.create_task(_read_process_lines(proc.stdout, "stdout", logs, redactor)),
-        asyncio.create_task(_read_process_lines(proc.stderr, "stderr", logs, redactor)),
+        asyncio.create_task(
+            _read_process_lines(proc.stdout, "stdout", logs, redactor, reader_signals[0])
+        ),
+        asyncio.create_task(
+            _read_process_lines(proc.stderr, "stderr", logs, redactor, reader_signals[1])
+        ),
     ]
     running_after_timeout = False
     effective_timeout_s = (
@@ -575,7 +604,7 @@ async def verify_project_launch(
         except asyncio.TimeoutError:  # noqa: UP041
             running_after_timeout = True
             exit_code = None
-        await asyncio.sleep(0.2)
+        await _wait_for_process_startup_output(reader_signals)
         urls = _candidate_access_urls(root, suggestion, logs)
         reached_url, access_message = await _probe_access_urls(urls)
         if reached_url is not None:

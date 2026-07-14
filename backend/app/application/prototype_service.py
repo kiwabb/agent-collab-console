@@ -2,8 +2,8 @@ from __future__ import annotations
 
 """Prototype design tool service.
 
-Streams a single-file HTML prototype from the LLM, versionizes iterations,
-and mirrors each version to disk under `<repo_path>/.agent-collab/prototypes/`.
+Streams a single-file HTML prototype from the LLM and persists each successful
+version under `<repo_path>/prototypes/` before committing its database record.
 
 SSE contract (consumed by `frontend/src/features/prototype/PrototypeCanvas.tsx`):
     event: meta   -> {"model": "..."}
@@ -28,22 +28,27 @@ import logging  # noqa: E402
 import os  # noqa: E402, F401
 import re  # noqa: E402
 from collections.abc import AsyncIterator, Mapping  # noqa: E402
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass, replace  # noqa: E402
 from datetime import datetime  # noqa: E402
-from pathlib import Path  # noqa: E402
 from typing import Protocol  # noqa: E402
 from uuid import uuid4  # noqa: E402
 
 import httpx  # noqa: E402
 
 from app.adapters.async_sqlite_store import AsyncSQLiteStore  # noqa: E402
+from app.application import timeouts  # noqa: E402
 from app.application.llm_runner import (  # noqa: E402
     StreamingPlanContext,
     _llm_http_client,
     llm_api_url,
     resolve_streaming_context,
 )
-from app.domain.models import Project, Prototype, PrototypeVersion, RuntimeCatalog  # noqa: E402
+from app.application.prototype_version_artifacts import (  # noqa: E402
+    PrototypeVersionArtifactError,
+    read_project_version,
+    write_project_version,
+)
+from app.domain.models import Prototype, PrototypeVersion, RuntimeCatalog  # noqa: E402
 from app.json_safety import object_dict, parse_json_object, string_value  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -68,7 +73,6 @@ class StreamEvent:
 
 class RuntimeCatalogLoader(Protocol):
     async def load_catalog(self) -> RuntimeCatalog: ...
-
 
 
 _MD_FENCE = re.compile(r"^```(?:html|HTML)?\s*\n(.*?)\n```\s*$", re.DOTALL)
@@ -205,6 +209,7 @@ async def _stream_html(prompt: str, ctx: StreamingPlanContext) -> AsyncIterator[
                             "because the model reached its max token limit"
                         )
                     return
+            raise RuntimeError("prototype stream ended before the required message_stop event")
 
 
 # ---------------------------------------------------------------------------
@@ -288,12 +293,19 @@ class PrototypeService:
         }
 
     async def get_version_html(self, prototype_id: str, version_no: int) -> str:
+        prototype = await self.get(prototype_id)
         version = await self.store.load_prototype_version(prototype_id, version_no)
         if version is None:
             raise PrototypeError(
                 f"version not found: prototype={prototype_id} version={version_no}"
             )
-        return version.html
+        project = await self.store.load_project(prototype.project_id)
+        if project is None:
+            raise PrototypeError(f"project missing for prototype: {prototype_id}")
+        try:
+            return read_project_version(project, version)
+        except PrototypeVersionArtifactError as exc:
+            raise PrototypeError(str(exc)) from exc
 
     async def delete(self, prototype_id: str) -> None:
         await self.get(prototype_id)  # 404 surface
@@ -302,7 +314,9 @@ class PrototypeService:
     # --- Streaming generation --------------------------------------------------
 
     async def stream_events(
-        self, prototype_id: str, instruction: str | None
+        self,
+        prototype_id: str,
+        instruction: str | None,
     ) -> AsyncIterator[StreamEvent]:
         """Yield SSE events for the client.
 
@@ -319,6 +333,7 @@ class PrototypeService:
         if ctx is None:
             yield StreamEvent("error", {"message": "no usable LLM executor configured"})
             return
+        ctx = replace(ctx, max_tokens=timeouts.prototype_generation_max_tokens())
 
         yield StreamEvent("meta", {"model": ctx.model})
 
@@ -328,7 +343,7 @@ class PrototypeService:
             latest = await self.store.load_prototype_version(
                 prototype_id, prototype.current_version
             )
-            if latest is None or not latest.html:
+            if latest is None or (latest.disk_path is None and not latest.html):
                 yield StreamEvent(
                     "error",
                     {
@@ -339,20 +354,24 @@ class PrototypeService:
                     },
                 )
                 return
-            prompt = build_iteration_system_prompt(latest.html, iteration)
-            next_version = prototype.current_version + 1
+            try:
+                latest_html = read_project_version(project, latest)
+            except PrototypeVersionArtifactError as exc:
+                yield StreamEvent("error", {"message": str(exc)})
+                return
+            prompt = build_iteration_system_prompt(latest_html, iteration)
             version_instruction = iteration
         else:
             seed = await self.store.load_prototype_version(prototype_id, 0)
-            if seed is None or not (seed.instruction or "").strip():
+            seed_instruction = seed.instruction if seed is not None else None
+            if seed_instruction is None or not seed_instruction.strip():
                 yield StreamEvent(
                     "error",
                     {"message": f"prototype {prototype_id} has no brief to generate from"},
                 )
                 return
-            prompt = build_html_system_prompt(seed.instruction or "")
-            next_version = prototype.current_version + 1
-            version_instruction = seed.instruction
+            prompt = build_html_system_prompt(seed_instruction)
+            version_instruction = seed_instruction
 
         # Stream + accumulate. We deliberately do NOT write the DB row until
         # the model finishes; a mid-stream client disconnect must leave the
@@ -376,44 +395,35 @@ class PrototypeService:
         if not is_complete_html_document(cleaned):
             yield StreamEvent(
                 "error",
-                {
-                    "message": (
-                        "LLM returned an incomplete HTML document; generation was not saved"
-                    )
-                },
+                {"message": ("LLM returned an incomplete HTML document; generation was not saved")},
             )
             return
 
-        # Disk mirror: <repo>/.agent-collab/prototypes/<id>/v<n>/index.html
-        version_id = str(uuid4())
-        disk_target = self._version_disk_path(project, prototype.id, next_version)
-        disk_path: Path | None = disk_target
-        try:
-            disk_target.parent.mkdir(parents=True, exist_ok=True)
-            disk_target.write_text(cleaned, encoding="utf-8")
-        except OSError as exc:
-            # Disk failure is non-fatal: the DB still holds the html. We
-            # log + keep the disk_path as None so the UI doesn't show a
-            # broken link.
-            logger.warning("prototype disk mirror failed: %s", exc)
-            disk_path = None
-
         now = datetime.now()
         version = PrototypeVersion(
-            id=version_id,
+            id=str(uuid4()),
             prototype_id=prototype_id,
-            version_no=next_version,
+            version_no=0,
             instruction=version_instruction,
             html=cleaned,
-            disk_path=str(disk_path) if disk_path else None,
+            disk_path=None,
             created_at=now,
         )
-        await self.store.save_prototype_version(version)
+        try:
+            version = write_project_version(project, version)
+        except PrototypeVersionArtifactError as exc:
+            yield StreamEvent("error", {"message": str(exc)})
+            return
+        # Keep the immutable file if append raises; the commit may have reached
+        # SQLite even when the caller did not receive confirmation.
+        version = await self.store.append_prototype_version(version)
 
         yield StreamEvent(
             "done",
             {
                 "version_no": version.version_no,
+                "version_id": version.id,
+                "instruction": version.instruction,
                 "html": version.html,
                 "disk_path": version.disk_path,
             },
@@ -495,19 +505,6 @@ class PrototypeService:
                 )
 
         yield StreamEvent("all_done", {"ok": ok, "failed": failed})
-
-    # --- Disk helpers ----------------------------------------------------------
-
-    @staticmethod
-    def _version_disk_path(project: Project, prototype_id: str, version_no: int) -> Path:
-        return (
-            Path(project.repo_path)
-            / ".agent-collab"
-            / "prototypes"
-            / prototype_id
-            / f"v{version_no}"
-            / "index.html"
-        )
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,7965 @@
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import re
+from datetime import datetime
+from pathlib import Path
+
+import aiosqlite
+
+from app.domain.structured_prototype import (
+    PrototypeCheckpointRecord,
+    PrototypeCommandAppendResult,
+    PrototypeCommandBatchRecord,
+    PrototypeDocumentRecord,
+    PrototypeDraftRecord,
+    PrototypeDraftRecoveryBundle,
+    PrototypeObjectDescriptor,
+    PrototypeObjectMediaType,
+    PrototypeObjectOwnerKind,
+    PrototypeObjectPayloadType,
+    PrototypeObjectReference,
+    PrototypeObjectStorageCodec,
+    PrototypeOperation,
+    PrototypeOperationCreateResult,
+    PrototypeOperationEvent,
+    PrototypeOperationKind,
+    PrototypeOperationStatus,
+    PrototypeOperationStep,
+    PrototypeOperationStepStatus,
+    PrototypePublicationCompletionResult,
+    PrototypePublicationFreezeResult,
+    PrototypePublishedRecord,
+    PrototypeRenderArtifactRecord,
+    PrototypeRenderRunRecord,
+    PrototypeRevisionRecord,
+    PrototypeRuntimeCheckpointRecord,
+    PrototypeRuntimeEventAppendResult,
+    PrototypeRuntimeEventBatchRecord,
+    PrototypeRuntimeRecoveryBundle,
+    PrototypeRuntimeSessionRecord,
+)
+from app.domain.structured_prototype_ai import (
+    PrototypeAiEditRunRecord,
+    PrototypeAiMessageRecord,
+    PrototypeAiMessageRunCreateResult,
+    PrototypeAiThreadRecord,
+    PrototypeAiThreadSnapshot,
+)
+from app.domain.structured_prototype_generation import (
+    PrototypeDocumentGenerationAcceptResult,
+    PrototypeDocumentGenerationCreateResult,
+    PrototypeDocumentGenerationItemRecord,
+    PrototypeDocumentGenerationJobRecord,
+    PrototypeDocumentGenerationRunCreateResult,
+    PrototypeDocumentGenerationRunRecord,
+    PrototypeDocumentGenerationSnapshot,
+)
+
+SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+MAX_REPLAY_TAIL_BATCHES = 200
+
+STRUCTURED_PROTOTYPE_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS prototype_objects (
+    project_id TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    media_type TEXT NOT NULL CHECK (media_type = 'application/json'),
+    storage_codec TEXT NOT NULL CHECK (storage_codec = 'zstd'),
+    storage_codec_version TEXT NOT NULL,
+    canonical_byte_size INTEGER NOT NULL CHECK (canonical_byte_size >= 0),
+    stored_byte_size INTEGER NOT NULL CHECK (stored_byte_size >= 0),
+    storage_hash TEXT NOT NULL,
+    storage_key TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, content_hash),
+    UNIQUE (storage_key)
+);
+
+CREATE TABLE IF NOT EXISTS prototype_operations (
+    id TEXT PRIMARY KEY,
+    operation_kind TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    resource_kind TEXT NOT NULL,
+    resource_id TEXT,
+    client_request_id TEXT NOT NULL,
+    correlation_id TEXT NOT NULL,
+    parent_operation_id TEXT,
+    status TEXT NOT NULL CHECK (
+        status IN ('queued', 'running', 'succeeded', 'failed', 'interrupted', 'cancelled')
+    ),
+    phase TEXT NOT NULL,
+    attempt INTEGER NOT NULL CHECK (attempt > 0),
+    request_manifest_hash TEXT NOT NULL,
+    config_manifest_hash TEXT NOT NULL,
+    result_manifest_hash TEXT,
+    failure_evidence_hash TEXT,
+    error_code TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    UNIQUE (project_id, operation_kind, client_request_id),
+    FOREIGN KEY (parent_operation_id) REFERENCES prototype_operations(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_operation_steps (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL,
+    parent_step_id TEXT,
+    step_kind TEXT NOT NULL,
+    step_ordinal INTEGER NOT NULL CHECK (step_ordinal >= 0),
+    attempt INTEGER NOT NULL CHECK (attempt > 0),
+    status TEXT NOT NULL CHECK (
+        status IN ('pending', 'running', 'succeeded', 'failed', 'skipped', 'interrupted')
+    ),
+    phase TEXT NOT NULL,
+    input_manifest_hash TEXT NOT NULL,
+    config_manifest_hash TEXT NOT NULL,
+    output_manifest_hash TEXT,
+    completion_evidence_kind TEXT,
+    completion_evidence_ref TEXT,
+    error_code TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    UNIQUE (operation_id, step_ordinal, attempt),
+    FOREIGN KEY (operation_id) REFERENCES prototype_operations(id) ON DELETE RESTRICT,
+    FOREIGN KEY (parent_step_id) REFERENCES prototype_operation_steps(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_operation_events (
+    operation_id TEXT NOT NULL,
+    event_no INTEGER NOT NULL CHECK (event_no >= 0),
+    step_id TEXT,
+    event_kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    input_hash TEXT,
+    output_hash TEXT,
+    evidence_hash TEXT,
+    error_code TEXT,
+    occurred_at TEXT NOT NULL,
+    PRIMARY KEY (operation_id, event_no),
+    FOREIGN KEY (operation_id) REFERENCES prototype_operations(id) ON DELETE RESTRICT,
+    FOREIGN KEY (step_id) REFERENCES prototype_operation_steps(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_documents (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    published_revision_no INTEGER,
+    active_draft_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (published_revision_no IS NULL OR published_revision_no > 0),
+    FOREIGN KEY (active_draft_id) REFERENCES prototype_drafts(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_drafts (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    base_revision_no INTEGER,
+    status TEXT NOT NULL CHECK (status IN ('active', 'publishing', 'closed', 'corrupt')),
+    head_sequence_no INTEGER NOT NULL CHECK (head_sequence_no >= 0),
+    head_document_hash TEXT NOT NULL,
+    latest_checkpoint_id TEXT,
+    publish_revision_no INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    closed_at TEXT,
+    CHECK (base_revision_no IS NULL OR base_revision_no > 0),
+    CHECK (publish_revision_no IS NULL OR publish_revision_no > 0),
+    FOREIGN KEY (document_id) REFERENCES prototype_documents(id) ON DELETE RESTRICT,
+    FOREIGN KEY (latest_checkpoint_id) REFERENCES prototype_checkpoints(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_checkpoints (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    draft_id TEXT,
+    revision_id TEXT,
+    checkpoint_kind TEXT NOT NULL CHECK (
+        checkpoint_kind IN ('draft', 'revision', 'generation_accept', 'ai_apply')
+    ),
+    checkpoint_sequence_no INTEGER NOT NULL CHECK (checkpoint_sequence_no >= 0),
+    document_object_hash TEXT NOT NULL,
+    document_schema_version INTEGER NOT NULL CHECK (document_schema_version > 0),
+    command_contract_version INTEGER NOT NULL CHECK (command_contract_version > 0),
+    document_hash TEXT NOT NULL,
+    created_by_operation_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK (document_hash = document_object_hash),
+    CHECK ((draft_id IS NULL) <> (revision_id IS NULL)),
+    UNIQUE (draft_id, checkpoint_sequence_no),
+    UNIQUE (revision_id),
+    FOREIGN KEY (document_id) REFERENCES prototype_documents(id) ON DELETE RESTRICT,
+    FOREIGN KEY (draft_id) REFERENCES prototype_drafts(id) ON DELETE RESTRICT,
+    FOREIGN KEY (created_by_operation_id) REFERENCES prototype_operations(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_command_batches (
+    id TEXT PRIMARY KEY,
+    draft_id TEXT NOT NULL,
+    base_sequence_no INTEGER NOT NULL CHECK (base_sequence_no >= 0),
+    result_sequence_no INTEGER NOT NULL CHECK (result_sequence_no = base_sequence_no + 1),
+    client_request_id TEXT NOT NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('user', 'ai', 'system')),
+    operation_kind TEXT NOT NULL CHECK (operation_kind IN ('forward', 'undo', 'redo')),
+    target_batch_id TEXT,
+    command_contract_version INTEGER NOT NULL CHECK (command_contract_version > 0),
+    commands_json TEXT NOT NULL,
+    inverse_commands_json TEXT NOT NULL,
+    command_batch_hash TEXT NOT NULL,
+    base_document_hash TEXT NOT NULL,
+    result_document_hash TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (draft_id, result_sequence_no),
+    UNIQUE (draft_id, client_request_id),
+    FOREIGN KEY (draft_id) REFERENCES prototype_drafts(id) ON DELETE RESTRICT,
+    FOREIGN KEY (target_batch_id) REFERENCES prototype_command_batches(id) ON DELETE RESTRICT,
+    FOREIGN KEY (operation_id) REFERENCES prototype_operations(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_ai_threads (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active', 'archived')),
+    summary_json TEXT,
+    summary_through_message_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (document_id) REFERENCES prototype_documents(id) ON DELETE RESTRICT,
+    FOREIGN KEY (summary_through_message_id)
+        REFERENCES prototype_ai_messages(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_ai_messages (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    client_message_id TEXT,
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    kind TEXT NOT NULL CHECK (
+        kind IN ('instruction', 'answer', 'clarification', 'proposal', 'error')
+    ),
+    content TEXT NOT NULL,
+    run_id TEXT,
+    command_batch_id TEXT,
+    status TEXT NOT NULL CHECK (
+        status IN ('pending', 'completed', 'failed', 'rejected', 'applied')
+    ),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (thread_id, client_message_id),
+    FOREIGN KEY (thread_id) REFERENCES prototype_ai_threads(id) ON DELETE RESTRICT,
+    FOREIGN KEY (command_batch_id) REFERENCES prototype_command_batches(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_ai_edit_runs (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    user_message_id TEXT NOT NULL UNIQUE,
+    assistant_message_id TEXT UNIQUE,
+    document_id TEXT NOT NULL,
+    draft_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL UNIQUE,
+    retry_of_run_id TEXT,
+    status TEXT NOT NULL CHECK (
+        status IN (
+            'queued', 'building_context', 'generating', 'validating',
+            'rendering_preview', 'preview_ready', 'completed_answer',
+            'completed_clarification', 'applied', 'rejected', 'stale',
+            'failed', 'interrupted'
+        )
+    ),
+    scope_json TEXT NOT NULL,
+    base_head_sequence_no INTEGER NOT NULL CHECK (base_head_sequence_no >= 0),
+    base_document_hash TEXT NOT NULL,
+    context_object_hash TEXT,
+    outcome_object_hash TEXT,
+    submission_id TEXT,
+    submission_request_hash TEXT,
+    submission_accepted_at TEXT,
+    replay_manifest_object_hash TEXT,
+    proposed_command_batch_json TEXT,
+    proposed_command_batch_hash TEXT,
+    candidate_object_hash TEXT,
+    preview_render_run_id TEXT,
+    preview_artifact_id TEXT,
+    summary TEXT,
+    affected_entity_ids_json TEXT,
+    task_id TEXT,
+    execution_process_id TEXT,
+    error_code TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    FOREIGN KEY (thread_id) REFERENCES prototype_ai_threads(id) ON DELETE RESTRICT,
+    FOREIGN KEY (user_message_id) REFERENCES prototype_ai_messages(id) ON DELETE RESTRICT,
+    FOREIGN KEY (assistant_message_id) REFERENCES prototype_ai_messages(id) ON DELETE RESTRICT,
+    FOREIGN KEY (document_id) REFERENCES prototype_documents(id) ON DELETE RESTRICT,
+    FOREIGN KEY (draft_id) REFERENCES prototype_drafts(id) ON DELETE RESTRICT,
+    FOREIGN KEY (operation_id) REFERENCES prototype_operations(id) ON DELETE RESTRICT,
+    FOREIGN KEY (retry_of_run_id) REFERENCES prototype_ai_edit_runs(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_document_generation_jobs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    client_request_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN (
+            'queued', 'planning', 'awaiting_confirmation', 'generating',
+            'assembling', 'validating', 'rendering_preview', 'ready',
+            'accepted', 'failed', 'interrupted', 'cancelled'
+        )
+    ),
+    operation_id TEXT NOT NULL UNIQUE,
+    request_manifest_object_hash TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    context_manifest_object_hash TEXT NOT NULL,
+    blueprint_object_hash TEXT,
+    blueprint_version INTEGER NOT NULL CHECK (blueprint_version >= 0),
+    blueprint_hash TEXT,
+    candidate_object_hash TEXT,
+    candidate_document_hash TEXT,
+    preview_render_run_id TEXT,
+    preview_artifact_id TEXT,
+    preview_renderer_version TEXT,
+    preview_storage_key TEXT,
+    preview_output_hash TEXT,
+    preview_output_manifest_hash TEXT,
+    preview_visual_preflight_report_hash TEXT,
+    replay_manifest_object_hash TEXT,
+    document_id TEXT,
+    error_code TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    UNIQUE (project_id, client_request_id),
+    FOREIGN KEY (operation_id) REFERENCES prototype_operations(id) ON DELETE RESTRICT,
+    FOREIGN KEY (document_id) REFERENCES prototype_documents(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_document_generation_runs (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('queued', 'running', 'completed', 'failed', 'interrupted', 'cancelled')
+    ),
+    blueprint_hash TEXT,
+    total INTEGER NOT NULL CHECK (total > 0),
+    processed INTEGER NOT NULL CHECK (processed >= 0),
+    succeeded INTEGER NOT NULL CHECK (succeeded >= 0),
+    failed INTEGER NOT NULL CHECK (failed >= 0),
+    running INTEGER NOT NULL CHECK (running >= 0),
+    pending INTEGER NOT NULL CHECK (pending >= 0),
+    error_code TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    FOREIGN KEY (job_id) REFERENCES prototype_document_generation_jobs(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_document_generation_run_items (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('blueprint', 'foundation', 'page')),
+    item_key TEXT NOT NULL,
+    page_key TEXT,
+    status TEXT NOT NULL CHECK (
+        status IN ('pending', 'generating', 'validating', 'done', 'failed', 'interrupted')
+    ),
+    phase TEXT NOT NULL,
+    attempt INTEGER NOT NULL CHECK (attempt > 0),
+    task_kind TEXT NOT NULL,
+    operation_id TEXT NOT NULL UNIQUE,
+    context_object_hash TEXT NOT NULL,
+    submission_id TEXT,
+    submission_request_hash TEXT,
+    submission_normalized_fields_json TEXT NOT NULL DEFAULT '[]',
+    submission_accepted_at TEXT,
+    output_object_hash TEXT,
+    task_id TEXT,
+    execution_process_id TEXT,
+    error_code TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    UNIQUE (run_id, kind, item_key),
+    FOREIGN KEY (job_id) REFERENCES prototype_document_generation_jobs(id) ON DELETE RESTRICT,
+    FOREIGN KEY (run_id) REFERENCES prototype_document_generation_runs(id) ON DELETE RESTRICT,
+    FOREIGN KEY (operation_id) REFERENCES prototype_operations(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_revisions (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    revision_no INTEGER NOT NULL CHECK (revision_no > 0),
+    schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+    checkpoint_id TEXT NOT NULL UNIQUE,
+    document_object_hash TEXT NOT NULL,
+    document_hash TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('user', 'ai', 'initial_generation')),
+    created_at TEXT NOT NULL,
+    CHECK (document_hash = document_object_hash),
+    UNIQUE (document_id, revision_no),
+    FOREIGN KEY (document_id) REFERENCES prototype_documents(id) ON DELETE RESTRICT,
+    FOREIGN KEY (checkpoint_id) REFERENCES prototype_checkpoints(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_render_runs (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('ai_preview', 'publication')),
+    revision_id TEXT,
+    ai_edit_run_id TEXT,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'rendering', 'ready', 'failed', 'interrupted')),
+    renderer_version TEXT NOT NULL,
+    renderer_environment_version TEXT NOT NULL,
+    runtime_core_version TEXT NOT NULL,
+    runtime_core_source_hash TEXT NOT NULL,
+    runtime_core_bundle_hash TEXT NOT NULL,
+    state_machine_kernel_version TEXT NOT NULL,
+    render_runtime_image_hash TEXT NOT NULL,
+    browser_version TEXT NOT NULL,
+    font_pack_hash TEXT NOT NULL,
+    viewport_profile_hash TEXT NOT NULL,
+    sandbox_policy_version TEXT NOT NULL,
+    input_manifest_hash TEXT NOT NULL,
+    document_object_hash TEXT NOT NULL,
+    document_hash TEXT NOT NULL,
+    operation_id TEXT NOT NULL UNIQUE,
+    attempt INTEGER NOT NULL CHECK (attempt > 0),
+    artifact_id TEXT,
+    output_manifest_hash TEXT,
+    error_code TEXT,
+    error_message TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (document_hash = document_object_hash),
+    CHECK ((kind = 'publication' AND revision_id IS NOT NULL AND ai_edit_run_id IS NULL)
+        OR (kind = 'ai_preview' AND revision_id IS NULL AND ai_edit_run_id IS NOT NULL)),
+    UNIQUE (revision_id, attempt),
+    FOREIGN KEY (document_id) REFERENCES prototype_documents(id) ON DELETE RESTRICT,
+    FOREIGN KEY (revision_id) REFERENCES prototype_revisions(id) ON DELETE RESTRICT,
+    FOREIGN KEY (operation_id) REFERENCES prototype_operations(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_render_artifacts (
+    id TEXT PRIMARY KEY,
+    render_run_id TEXT NOT NULL UNIQUE,
+    document_id TEXT NOT NULL,
+    revision_id TEXT,
+    renderer_version TEXT NOT NULL,
+    document_hash TEXT NOT NULL,
+    output_hash TEXT NOT NULL,
+    output_manifest_hash TEXT NOT NULL,
+    storage_key TEXT NOT NULL UNIQUE,
+    entrypoint TEXT NOT NULL,
+    visual_preflight_report_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (render_run_id) REFERENCES prototype_render_runs(id) ON DELETE RESTRICT,
+    FOREIGN KEY (document_id) REFERENCES prototype_documents(id) ON DELETE RESTRICT,
+    FOREIGN KEY (revision_id) REFERENCES prototype_revisions(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_object_references (
+    project_id TEXT NOT NULL,
+    owner_kind TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    payload_type TEXT NOT NULL,
+    schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (
+        project_id,
+        owner_kind,
+        owner_id,
+        role,
+        content_hash,
+        payload_type,
+        schema_version
+    ),
+    FOREIGN KEY (project_id, content_hash)
+        REFERENCES prototype_objects(project_id, content_hash)
+        ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_runtime_sessions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    source_kind TEXT NOT NULL CHECK (
+        source_kind IN ('draft', 'ai_preview', 'published_revision')
+    ),
+    source_id TEXT NOT NULL,
+    pinned_document_object_hash TEXT NOT NULL,
+    runtime_core_version TEXT NOT NULL,
+    runtime_core_bundle_hash TEXT NOT NULL,
+    state_machine_kernel_version TEXT NOT NULL,
+    scenario_id TEXT NOT NULL,
+    scenario_hash TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('active', 'completed', 'interrupted', 'corrupt')
+    ),
+    head_sequence_no INTEGER NOT NULL CHECK (head_sequence_no >= 0),
+    head_state_hash TEXT NOT NULL,
+    head_view_model_hash TEXT NOT NULL,
+    latest_checkpoint_id TEXT,
+    recording_kind TEXT NOT NULL CHECK (
+        recording_kind IN ('studio_preview', 'recorded_review', 'shared_preview')
+    ),
+    allow_simulated_role_switch INTEGER NOT NULL CHECK (
+        allow_simulated_role_switch IN (0, 1)
+    ),
+    actor_subject_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    FOREIGN KEY (document_id) REFERENCES prototype_documents(id) ON DELETE RESTRICT,
+    FOREIGN KEY (latest_checkpoint_id)
+        REFERENCES prototype_runtime_checkpoints(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_runtime_event_batches (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    client_event_id TEXT NOT NULL,
+    base_sequence_no INTEGER NOT NULL CHECK (base_sequence_no >= 0),
+    result_sequence_no INTEGER NOT NULL CHECK (result_sequence_no = base_sequence_no + 1),
+    events_json TEXT NOT NULL,
+    event_batch_hash TEXT NOT NULL,
+    matched_rule_ids_json TEXT NOT NULL,
+    guard_report_hash TEXT NOT NULL,
+    effect_report_hash TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (
+        outcome IN ('applied', 'guard_false', 'validation_failed')
+    ),
+    base_state_hash TEXT NOT NULL,
+    result_state_hash TEXT NOT NULL,
+    result_view_model_hash TEXT NOT NULL,
+    runtime_core_version TEXT NOT NULL,
+    runtime_core_bundle_hash TEXT NOT NULL,
+    state_machine_kernel_version TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (session_id, client_event_id),
+    UNIQUE (session_id, result_sequence_no),
+    FOREIGN KEY (session_id) REFERENCES prototype_runtime_sessions(id) ON DELETE RESTRICT,
+    FOREIGN KEY (operation_id) REFERENCES prototype_operations(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS prototype_runtime_checkpoints (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    checkpoint_sequence_no INTEGER NOT NULL CHECK (checkpoint_sequence_no >= 0),
+    state_object_hash TEXT NOT NULL,
+    runtime_state_schema_version INTEGER NOT NULL CHECK (runtime_state_schema_version > 0),
+    runtime_event_contract_version INTEGER NOT NULL CHECK (runtime_event_contract_version > 0),
+    state_hash TEXT NOT NULL,
+    view_model_hash TEXT NOT NULL,
+    created_by_operation_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (session_id, checkpoint_sequence_no),
+    FOREIGN KEY (session_id) REFERENCES prototype_runtime_sessions(id) ON DELETE RESTRICT,
+    FOREIGN KEY (created_by_operation_id) REFERENCES prototype_operations(id) ON DELETE RESTRICT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prototype_documents_one_active_draft
+    ON prototype_drafts(document_id)
+    WHERE status IN ('active', 'publishing');
+CREATE INDEX IF NOT EXISTS idx_prototype_documents_project_updated
+    ON prototype_documents(project_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_prototype_command_batches_draft_sequence
+    ON prototype_command_batches(draft_id, result_sequence_no);
+CREATE INDEX IF NOT EXISTS idx_prototype_checkpoints_draft_sequence
+    ON prototype_checkpoints(draft_id, checkpoint_sequence_no);
+CREATE INDEX IF NOT EXISTS idx_prototype_operations_project_created
+    ON prototype_operations(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_prototype_operation_steps_operation
+    ON prototype_operation_steps(operation_id, step_ordinal, attempt);
+CREATE INDEX IF NOT EXISTS idx_prototype_object_references_owner
+    ON prototype_object_references(project_id, owner_kind, owner_id);
+CREATE INDEX IF NOT EXISTS idx_prototype_object_references_hash
+    ON prototype_object_references(project_id, content_hash);
+CREATE INDEX IF NOT EXISTS idx_prototype_runtime_sessions_document_created
+    ON prototype_runtime_sessions(document_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_prototype_runtime_sessions_status_updated
+    ON prototype_runtime_sessions(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_prototype_runtime_event_batches_session_sequence
+    ON prototype_runtime_event_batches(session_id, result_sequence_no);
+CREATE INDEX IF NOT EXISTS idx_prototype_runtime_checkpoints_session_sequence
+    ON prototype_runtime_checkpoints(session_id, checkpoint_sequence_no);
+CREATE INDEX IF NOT EXISTS idx_prototype_revisions_document_revision
+    ON prototype_revisions(document_id, revision_no);
+CREATE INDEX IF NOT EXISTS idx_prototype_render_runs_document_status
+    ON prototype_render_runs(document_id, status);
+CREATE INDEX IF NOT EXISTS idx_prototype_render_artifacts_document_revision
+    ON prototype_render_artifacts(document_id, revision_id);
+CREATE INDEX IF NOT EXISTS idx_prototype_ai_threads_document_updated
+    ON prototype_ai_threads(document_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_prototype_ai_messages_thread_created
+    ON prototype_ai_messages(thread_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_prototype_ai_edit_runs_thread_created
+    ON prototype_ai_edit_runs(thread_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_prototype_document_generation_jobs_project_created
+    ON prototype_document_generation_jobs(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_prototype_document_generation_runs_job_created
+    ON prototype_document_generation_runs(job_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_prototype_document_generation_items_run_kind
+    ON prototype_document_generation_run_items(run_id, kind, item_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prototype_document_generation_one_active_project
+    ON prototype_document_generation_jobs(project_id)
+    WHERE status IN (
+        'queued', 'planning', 'awaiting_confirmation', 'generating',
+        'assembling', 'validating', 'rendering_preview', 'ready'
+    );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prototype_ai_edit_runs_one_active_draft
+    ON prototype_ai_edit_runs(draft_id)
+    WHERE status IN (
+        'queued', 'building_context', 'generating', 'validating', 'rendering_preview'
+    );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prototype_ai_edit_runs_one_open_draft
+    ON prototype_ai_edit_runs(draft_id)
+    WHERE status IN (
+        'queued', 'building_context', 'generating', 'validating',
+        'rendering_preview', 'preview_ready'
+    );
+"""
+
+
+class StructuredPrototypeStoreError(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _corrupt(field: str) -> StructuredPrototypeStoreError:
+    return StructuredPrototypeStoreError(
+        "object_descriptor_corrupt",
+        f"prototype persistence field is invalid: {field}",
+    )
+
+
+def _required_str(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise _corrupt(field)
+    return value
+
+
+def _optional_str(value: object, field: str) -> str | None:
+    if value is None:
+        return None
+    return _required_str(value, field)
+
+
+def _required_non_negative_int(value: object, field: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise _corrupt(field)
+    return value
+
+
+def _required_positive_int(value: object, field: str) -> int:
+    parsed = _required_non_negative_int(value, field)
+    if parsed == 0:
+        raise _corrupt(field)
+    return parsed
+
+
+def _optional_positive_int(value: object, field: str) -> int | None:
+    if value is None:
+        return None
+    return _required_positive_int(value, field)
+
+
+def _required_sqlite_bool(value: object, field: str) -> bool:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise _corrupt(field)
+    if value == 0:
+        return False
+    if value == 1:
+        return True
+    raise _corrupt(field)
+
+
+def _required_hash(value: object, field: str) -> str:
+    parsed = _required_str(value, field)
+    if SHA256_RE.fullmatch(parsed) is None:
+        raise _corrupt(field)
+    return parsed
+
+
+def _optional_hash(value: object, field: str) -> str | None:
+    if value is None:
+        return None
+    return _required_hash(value, field)
+
+
+def _literal[StringLiteral: str](
+    value: object,
+    allowed: tuple[StringLiteral, ...],
+    field: str,
+) -> StringLiteral:
+    if isinstance(value, str):
+        for candidate in allowed:
+            if value == candidate:
+                return candidate
+    raise _corrupt(field)
+
+
+def _media_type(value: object) -> PrototypeObjectMediaType:
+    return _literal(value, ("application/json",), "media_type")
+
+
+def _storage_codec(value: object) -> PrototypeObjectStorageCodec:
+    return _literal(value, ("zstd",), "storage_codec")
+
+
+def _owner_kind(value: object) -> PrototypeObjectOwnerKind:
+    return _literal(
+        value,
+        (
+            "checkpoint",
+            "generation_job",
+            "generation_run",
+            "generation_item",
+            "ai_edit_run",
+            "render_run",
+            "runtime_session",
+            "runtime_checkpoint",
+            "replay_manifest",
+        ),
+        "owner_kind",
+    )
+
+
+def _payload_type(value: object) -> PrototypeObjectPayloadType:
+    return _literal(
+        value,
+        (
+            "prototype_document",
+            "generation_request_manifest",
+            "generation_context_manifest",
+            "generation_blueprint",
+            "generation_foundation",
+            "generation_page",
+            "ai_edit_context_manifest",
+            "agent_submission",
+            "validation_report",
+            "replay_manifest",
+            "prototype_runtime_state",
+            "runtime_transition_report",
+            "runtime_replay_manifest",
+            "renderer_input_manifest",
+            "renderer_output_manifest",
+            "visual_preflight_report",
+        ),
+        "payload_type",
+    )
+
+
+def _datetime(value: object, field: str) -> datetime:
+    raw = _required_str(value, field)
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise _corrupt(field) from exc
+    if parsed.utcoffset() is None:
+        raise _corrupt(field)
+    return parsed
+
+
+def _optional_datetime(value: object, field: str) -> datetime | None:
+    if value is None:
+        return None
+    return _datetime(value, field)
+
+
+def _string_tuple_from_json(value: object, field: str) -> tuple[str, ...]:
+    raw = _required_str(value, field)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise _corrupt(field) from exc
+    if (
+        not isinstance(parsed, list)
+        or any(not isinstance(item, str) or not item for item in parsed)
+        or len(set(parsed)) != len(parsed)
+    ):
+        raise _corrupt(field)
+    return tuple(parsed)
+
+
+class AsyncStructuredPrototypeStore:
+    _AI_EDIT_RUN_COLUMNS = """
+        id, thread_id, user_message_id, assistant_message_id, document_id,
+        draft_id, operation_id, retry_of_run_id, status, scope_json,
+        base_head_sequence_no, base_document_hash, context_object_hash,
+        outcome_object_hash, submission_id, submission_request_hash,
+        submission_accepted_at, replay_manifest_object_hash,
+        proposed_command_batch_json,
+        proposed_command_batch_hash, candidate_object_hash,
+        preview_render_run_id, preview_artifact_id, summary,
+        affected_entity_ids_json, task_id, execution_process_id, error_code,
+        error_message, created_at, updated_at, completed_at
+    """
+    _GENERATION_JOB_COLUMNS = """
+        id, project_id, client_request_id, status, operation_id,
+        request_manifest_object_hash, request_hash, context_manifest_object_hash,
+        blueprint_object_hash, blueprint_version, blueprint_hash,
+        candidate_object_hash, candidate_document_hash, preview_render_run_id,
+        preview_artifact_id, preview_renderer_version, preview_storage_key,
+        preview_output_hash, preview_output_manifest_hash,
+        preview_visual_preflight_report_hash, replay_manifest_object_hash,
+        document_id, error_code, error_message, created_at, updated_at, completed_at
+    """
+    _GENERATION_RUN_COLUMNS = """
+        id, job_id, status, blueprint_hash, total, processed, succeeded,
+        failed, running, pending, error_code, error_message, created_at,
+        updated_at, started_at, completed_at
+    """
+    _GENERATION_ITEM_COLUMNS = """
+        id, job_id, run_id, kind, item_key, page_key, status, phase,
+        attempt, task_kind, operation_id, context_object_hash, submission_id,
+        submission_request_hash, submission_normalized_fields_json,
+        submission_accepted_at, output_object_hash,
+        task_id, execution_process_id, error_code, error_message, created_at,
+        updated_at, completed_at
+    """
+
+    def __init__(self, db_path: Path | str) -> None:
+        self.db_path = db_path
+        self._conn: aiosqlite.Connection | None = None
+        self._conn_lock = asyncio.Lock()
+        self._transaction_lock = asyncio.Lock()
+        self._initialized = False
+
+    async def close(self) -> None:
+        async with self._conn_lock:
+            if self._conn is not None:
+                await self._conn.close()
+                self._conn = None
+                self._initialized = False
+
+    async def initialize(self) -> None:
+        async with self._conn_lock:
+            if self._initialized:
+                return
+            conn = await self._connect_locked()
+            await conn.executescript(STRUCTURED_PROTOTYPE_SCHEMA_SQL)
+            await self._ensure_schema_columns(conn)
+            await conn.commit()
+            self._initialized = True
+
+    @staticmethod
+    async def _ensure_schema_columns(conn: aiosqlite.Connection) -> None:
+        async with conn.execute("PRAGMA table_info(prototype_ai_edit_runs)") as cursor:
+            columns = {str(row[1]) for row in await cursor.fetchall()}
+        for name, declaration in (
+            ("submission_id", "TEXT"),
+            ("submission_request_hash", "TEXT"),
+            ("submission_accepted_at", "TEXT"),
+            ("replay_manifest_object_hash", "TEXT"),
+        ):
+            if name not in columns:
+                await conn.execute(
+                    f"ALTER TABLE prototype_ai_edit_runs ADD COLUMN {name} {declaration}"
+                )
+        async with conn.execute("PRAGMA table_info(prototype_document_generation_jobs)") as cursor:
+            generation_columns = {str(row[1]) for row in await cursor.fetchall()}
+        for name in (
+            "preview_renderer_version",
+            "preview_storage_key",
+            "preview_output_hash",
+            "preview_output_manifest_hash",
+            "preview_visual_preflight_report_hash",
+        ):
+            if name not in generation_columns:
+                await conn.execute(
+                    f"ALTER TABLE prototype_document_generation_jobs ADD COLUMN {name} TEXT"
+                )
+        async with conn.execute(
+            "PRAGMA table_info(prototype_document_generation_run_items)"
+        ) as cursor:
+            generation_item_columns = {str(row[1]) for row in await cursor.fetchall()}
+        if "submission_normalized_fields_json" not in generation_item_columns:
+            await conn.execute(
+                "ALTER TABLE prototype_document_generation_run_items "
+                "ADD COLUMN submission_normalized_fields_json TEXT NOT NULL DEFAULT '[]'"
+            )
+
+    async def create_operation(
+        self,
+        operation: PrototypeOperation,
+        initial_event: PrototypeOperationEvent,
+    ) -> PrototypeOperationCreateResult:
+        self._validate_new_operation(operation, initial_event)
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing_row = await self._load_operation_by_request_row(
+                    conn,
+                    operation.project_id,
+                    operation.operation_kind,
+                    operation.client_request_id,
+                )
+                if existing_row is not None:
+                    existing = self._operation_from_row(existing_row)
+                    self._assert_idempotent_operation(existing, operation)
+                    result = PrototypeOperationCreateResult(operation=existing, created=False)
+                else:
+                    await self._insert_operation(conn, operation)
+                    await self._insert_operation_event(conn, initial_event)
+                    result = PrototypeOperationCreateResult(operation=operation, created=True)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return result
+
+    async def load_operation(self, operation_id: str) -> PrototypeOperation | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_operation_row(conn, operation_id)
+        return self._operation_from_row(row) if row is not None else None
+
+    async def list_operation_events(
+        self,
+        operation_id: str,
+    ) -> list[PrototypeOperationEvent]:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with conn.execute(
+            """
+            SELECT
+                operation_id,
+                event_no,
+                step_id,
+                event_kind,
+                status,
+                phase,
+                input_hash,
+                output_hash,
+                evidence_hash,
+                error_code,
+                occurred_at
+            FROM prototype_operation_events
+            WHERE operation_id = ?
+            ORDER BY event_no
+            """,
+            (operation_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._operation_event_from_row(row) for row in rows]
+
+    async def list_operation_steps(
+        self,
+        operation_id: str,
+    ) -> list[PrototypeOperationStep]:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with conn.execute(
+            """
+            SELECT
+                id, operation_id, parent_step_id, step_kind, step_ordinal,
+                attempt, status, phase, input_manifest_hash, config_manifest_hash,
+                output_manifest_hash, completion_evidence_kind,
+                completion_evidence_ref, error_code, started_at, completed_at
+            FROM prototype_operation_steps
+            WHERE operation_id = ?
+            ORDER BY step_ordinal, attempt
+            """,
+            (operation_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._operation_step_from_row(row) for row in rows]
+
+    async def create_generation_job(
+        self,
+        *,
+        job_operation: PrototypeOperation,
+        job_event: PrototypeOperationEvent,
+        item_operation: PrototypeOperation,
+        item_event: PrototypeOperationEvent,
+        job: PrototypeDocumentGenerationJobRecord,
+        run: PrototypeDocumentGenerationRunRecord,
+        item: PrototypeDocumentGenerationItemRecord,
+        descriptors_and_references: tuple[
+            tuple[PrototypeObjectDescriptor, PrototypeObjectReference], ...
+        ],
+    ) -> PrototypeDocumentGenerationCreateResult:
+        self._validate_new_operation(job_operation, job_event)
+        self._validate_new_operation(item_operation, item_event)
+        self._validate_generation_job_create(
+            job_operation=job_operation,
+            item_operation=item_operation,
+            job=job,
+            run=run,
+            item=item,
+        )
+        self._validate_generation_run_counts(run, (item,))
+        for descriptor, reference in descriptors_and_references:
+            self._validate_registration(descriptor, reference)
+            if reference.owner_kind != "generation_job" or reference.owner_id != job.id:
+                raise StructuredPrototypeStoreError(
+                    "generation_object_identity_mismatch",
+                    "generation job object reference does not match the new job",
+                )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing_row = await self._load_generation_job_by_request_row(
+                    conn,
+                    job.project_id,
+                    job.client_request_id,
+                )
+                if existing_row is not None:
+                    existing = self._generation_job_from_row(existing_row)
+                    self._assert_generation_job_idempotent(existing, job)
+                    snapshot = await self._load_generation_snapshot_tx(conn, existing.id)
+                    result = PrototypeDocumentGenerationCreateResult(
+                        snapshot=snapshot,
+                        created=False,
+                    )
+                else:
+                    async with conn.execute(
+                        """
+                        SELECT id
+                        FROM prototype_document_generation_jobs
+                        WHERE project_id = ? AND status IN (
+                            'queued', 'planning', 'awaiting_confirmation', 'generating',
+                            'assembling', 'validating', 'rendering_preview', 'ready'
+                        )
+                        LIMIT 1
+                        """,
+                        (job.project_id,),
+                    ) as cursor:
+                        active = await cursor.fetchone()
+                    if active is not None:
+                        raise StructuredPrototypeStoreError(
+                            "generation_job_conflict",
+                            "project already has an open structured prototype generation job",
+                        )
+                    await self._insert_operation(conn, job_operation)
+                    await self._insert_operation_event(conn, job_event)
+                    await self._insert_operation(conn, item_operation)
+                    await self._insert_operation_event(conn, item_event)
+                    for descriptor, reference in descriptors_and_references:
+                        await self._register_object_tx(conn, descriptor)
+                        await self._insert_object_reference(conn, reference)
+                    await self._insert_generation_job(conn, job)
+                    await self._insert_generation_run(conn, run)
+                    await self._insert_generation_item(conn, item)
+                    result = PrototypeDocumentGenerationCreateResult(
+                        snapshot=PrototypeDocumentGenerationSnapshot(
+                            job=job,
+                            latest_run=run,
+                            items=(item,),
+                        ),
+                        created=True,
+                    )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return result
+
+    async def load_generation_job(
+        self,
+        job_id: str,
+    ) -> PrototypeDocumentGenerationSnapshot | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_generation_job_row(conn, job_id)
+        if row is None:
+            return None
+        return await self._load_generation_snapshot_tx(conn, job_id)
+
+    async def load_latest_project_generation_job(
+        self,
+        project_id: str,
+    ) -> PrototypeDocumentGenerationSnapshot | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with conn.execute(
+            """
+            SELECT id
+            FROM prototype_document_generation_jobs
+            WHERE project_id = ?
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT 1
+            """,
+            (project_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return await self._load_generation_snapshot_tx(conn, str(row[0]))
+
+    async def create_generation_run(
+        self,
+        *,
+        operation: PrototypeOperation,
+        initial_event: PrototypeOperationEvent,
+        job: PrototypeDocumentGenerationJobRecord,
+        run: PrototypeDocumentGenerationRunRecord,
+        item_operations: tuple[
+            tuple[
+                PrototypeDocumentGenerationItemRecord,
+                PrototypeOperation,
+                PrototypeOperationEvent,
+            ],
+            ...,
+        ],
+        expected_job_statuses: tuple[str, ...],
+        descriptors_and_references: tuple[
+            tuple[PrototypeObjectDescriptor, PrototypeObjectReference], ...
+        ] = (),
+    ) -> PrototypeDocumentGenerationRunCreateResult:
+        if not expected_job_statuses or not item_operations:
+            raise StructuredPrototypeStoreError(
+                "generation_run_invalid",
+                "generation run creation requires expected state and durable items",
+            )
+        self._validate_new_operation(operation, initial_event)
+        items = tuple(item for item, _, _ in item_operations)
+        self._validate_generation_run_counts(run, items)
+        self._validate_generation_run_create(operation, job, run, item_operations)
+        for _, item_operation, item_event in item_operations:
+            self._validate_new_operation(item_operation, item_event)
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                current_job_row = await self._load_generation_job_row(conn, job.id)
+                if current_job_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "generation_job_missing",
+                        "structured prototype generation job does not exist",
+                    )
+                current_job = self._generation_job_from_row(current_job_row)
+                existing_run_row = await self._load_generation_run_row(conn, run.id)
+                if existing_run_row is not None:
+                    existing_run = self._generation_run_from_row(existing_run_row)
+                    self._assert_generation_run_identity(existing_run, run)
+                    snapshot = await self._load_generation_snapshot_tx(conn, job.id)
+                    await conn.commit()
+                    return PrototypeDocumentGenerationRunCreateResult(
+                        snapshot=snapshot,
+                        created=False,
+                    )
+                if current_job.status not in expected_job_statuses:
+                    raise StructuredPrototypeStoreError(
+                        "generation_job_conflict",
+                        "structured prototype generation job status changed before scheduling",
+                    )
+                self._assert_generation_job_identity(current_job, job)
+                self._assert_generation_job_status_transition(current_job.status, job.status)
+                for descriptor, reference in descriptors_and_references:
+                    self._validate_registration(descriptor, reference)
+                    if reference.owner_kind not in {"generation_run", "generation_item"}:
+                        raise StructuredPrototypeStoreError(
+                            "generation_object_identity_mismatch",
+                            "generation run context has an unsupported object owner",
+                        )
+                    valid_owner_ids = {run.id, *(item.id for item in items)}
+                    if reference.owner_id not in valid_owner_ids:
+                        raise StructuredPrototypeStoreError(
+                            "generation_object_identity_mismatch",
+                            "generation run context owner does not match the scheduled records",
+                        )
+                await self._insert_operation(conn, operation)
+                await self._insert_operation_event(conn, initial_event)
+                for descriptor, reference in descriptors_and_references:
+                    await self._register_object_tx(conn, descriptor)
+                    await self._insert_object_reference(conn, reference)
+                await self._update_generation_job(conn, job)
+                await self._insert_generation_run(conn, run)
+                for item, item_operation, item_event in item_operations:
+                    await self._insert_operation(conn, item_operation)
+                    await self._insert_operation_event(conn, item_event)
+                    await self._insert_generation_item(conn, item)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return PrototypeDocumentGenerationRunCreateResult(
+            snapshot=PrototypeDocumentGenerationSnapshot(
+                job=job,
+                latest_run=run,
+                items=items,
+            ),
+            created=True,
+        )
+
+    async def transition_generation_records(
+        self,
+        *,
+        job: PrototypeDocumentGenerationJobRecord,
+        run: PrototypeDocumentGenerationRunRecord,
+        items: tuple[PrototypeDocumentGenerationItemRecord, ...],
+        expected_job_statuses: tuple[str, ...],
+        expected_run_statuses: tuple[str, ...],
+        expected_item_statuses: tuple[str, ...],
+        descriptors_and_references: tuple[
+            tuple[PrototypeObjectDescriptor, PrototypeObjectReference], ...
+        ] = (),
+        operation_transitions: tuple[
+            tuple[PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent], ...
+        ] = (),
+    ) -> PrototypeDocumentGenerationSnapshot:
+        if not expected_job_statuses or not expected_run_statuses or not expected_item_statuses:
+            raise StructuredPrototypeStoreError(
+                "generation_transition_invalid",
+                "generation transition requires explicit expected lifecycle states",
+            )
+        if not operation_transitions:
+            raise StructuredPrototypeStoreError(
+                "generation_evidence_missing",
+                "generation transition requires a durable operation step and event",
+            )
+        self._validate_generation_run_counts(run, items)
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                current_job_row = await self._load_generation_job_row(conn, job.id)
+                current_run_row = await self._load_generation_run_row(conn, run.id)
+                if current_job_row is None or current_run_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "generation_job_missing",
+                        "structured prototype generation job or run does not exist",
+                    )
+                current_job = self._generation_job_from_row(current_job_row)
+                current_run = self._generation_run_from_row(current_run_row)
+                if current_job.status not in expected_job_statuses:
+                    raise StructuredPrototypeStoreError(
+                        "generation_job_conflict",
+                        "structured prototype generation job status changed",
+                    )
+                if current_run.status not in expected_run_statuses:
+                    raise StructuredPrototypeStoreError(
+                        "generation_run_conflict",
+                        "structured prototype generation run status changed",
+                    )
+                self._assert_generation_job_identity(current_job, job)
+                self._assert_generation_run_identity(current_run, run)
+                self._assert_generation_job_status_transition(current_job.status, job.status)
+                self._assert_generation_run_status_transition(current_run.status, run.status)
+                transition_operation_ids = {
+                    operation.id for operation, _, _ in operation_transitions
+                }
+                if (
+                    current_job.status != job.status
+                    and job.operation_id not in transition_operation_ids
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_evidence_missing",
+                        "generation job state change has no correlated operation evidence",
+                    )
+                for item in items:
+                    current_item_row = await self._load_generation_item_row(conn, item.id)
+                    if current_item_row is None:
+                        raise StructuredPrototypeStoreError(
+                            "generation_item_missing",
+                            "structured prototype generation item does not exist",
+                        )
+                    current_item = self._generation_item_from_row(current_item_row)
+                    if current_item.status not in expected_item_statuses:
+                        raise StructuredPrototypeStoreError(
+                            "generation_item_conflict",
+                            "structured prototype generation item status changed",
+                        )
+                    self._assert_generation_item_identity(current_item, item)
+                    self._assert_generation_item_status_transition(
+                        current_item.status,
+                        item.status,
+                    )
+                    if (
+                        current_item.status != item.status
+                        and item.operation_id not in transition_operation_ids
+                    ):
+                        raise StructuredPrototypeStoreError(
+                            "generation_evidence_missing",
+                            "generation item state change has no correlated operation evidence",
+                        )
+                for descriptor, reference in descriptors_and_references:
+                    self._validate_registration(descriptor, reference)
+                    if reference.owner_kind not in {
+                        "generation_job",
+                        "generation_item",
+                        "replay_manifest",
+                    }:
+                        raise StructuredPrototypeStoreError(
+                            "generation_object_identity_mismatch",
+                            "generation transition object has an unsupported owner",
+                        )
+                    if (
+                        (reference.owner_kind == "generation_job" and reference.owner_id != job.id)
+                        or (
+                            reference.owner_kind == "generation_item"
+                            and reference.owner_id not in {item.id for item in items}
+                        )
+                        or (
+                            reference.owner_kind == "replay_manifest"
+                            and reference.owner_id != job.operation_id
+                        )
+                    ):
+                        raise StructuredPrototypeStoreError(
+                            "generation_object_identity_mismatch",
+                            "generation transition object owner does not match its records",
+                        )
+                    await self._register_object_tx(conn, descriptor)
+                    await self._insert_object_reference(conn, reference)
+                for operation, step, event in operation_transitions:
+                    await self._apply_operation_transition(conn, operation, step, event)
+                await self._update_generation_job(conn, job)
+                await self._update_generation_run(conn, run)
+                for item in items:
+                    await self._update_generation_item(conn, item)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return PrototypeDocumentGenerationSnapshot(job=job, latest_run=run, items=items)
+
+    async def interrupt_active_generation_jobs(self, interrupted_at: datetime) -> int:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                async with conn.execute(
+                    """
+                    SELECT id, operation_id
+                    FROM prototype_document_generation_jobs
+                    WHERE status IN (
+                        'queued', 'planning', 'generating', 'assembling',
+                        'validating', 'rendering_preview'
+                    )
+                    """
+                ) as cursor:
+                    jobs = await cursor.fetchall()
+                async with conn.execute(
+                    """
+                    SELECT id, operation_id
+                    FROM prototype_document_generation_run_items
+                    WHERE status IN ('pending', 'generating', 'validating')
+                      AND job_id IN (
+                          SELECT id FROM prototype_document_generation_jobs
+                          WHERE status IN (
+                              'queued', 'planning', 'generating', 'assembling',
+                              'validating', 'rendering_preview'
+                          )
+                      )
+                    """
+                ) as cursor:
+                    items = await cursor.fetchall()
+                timestamp = interrupted_at.isoformat()
+                await conn.execute(
+                    """
+                    UPDATE prototype_document_generation_run_items
+                    SET status = 'interrupted', phase = 'interrupted',
+                        error_code = 'restart_interrupted',
+                        error_message = 'generation item was interrupted by backend restart',
+                        updated_at = ?, completed_at = ?
+                    WHERE status IN ('pending', 'generating', 'validating')
+                      AND job_id IN (
+                          SELECT id FROM prototype_document_generation_jobs
+                          WHERE status IN (
+                              'queued', 'planning', 'generating', 'assembling',
+                              'validating', 'rendering_preview'
+                          )
+                      )
+                    """,
+                    (timestamp, timestamp),
+                )
+                await conn.execute(
+                    """
+                    UPDATE prototype_document_generation_runs
+                    SET status = 'interrupted', error_code = 'restart_interrupted',
+                        error_message = 'generation run was interrupted by backend restart',
+                        running = 0, pending = 0, updated_at = ?, completed_at = ?
+                    WHERE status IN ('queued', 'running')
+                      AND job_id IN (
+                          SELECT id FROM prototype_document_generation_jobs
+                          WHERE status IN (
+                              'queued', 'planning', 'generating', 'assembling',
+                              'validating', 'rendering_preview'
+                          )
+                      )
+                    """,
+                    (timestamp, timestamp),
+                )
+                job_cursor = await conn.execute(
+                    """
+                    UPDATE prototype_document_generation_jobs
+                    SET status = 'interrupted', error_code = 'restart_interrupted',
+                        error_message = 'generation job was interrupted by backend restart',
+                        updated_at = ?, completed_at = ?
+                    WHERE status IN (
+                        'queued', 'planning', 'generating', 'assembling',
+                        'validating', 'rendering_preview'
+                    )
+                    """,
+                    (timestamp, timestamp),
+                )
+                for operation_id in [str(row[1]) for row in (*jobs, *items)]:
+                    await self._interrupt_generation_operation(conn, operation_id, interrupted_at)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return int(job_cursor.rowcount)
+
+    async def accept_generation_candidate(
+        self,
+        *,
+        descriptor: PrototypeObjectDescriptor,
+        checkpoint_reference: PrototypeObjectReference,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_references: tuple[PrototypeObjectReference, ...],
+        job: PrototypeDocumentGenerationJobRecord,
+        document: PrototypeDocumentRecord,
+        draft: PrototypeDraftRecord,
+        checkpoint: PrototypeCheckpointRecord,
+        completed_transition: tuple[
+            PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent
+        ],
+        job_completion_transition: tuple[
+            PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent
+        ],
+    ) -> PrototypeDocumentGenerationAcceptResult:
+        completed_operation, completed_step, completed_event = completed_transition
+        job_operation, job_step, job_event = job_completion_transition
+        self._validate_operation_transition_payload(
+            completed_operation,
+            completed_step,
+            completed_event,
+        )
+        self._validate_operation_transition_payload(job_operation, job_step, job_event)
+        self._validate_initial_checkpoint(
+            descriptor=descriptor,
+            reference=checkpoint_reference,
+            document=document,
+            draft=draft,
+            checkpoint=checkpoint,
+            completed_operation=completed_operation,
+            completion_step=completed_step,
+            completion_event=completed_event,
+        )
+        if len(replay_references) != 2:
+            raise StructuredPrototypeStoreError(
+                "generation_accept_identity_mismatch",
+                "generation accept requires both operation replay references",
+            )
+        for replay_reference in replay_references:
+            self._validate_registration(replay_descriptor, replay_reference)
+        if (
+            any(
+                reference.content_hash != replay_descriptor.content_hash
+                or reference.owner_kind != "replay_manifest"
+                or reference.payload_type != "replay_manifest"
+                for reference in replay_references
+            )
+            or {reference.owner_id for reference in replay_references}
+            != {completed_operation.id, job.operation_id}
+            or job.status != "accepted"
+            or job.document_id != document.id
+            or job.completed_at is None
+            or job.candidate_object_hash != descriptor.content_hash
+            or job.candidate_document_hash != descriptor.content_hash
+            or job.replay_manifest_object_hash != replay_descriptor.content_hash
+            or completed_operation.parent_operation_id != job.operation_id
+            or completed_operation.operation_kind != "create_document"
+            or completed_operation.result_manifest_hash != replay_descriptor.content_hash
+            or job_operation.id != job.operation_id
+            or job_operation.status != "succeeded"
+            or job_operation.result_manifest_hash != replay_descriptor.content_hash
+            or job_step.status != "succeeded"
+            or job_step.completion_evidence_ref != replay_descriptor.content_hash
+        ):
+            raise StructuredPrototypeStoreError(
+                "generation_accept_identity_mismatch",
+                "generation accept document, job, and replay identities are inconsistent",
+            )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                current_job_row = await self._load_generation_job_row(conn, job.id)
+                if current_job_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "generation_job_missing",
+                        "structured prototype generation job does not exist",
+                    )
+                current_job = self._generation_job_from_row(current_job_row)
+                if current_job.status != "ready":
+                    raise StructuredPrototypeStoreError(
+                        "generation_job_conflict",
+                        "structured prototype generation candidate is no longer ready",
+                    )
+                self._assert_generation_job_identity(current_job, job)
+                self._assert_generation_job_status_transition(current_job.status, job.status)
+                if (
+                    current_job.candidate_object_hash != descriptor.content_hash
+                    or current_job.preview_artifact_id != job.preview_artifact_id
+                    or current_job.preview_output_hash != job.preview_output_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_candidate_conflict",
+                        "generation candidate or preview changed before accept",
+                    )
+                await self._register_object_tx(conn, descriptor)
+                await conn.execute(
+                    """
+                    INSERT INTO prototype_documents (
+                        id, project_id, title, published_revision_no,
+                        active_draft_id, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+                    """,
+                    (
+                        document.id,
+                        document.project_id,
+                        document.title,
+                        document.published_revision_no,
+                        document.created_at.isoformat(),
+                        document.updated_at.isoformat(),
+                    ),
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO prototype_drafts (
+                        id, document_id, base_revision_no, status, head_sequence_no,
+                        head_document_hash, latest_checkpoint_id, publish_revision_no,
+                        created_at, updated_at, closed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+                    """,
+                    self._initial_draft_params(draft),
+                )
+                await self._insert_checkpoint(conn, checkpoint)
+                await self._insert_object_reference(conn, checkpoint_reference)
+                await conn.execute(
+                    "UPDATE prototype_documents SET active_draft_id = ? WHERE id = ?",
+                    (draft.id, document.id),
+                )
+                await conn.execute(
+                    "UPDATE prototype_drafts SET latest_checkpoint_id = ? WHERE id = ?",
+                    (checkpoint.id, draft.id),
+                )
+                await self._register_object_tx(conn, replay_descriptor)
+                for replay_reference in replay_references:
+                    await self._insert_object_reference(conn, replay_reference)
+                await self._update_generation_job(conn, job)
+                await self._apply_operation_transition(
+                    conn,
+                    completed_operation,
+                    completed_step,
+                    completed_event,
+                )
+                await self._apply_operation_transition(conn, job_operation, job_step, job_event)
+                snapshot = await self._load_generation_snapshot_tx(conn, job.id)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return PrototypeDocumentGenerationAcceptResult(
+            snapshot=snapshot,
+            document=document,
+            draft=draft,
+            checkpoint=checkpoint,
+        )
+
+    async def load_document(self, document_id: str) -> PrototypeDocumentRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_document_row(conn, document_id)
+        return self._document_from_row(row) if row is not None else None
+
+    async def load_current_project_document(
+        self,
+        project_id: str,
+    ) -> PrototypeDocumentRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with conn.execute(
+            """
+            SELECT document.id
+            FROM prototype_documents AS document
+            JOIN prototype_drafts AS draft ON draft.id = document.active_draft_id
+            WHERE document.project_id = ?
+            ORDER BY draft.updated_at DESC, document.created_at DESC, document.rowid DESC
+            LIMIT 1
+            """,
+            (project_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        document_row = await self._load_document_row(conn, str(row[0]))
+        if document_row is None:
+            raise StructuredPrototypeStoreError(
+                "document_missing",
+                "current structured prototype document disappeared during load",
+            )
+        return self._document_from_row(document_row)
+
+    async def load_draft(self, draft_id: str) -> PrototypeDraftRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_draft_row(conn, draft_id)
+        return self._draft_from_row(row) if row is not None else None
+
+    async def create_ai_thread(
+        self,
+        thread: PrototypeAiThreadRecord,
+    ) -> PrototypeAiThreadRecord:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                document = await self._load_document_row(conn, thread.document_id)
+                if document is None:
+                    raise StructuredPrototypeStoreError(
+                        "document_missing",
+                        "prototype document does not exist",
+                    )
+                existing = await self._load_ai_thread_row(conn, thread.id)
+                if existing is None:
+                    await conn.execute(
+                        """
+                        INSERT INTO prototype_ai_threads (
+                            id, document_id, title, status, summary_json,
+                            summary_through_message_id, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        self._ai_thread_params(thread),
+                    )
+                    result = thread
+                else:
+                    result = self._ai_thread_from_row(existing)
+                    if self._ai_thread_params(result)[:6] != self._ai_thread_params(thread)[:6]:
+                        raise StructuredPrototypeStoreError(
+                            "ai_thread_idempotency_conflict",
+                            "prototype AI thread identity conflicts with an existing thread",
+                        )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return result
+
+    async def list_ai_threads(self, document_id: str) -> list[PrototypeAiThreadRecord]:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with conn.execute(
+            """
+            SELECT id, document_id, title, status, summary_json,
+                   summary_through_message_id, created_at, updated_at
+            FROM prototype_ai_threads
+            WHERE document_id = ?
+            ORDER BY updated_at DESC, id DESC
+            """,
+            (document_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._ai_thread_from_row(row) for row in rows]
+
+    async def load_ai_thread_snapshot(
+        self,
+        thread_id: str,
+    ) -> PrototypeAiThreadSnapshot | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        thread_row = await self._load_ai_thread_row(conn, thread_id)
+        if thread_row is None:
+            return None
+        async with conn.execute(
+            """
+            SELECT id, thread_id, client_message_id, role, kind, content,
+                   run_id, command_batch_id, status, created_at, updated_at
+            FROM prototype_ai_messages
+            WHERE thread_id = ?
+            ORDER BY created_at, rowid
+            """,
+            (thread_id,),
+        ) as cursor:
+            message_rows = await cursor.fetchall()
+        async with conn.execute(
+            f"""
+            SELECT {self._AI_EDIT_RUN_COLUMNS}
+            FROM prototype_ai_edit_runs
+            WHERE thread_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (thread_id,),
+        ) as cursor:
+            run_row = await cursor.fetchone()
+        return PrototypeAiThreadSnapshot(
+            thread=self._ai_thread_from_row(thread_row),
+            messages=tuple(self._ai_message_from_row(row) for row in message_rows),
+            latest_run=self._ai_edit_run_from_row(run_row) if run_row is not None else None,
+        )
+
+    async def load_ai_edit_run(self, run_id: str) -> PrototypeAiEditRunRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_ai_edit_run_row(conn, run_id)
+        return self._ai_edit_run_from_row(row) if row is not None else None
+
+    async def create_ai_message_run(
+        self,
+        *,
+        operation: PrototypeOperation,
+        initial_event: PrototypeOperationEvent,
+        message: PrototypeAiMessageRecord,
+        run: PrototypeAiEditRunRecord,
+    ) -> PrototypeAiMessageRunCreateResult:
+        self._validate_new_operation(operation, initial_event)
+        if (
+            operation.id != run.operation_id
+            or message.id != run.user_message_id
+            or message.thread_id != run.thread_id
+            or message.run_id != run.id
+            or message.role != "user"
+            or message.kind != "instruction"
+            or message.status != "pending"
+        ):
+            raise StructuredPrototypeStoreError(
+                "ai_run_identity_mismatch",
+                "prototype AI message, run, and operation identities do not match",
+            )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing_message_row = await self._load_ai_message_by_request_row(
+                    conn,
+                    message.thread_id,
+                    message.client_message_id,
+                )
+                if existing_message_row is not None:
+                    existing_message = self._ai_message_from_row(existing_message_row)
+                    if existing_message.run_id is None:
+                        raise StructuredPrototypeStoreError(
+                            "ai_run_result_missing",
+                            "prototype AI message has no correlated edit run",
+                        )
+                    existing_run_row = await self._load_ai_edit_run_row(
+                        conn,
+                        existing_message.run_id,
+                    )
+                    if existing_run_row is None:
+                        raise StructuredPrototypeStoreError(
+                            "ai_run_result_missing",
+                            "prototype AI edit run disappeared",
+                        )
+                    existing_run = self._ai_edit_run_from_row(existing_run_row)
+                    self._assert_ai_message_idempotent(existing_message, message)
+                    self._assert_ai_edit_run_idempotent(existing_run, run)
+                    result = PrototypeAiMessageRunCreateResult(
+                        message=existing_message,
+                        run=existing_run,
+                        created=False,
+                    )
+                else:
+                    thread_row = await self._load_ai_thread_row(conn, message.thread_id)
+                    if thread_row is None:
+                        raise StructuredPrototypeStoreError(
+                            "ai_thread_missing",
+                            "prototype AI thread does not exist",
+                        )
+                    thread = self._ai_thread_from_row(thread_row)
+                    if thread.status != "active" or thread.document_id != run.document_id:
+                        raise StructuredPrototypeStoreError(
+                            "ai_thread_unavailable",
+                            "prototype AI thread cannot accept this message",
+                        )
+                    draft = await self._require_draft(conn, run.draft_id)
+                    if (
+                        draft.document_id != run.document_id
+                        or draft.status != "active"
+                        or draft.head_sequence_no != run.base_head_sequence_no
+                        or draft.head_document_hash != run.base_document_hash
+                    ):
+                        raise StructuredPrototypeStoreError(
+                            "draft_conflict",
+                            "prototype AI run base does not match the active draft",
+                        )
+                    async with conn.execute(
+                        """
+                        SELECT id
+                        FROM prototype_ai_edit_runs
+                        WHERE draft_id = ? AND status IN (
+                            'queued', 'building_context', 'generating',
+                            'validating', 'rendering_preview', 'preview_ready'
+                        )
+                        LIMIT 1
+                        """,
+                        (run.draft_id,),
+                    ) as cursor:
+                        active_run = await cursor.fetchone()
+                    if active_run is not None:
+                        raise StructuredPrototypeStoreError(
+                            "ai_run_conflict",
+                            "prototype draft already has an open AI edit run",
+                        )
+                    await self._insert_operation(conn, operation)
+                    await self._insert_operation_event(conn, initial_event)
+                    await self._insert_ai_message(conn, message)
+                    await self._insert_ai_edit_run(conn, run)
+                    await conn.execute(
+                        "UPDATE prototype_ai_threads SET updated_at = ? WHERE id = ?",
+                        (run.created_at.isoformat(), run.thread_id),
+                    )
+                    result = PrototypeAiMessageRunCreateResult(
+                        message=message,
+                        run=run,
+                        created=True,
+                    )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return result
+
+    async def transition_ai_edit_run(
+        self,
+        *,
+        run: PrototypeAiEditRunRecord,
+        expected_statuses: tuple[str, ...],
+        assistant_message: PrototypeAiMessageRecord | None = None,
+        descriptors_and_references: tuple[
+            tuple[PrototypeObjectDescriptor, PrototypeObjectReference], ...
+        ] = (),
+        operation_transitions: tuple[
+            tuple[PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent], ...
+        ] = (),
+    ) -> PrototypeAiEditRunRecord:
+        if not expected_statuses:
+            raise StructuredPrototypeStoreError(
+                "ai_run_transition_invalid",
+                "prototype AI transition requires an expected status",
+            )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                current_row = await self._load_ai_edit_run_row(conn, run.id)
+                if current_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "ai_run_missing",
+                        "prototype AI edit run does not exist",
+                    )
+                current = self._ai_edit_run_from_row(current_row)
+                if current.status not in expected_statuses:
+                    raise StructuredPrototypeStoreError(
+                        "ai_run_conflict",
+                        "prototype AI edit run status changed before transition",
+                    )
+                self._assert_ai_edit_run_immutable_identity(current, run)
+                for descriptor, reference in descriptors_and_references:
+                    self._validate_registration(descriptor, reference)
+                    await self._register_object_tx(conn, descriptor)
+                    await self._insert_object_reference(conn, reference)
+                if assistant_message is not None:
+                    if (
+                        assistant_message.thread_id != run.thread_id
+                        or assistant_message.run_id != run.id
+                        or assistant_message.role != "assistant"
+                        or assistant_message.id != run.assistant_message_id
+                    ):
+                        raise StructuredPrototypeStoreError(
+                            "ai_message_identity_mismatch",
+                            "prototype AI assistant message does not match its run",
+                        )
+                    await self._insert_ai_message(conn, assistant_message)
+                    user_status = "failed" if assistant_message.status == "failed" else "completed"
+                    await conn.execute(
+                        """
+                        UPDATE prototype_ai_messages
+                        SET status = ?, updated_at = ?
+                        WHERE id = ? AND run_id = ? AND role = 'user' AND status = 'pending'
+                        """,
+                        (
+                            user_status,
+                            run.updated_at.isoformat(),
+                            run.user_message_id,
+                            run.id,
+                        ),
+                    )
+                for operation, step, event in operation_transitions:
+                    await self._apply_operation_transition(conn, operation, step, event)
+                await self._update_ai_edit_run(conn, run)
+                if run.status == "failed" and run.preview_render_run_id is not None:
+                    await conn.execute(
+                        """
+                        UPDATE prototype_render_runs
+                        SET status = 'failed', error_code = ?, error_message = ?,
+                            completed_at = ?, updated_at = ?
+                        WHERE id = ? AND status IN ('queued', 'rendering')
+                        """,
+                        (
+                            run.error_code,
+                            run.error_message,
+                            run.completed_at.isoformat() if run.completed_at is not None else None,
+                            run.updated_at.isoformat(),
+                            run.preview_render_run_id,
+                        ),
+                    )
+                await conn.execute(
+                    "UPDATE prototype_ai_threads SET updated_at = ? WHERE id = ?",
+                    (run.updated_at.isoformat(), run.thread_id),
+                )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return run
+
+    async def reject_ai_edit_run(
+        self,
+        *,
+        queued_operation: PrototypeOperation,
+        queued_event: PrototypeOperationEvent,
+        running_transition: tuple[
+            PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent
+        ],
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
+        completed_transition: tuple[
+            PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent
+        ],
+        run: PrototypeAiEditRunRecord,
+        assistant_message: PrototypeAiMessageRecord,
+    ) -> PrototypeAiEditRunRecord:
+        self._validate_new_operation(queued_operation, queued_event)
+        running_operation, running_step, running_event = running_transition
+        completed_operation, completed_step, completed_event = completed_transition
+        self._validate_operation_transition_payload(
+            running_operation,
+            running_step,
+            running_event,
+        )
+        self._validate_operation_transition_payload(
+            completed_operation,
+            completed_step,
+            completed_event,
+        )
+        self._validate_registration(replay_descriptor, replay_reference)
+        if (
+            run.status != "rejected"
+            or queued_operation.operation_kind != "reject_ai_proposal"
+            or queued_operation.resource_kind != "ai_edit_run"
+            or queued_operation.resource_id != run.id
+            or queued_operation.parent_operation_id != run.operation_id
+            or completed_operation.status != "succeeded"
+            or completed_operation.result_manifest_hash != replay_descriptor.content_hash
+            or completed_step.status != "succeeded"
+            or completed_step.completion_evidence_ref != replay_descriptor.content_hash
+            or replay_reference.owner_kind != "replay_manifest"
+            or replay_reference.owner_id != queued_operation.id
+            or replay_reference.payload_type != "replay_manifest"
+            or assistant_message.id != run.assistant_message_id
+            or assistant_message.run_id != run.id
+            or assistant_message.status != "rejected"
+        ):
+            raise StructuredPrototypeStoreError(
+                "ai_reject_identity_mismatch",
+                "prototype AI reject identities are inconsistent",
+            )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                current_row = await self._load_ai_edit_run_row(conn, run.id)
+                if current_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "ai_run_missing", "prototype AI edit run does not exist"
+                    )
+                current = self._ai_edit_run_from_row(current_row)
+                if current.status != "preview_ready":
+                    raise StructuredPrototypeStoreError(
+                        "ai_run_conflict", "prototype AI proposal is no longer ready"
+                    )
+                self._assert_ai_edit_run_immutable_identity(current, run)
+                await self._insert_operation(conn, queued_operation)
+                await self._insert_operation_event(conn, queued_event)
+                await self._apply_operation_transition(
+                    conn,
+                    running_operation,
+                    running_step,
+                    running_event,
+                )
+                await self._register_object_tx(conn, replay_descriptor)
+                await self._insert_object_reference(conn, replay_reference)
+                cursor = await conn.execute(
+                    """
+                    UPDATE prototype_ai_messages
+                    SET status = 'rejected', updated_at = ?
+                    WHERE id = ? AND run_id = ? AND status = 'completed'
+                    """,
+                    (assistant_message.updated_at.isoformat(), assistant_message.id, run.id),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "ai_message_conflict",
+                        "prototype AI proposal message changed before reject",
+                    )
+                await self._update_ai_edit_run(conn, run)
+                await self._apply_operation_transition(
+                    conn,
+                    completed_operation,
+                    completed_step,
+                    completed_event,
+                )
+                await conn.execute(
+                    "UPDATE prototype_ai_threads SET updated_at = ? WHERE id = ?",
+                    (run.updated_at.isoformat(), run.thread_id),
+                )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return run
+
+    async def interrupt_active_ai_edit_runs(self, interrupted_at: datetime) -> int:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await conn.execute(
+                    """
+                    UPDATE prototype_ai_edit_runs
+                    SET status = 'interrupted', error_code = 'restart_interrupted',
+                        error_message = 'prototype AI edit was interrupted by backend restart',
+                        updated_at = ?, completed_at = ?
+                    WHERE status IN (
+                        'queued', 'building_context', 'generating',
+                        'validating', 'rendering_preview'
+                    )
+                    """,
+                    (interrupted_at.isoformat(), interrupted_at.isoformat()),
+                )
+                await conn.execute(
+                    """
+                    UPDATE prototype_ai_messages
+                    SET status = 'failed', updated_at = ?
+                    WHERE role = 'user' AND status = 'pending'
+                      AND run_id IN (
+                          SELECT id FROM prototype_ai_edit_runs
+                          WHERE status = 'interrupted' AND error_code = 'restart_interrupted'
+                      )
+                    """,
+                    (interrupted_at.isoformat(),),
+                )
+            except aiosqlite.Error:
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return cursor.rowcount
+
+    async def freeze_ai_preview(
+        self,
+        *,
+        run: PrototypeAiEditRunRecord,
+        render_run: PrototypeRenderRunRecord,
+        descriptors_and_references: tuple[
+            tuple[PrototypeObjectDescriptor, PrototypeObjectReference], ...
+        ],
+        operation_transitions: tuple[
+            tuple[PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent], ...
+        ],
+    ) -> None:
+        if run.status != "rendering_preview" or render_run.status != "rendering":
+            raise StructuredPrototypeStoreError(
+                "ai_preview_transition_invalid",
+                "prototype AI preview must enter the rendering state",
+            )
+        if (
+            render_run.ai_edit_run_id != run.id
+            or render_run.document_id != run.document_id
+            or render_run.operation_id != run.operation_id
+            or render_run.document_hash != run.candidate_object_hash
+        ):
+            raise StructuredPrototypeStoreError(
+                "ai_preview_identity_mismatch",
+                "prototype AI preview identities do not match",
+            )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                current_row = await self._load_ai_edit_run_row(conn, run.id)
+                if current_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "ai_run_missing", "prototype AI edit run does not exist"
+                    )
+                current = self._ai_edit_run_from_row(current_row)
+                if current.status != "validating":
+                    raise StructuredPrototypeStoreError(
+                        "ai_run_conflict",
+                        "prototype AI edit run changed before preview freeze",
+                    )
+                self._assert_ai_edit_run_immutable_identity(current, run)
+                draft = await self._require_draft(conn, run.draft_id)
+                if (
+                    draft.status != "active"
+                    or draft.head_sequence_no != run.base_head_sequence_no
+                    or draft.head_document_hash != run.base_document_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "draft_conflict",
+                        "prototype draft changed before AI preview freeze",
+                    )
+                for descriptor, reference in descriptors_and_references:
+                    self._validate_registration(descriptor, reference)
+                    await self._register_object_tx(conn, descriptor)
+                    await self._insert_object_reference(conn, reference)
+                await self._insert_render_run(conn, render_run)
+                for operation, step, event in operation_transitions:
+                    await self._apply_operation_transition(conn, operation, step, event)
+                await self._update_ai_edit_run(conn, run)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+
+    async def complete_ai_preview(
+        self,
+        *,
+        run: PrototypeAiEditRunRecord,
+        render_run: PrototypeRenderRunRecord,
+        artifact: PrototypeRenderArtifactRecord,
+        assistant_message: PrototypeAiMessageRecord,
+        descriptors_and_references: tuple[
+            tuple[PrototypeObjectDescriptor, PrototypeObjectReference], ...
+        ],
+        operation_transitions: tuple[
+            tuple[PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent], ...
+        ],
+    ) -> None:
+        if run.status != "preview_ready" or render_run.status != "ready":
+            raise StructuredPrototypeStoreError(
+                "ai_preview_transition_invalid",
+                "prototype AI preview completion state is invalid",
+            )
+        if (
+            run.preview_render_run_id != render_run.id
+            or run.preview_artifact_id != artifact.id
+            or render_run.artifact_id != artifact.id
+            or artifact.render_run_id != render_run.id
+            or artifact.document_id != run.document_id
+            or artifact.revision_id is not None
+        ):
+            raise StructuredPrototypeStoreError(
+                "ai_preview_identity_mismatch",
+                "prototype AI preview completion identities do not match",
+            )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                current_row = await self._load_ai_edit_run_row(conn, run.id)
+                if current_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "ai_run_missing", "prototype AI edit run does not exist"
+                    )
+                current = self._ai_edit_run_from_row(current_row)
+                if current.status != "rendering_preview":
+                    raise StructuredPrototypeStoreError(
+                        "ai_run_conflict",
+                        "prototype AI edit run changed before preview completion",
+                    )
+                self._assert_ai_edit_run_immutable_identity(current, run)
+                current_render_row = await self._load_render_run_row(conn, render_run.id)
+                if current_render_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "render_run_missing", "prototype AI preview render run does not exist"
+                    )
+                current_render = self._render_run_from_row(current_render_row)
+                if current_render.status != "rendering":
+                    raise StructuredPrototypeStoreError(
+                        "render_run_conflict",
+                        "prototype AI preview render run changed before completion",
+                    )
+                for descriptor, reference in descriptors_and_references:
+                    self._validate_registration(descriptor, reference)
+                    await self._register_object_tx(conn, descriptor)
+                    await self._insert_object_reference(conn, reference)
+                await conn.execute(
+                    """
+                    UPDATE prototype_render_runs
+                    SET status = 'ready', artifact_id = ?, output_manifest_hash = ?,
+                        error_code = NULL, error_message = NULL, completed_at = ?, updated_at = ?
+                    WHERE id = ? AND status = 'rendering'
+                    """,
+                    (
+                        render_run.artifact_id,
+                        render_run.output_manifest_hash,
+                        render_run.completed_at.isoformat()
+                        if render_run.completed_at is not None
+                        else None,
+                        render_run.updated_at.isoformat(),
+                        render_run.id,
+                    ),
+                )
+                await self._insert_render_artifact(conn, artifact)
+                await self._insert_ai_message(conn, assistant_message)
+                await conn.execute(
+                    """
+                    UPDATE prototype_ai_messages
+                    SET status = 'completed', updated_at = ?
+                    WHERE id = ? AND run_id = ? AND role = 'user' AND status = 'pending'
+                    """,
+                    (run.updated_at.isoformat(), run.user_message_id, run.id),
+                )
+                for operation, step, event in operation_transitions:
+                    await self._apply_operation_transition(conn, operation, step, event)
+                await self._update_ai_edit_run(conn, run)
+                await conn.execute(
+                    "UPDATE prototype_ai_threads SET updated_at = ? WHERE id = ?",
+                    (run.updated_at.isoformat(), run.thread_id),
+                )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+
+    async def apply_ai_edit_run(
+        self,
+        *,
+        queued_operation: PrototypeOperation,
+        queued_event: PrototypeOperationEvent,
+        running_transition: tuple[
+            PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent
+        ],
+        batch: PrototypeCommandBatchRecord,
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
+        checkpoint: PrototypeCheckpointRecord,
+        completed_transition: tuple[
+            PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent
+        ],
+        run: PrototypeAiEditRunRecord,
+        assistant_message: PrototypeAiMessageRecord,
+    ) -> PrototypeCommandAppendResult:
+        self._validate_new_operation(queued_operation, queued_event)
+        running_operation, running_step, running_event = running_transition
+        completed_operation, completed_step, completed_event = completed_transition
+        self._validate_command_append(
+            batch,
+            completed_operation,
+            completed_step,
+            completed_event,
+        )
+        self._validate_registration(descriptor, reference)
+        self._validate_registration(replay_descriptor, replay_reference)
+        if (
+            run.status != "applied"
+            or batch.origin != "ai"
+            or batch.operation_kind != "forward"
+            or run.proposed_command_batch_hash != batch.command_batch_hash
+            or run.candidate_object_hash != batch.result_document_hash
+            or checkpoint.draft_id != run.draft_id
+            or checkpoint.checkpoint_kind != "ai_apply"
+            or checkpoint.checkpoint_sequence_no != batch.result_sequence_no
+            or checkpoint.document_object_hash != descriptor.content_hash
+            or checkpoint.document_hash != batch.result_document_hash
+            or checkpoint.created_by_operation_id != queued_operation.id
+            or reference.owner_kind != "checkpoint"
+            or reference.owner_id != checkpoint.id
+            or reference.payload_type != "prototype_document"
+            or completed_operation.result_manifest_hash != replay_descriptor.content_hash
+            or replay_reference.owner_kind != "replay_manifest"
+            or replay_reference.owner_id != queued_operation.id
+            or replay_reference.payload_type != "replay_manifest"
+            or assistant_message.id != run.assistant_message_id
+            or assistant_message.command_batch_id != batch.id
+            or assistant_message.status != "applied"
+        ):
+            raise StructuredPrototypeStoreError(
+                "ai_apply_identity_mismatch",
+                "prototype AI apply identities are inconsistent",
+            )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                current_run_row = await self._load_ai_edit_run_row(conn, run.id)
+                if current_run_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "ai_run_missing", "prototype AI edit run does not exist"
+                    )
+                current_run = self._ai_edit_run_from_row(current_run_row)
+                if current_run.status != "preview_ready":
+                    raise StructuredPrototypeStoreError(
+                        "ai_run_conflict", "prototype AI proposal is no longer ready"
+                    )
+                self._assert_ai_edit_run_immutable_identity(current_run, run)
+                draft = await self._require_draft(conn, run.draft_id)
+                await self._assert_draft_accepts_batch(conn, draft, batch)
+                await self._insert_operation(conn, queued_operation)
+                await self._insert_operation_event(conn, queued_event)
+                await self._apply_operation_transition(
+                    conn,
+                    running_operation,
+                    running_step,
+                    running_event,
+                )
+                await self._register_object_tx(conn, descriptor)
+                await self._insert_object_reference(conn, reference)
+                await self._register_object_tx(conn, replay_descriptor)
+                await self._insert_object_reference(conn, replay_reference)
+                await self._insert_command_batch(conn, batch)
+                await self._insert_checkpoint(conn, checkpoint)
+                cursor = await conn.execute(
+                    """
+                    UPDATE prototype_drafts
+                    SET head_sequence_no = ?, head_document_hash = ?,
+                        latest_checkpoint_id = ?, updated_at = ?
+                    WHERE id = ? AND status = 'active'
+                      AND head_sequence_no = ? AND head_document_hash = ?
+                    """,
+                    (
+                        batch.result_sequence_no,
+                        batch.result_document_hash,
+                        checkpoint.id,
+                        run.updated_at.isoformat(),
+                        run.draft_id,
+                        batch.base_sequence_no,
+                        batch.base_document_hash,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "draft_conflict",
+                        "prototype draft changed before AI proposal apply",
+                    )
+                message_cursor = await conn.execute(
+                    """
+                    UPDATE prototype_ai_messages
+                    SET command_batch_id = ?, status = 'applied', updated_at = ?
+                    WHERE id = ? AND run_id = ? AND status = 'completed'
+                    """,
+                    (
+                        batch.id,
+                        assistant_message.updated_at.isoformat(),
+                        assistant_message.id,
+                        run.id,
+                    ),
+                )
+                if message_cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "ai_message_conflict",
+                        "prototype AI proposal message changed before apply",
+                    )
+                await self._apply_operation_transition(
+                    conn,
+                    completed_operation,
+                    completed_step,
+                    completed_event,
+                )
+                await self._update_ai_edit_run(conn, run)
+                updated_draft = await self._require_draft(conn, run.draft_id)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return PrototypeCommandAppendResult(batch=batch, draft=updated_draft, created=True)
+
+    async def load_command_batch_by_request(
+        self,
+        draft_id: str,
+        client_request_id: str,
+    ) -> PrototypeCommandBatchRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_command_batch_by_request_row(
+            conn,
+            draft_id,
+            client_request_id,
+        )
+        return self._command_batch_from_row(row) if row is not None else None
+
+    async def record_operation_transition(
+        self,
+        operation: PrototypeOperation,
+        step: PrototypeOperationStep,
+        event: PrototypeOperationEvent,
+    ) -> None:
+        self._validate_operation_transition_payload(operation, step, event)
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                await self._apply_operation_transition(conn, operation, step, event)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+
+    async def create_document_with_initial_checkpoint(
+        self,
+        *,
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+        document: PrototypeDocumentRecord,
+        draft: PrototypeDraftRecord,
+        checkpoint: PrototypeCheckpointRecord,
+        completed_operation: PrototypeOperation,
+        completion_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+    ) -> None:
+        self._validate_initial_checkpoint(
+            descriptor=descriptor,
+            reference=reference,
+            document=document,
+            draft=draft,
+            checkpoint=checkpoint,
+            completed_operation=completed_operation,
+            completion_step=completion_step,
+            completion_event=completion_event,
+        )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                await self._register_object_tx(conn, descriptor)
+                await conn.execute(
+                    """
+                    INSERT INTO prototype_documents (
+                        id,
+                        project_id,
+                        title,
+                        published_revision_no,
+                        active_draft_id,
+                        created_at,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+                    """,
+                    (
+                        document.id,
+                        document.project_id,
+                        document.title,
+                        document.published_revision_no,
+                        document.created_at.isoformat(),
+                        document.updated_at.isoformat(),
+                    ),
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO prototype_drafts (
+                        id,
+                        document_id,
+                        base_revision_no,
+                        status,
+                        head_sequence_no,
+                        head_document_hash,
+                        latest_checkpoint_id,
+                        publish_revision_no,
+                        created_at,
+                        updated_at,
+                        closed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+                    """,
+                    self._initial_draft_params(draft),
+                )
+                await self._insert_checkpoint(conn, checkpoint)
+                await self._insert_object_reference(conn, reference)
+                await conn.execute(
+                    "UPDATE prototype_documents SET active_draft_id = ? WHERE id = ?",
+                    (draft.id, document.id),
+                )
+                await conn.execute(
+                    "UPDATE prototype_drafts SET latest_checkpoint_id = ? WHERE id = ?",
+                    (checkpoint.id, draft.id),
+                )
+                await self._apply_operation_transition(
+                    conn,
+                    completed_operation,
+                    completion_step,
+                    completion_event,
+                )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+
+    async def append_command_batch(
+        self,
+        *,
+        batch: PrototypeCommandBatchRecord,
+        completed_operation: PrototypeOperation,
+        completion_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+    ) -> PrototypeCommandAppendResult:
+        self._validate_command_append(
+            batch,
+            completed_operation,
+            completion_step,
+            completion_event,
+        )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing_row = await self._load_command_batch_by_request_row(
+                    conn, batch.draft_id, batch.client_request_id
+                )
+                if existing_row is not None:
+                    existing = self._command_batch_from_row(existing_row)
+                    self._assert_idempotent_command_batch(existing, batch)
+                    draft = await self._require_draft(conn, batch.draft_id)
+                    result = PrototypeCommandAppendResult(
+                        batch=existing,
+                        draft=draft,
+                        created=False,
+                    )
+                else:
+                    draft = await self._require_draft(conn, batch.draft_id)
+                    await self._assert_draft_accepts_batch(conn, draft, batch)
+                    await self._insert_command_batch(conn, batch)
+                    cursor = await conn.execute(
+                        """
+                        UPDATE prototype_drafts
+                        SET head_sequence_no = ?, head_document_hash = ?, updated_at = ?
+                        WHERE id = ?
+                          AND status = 'active'
+                          AND head_sequence_no = ?
+                          AND head_document_hash = ?
+                        """,
+                        (
+                            batch.result_sequence_no,
+                            batch.result_document_hash,
+                            batch.created_at.isoformat(),
+                            batch.draft_id,
+                            batch.base_sequence_no,
+                            batch.base_document_hash,
+                        ),
+                    )
+                    if cursor.rowcount != 1:
+                        raise StructuredPrototypeStoreError(
+                            "draft_conflict",
+                            "prototype draft head changed before command commit",
+                        )
+                    await self._apply_operation_transition(
+                        conn,
+                        completed_operation,
+                        completion_step,
+                        completion_event,
+                    )
+                    updated_draft = await self._require_draft(conn, batch.draft_id)
+                    result = PrototypeCommandAppendResult(
+                        batch=batch,
+                        draft=updated_draft,
+                        created=True,
+                    )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return result
+
+    async def register_draft_checkpoint(
+        self,
+        *,
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+        checkpoint: PrototypeCheckpointRecord,
+        completed_operation: PrototypeOperation,
+        completion_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+    ) -> PrototypeDraftRecord:
+        self._validate_checkpoint_registration(
+            descriptor,
+            reference,
+            checkpoint,
+            completed_operation,
+            completion_step,
+            completion_event,
+        )
+        if checkpoint.draft_id is None:
+            raise StructuredPrototypeStoreError(
+                "checkpoint_identity_mismatch",
+                "draft checkpoint must reference a draft",
+            )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                draft = await self._require_draft(conn, checkpoint.draft_id)
+                if draft.status not in {"active", "publishing"}:
+                    raise StructuredPrototypeStoreError(
+                        "checkpoint_head_conflict",
+                        "prototype draft does not accept checkpoints in its current state",
+                    )
+                if (
+                    draft.head_sequence_no != checkpoint.checkpoint_sequence_no
+                    or draft.head_document_hash != checkpoint.document_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "checkpoint_head_conflict",
+                        "prototype checkpoint does not match the current draft head",
+                    )
+                await self._register_object_tx(conn, descriptor)
+                await self._insert_checkpoint(conn, checkpoint)
+                await self._insert_object_reference(conn, reference)
+                cursor = await conn.execute(
+                    """
+                    UPDATE prototype_drafts
+                    SET latest_checkpoint_id = ?, updated_at = ?
+                    WHERE id = ? AND head_sequence_no = ? AND head_document_hash = ?
+                    """,
+                    (
+                        checkpoint.id,
+                        checkpoint.created_at.isoformat(),
+                        draft.id,
+                        checkpoint.checkpoint_sequence_no,
+                        checkpoint.document_hash,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "checkpoint_head_conflict",
+                        "prototype draft head changed before checkpoint commit",
+                    )
+                await self._apply_operation_transition(
+                    conn,
+                    completed_operation,
+                    completion_step,
+                    completion_event,
+                )
+                result = await self._require_draft(conn, draft.id)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return result
+
+    async def next_revision_no(self, document_id: str) -> int:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with conn.execute(
+            "SELECT COALESCE(MAX(revision_no), 0) + 1 FROM prototype_revisions WHERE document_id = ?",
+            (document_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            raise StructuredPrototypeStoreError(
+                "revision_sequence_corrupt",
+                "prototype revision sequence could not be read",
+            )
+        return _required_positive_int(row[0], "revision.next_no")
+
+    async def load_revision(self, revision_id: str) -> PrototypeRevisionRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_revision_row(conn, revision_id)
+        return self._revision_from_row(row) if row is not None else None
+
+    async def load_revision_by_no(
+        self,
+        document_id: str,
+        revision_no: int,
+    ) -> PrototypeRevisionRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_revision_by_no_row(conn, document_id, revision_no)
+        return self._revision_from_row(row) if row is not None else None
+
+    async def load_render_run(self, render_run_id: str) -> PrototypeRenderRunRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_render_run_row(conn, render_run_id)
+        return self._render_run_from_row(row) if row is not None else None
+
+    async def load_render_run_by_operation(
+        self,
+        operation_id: str,
+    ) -> PrototypeRenderRunRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with conn.execute(
+            """
+            SELECT
+                id, document_id, kind, revision_id, ai_edit_run_id, status,
+                renderer_version, renderer_environment_version, runtime_core_version,
+                runtime_core_source_hash, runtime_core_bundle_hash,
+                state_machine_kernel_version, render_runtime_image_hash, browser_version,
+                font_pack_hash, viewport_profile_hash, sandbox_policy_version,
+                input_manifest_hash, document_object_hash, document_hash, operation_id,
+                attempt, artifact_id, output_manifest_hash, error_code, error_message,
+                started_at, completed_at, created_at, updated_at
+            FROM prototype_render_runs
+            WHERE operation_id = ?
+            """,
+            (operation_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return self._render_run_from_row(row) if row is not None else None
+
+    async def load_render_artifact(
+        self,
+        artifact_id: str,
+    ) -> PrototypeRenderArtifactRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_render_artifact_row(conn, artifact_id)
+        return self._render_artifact_from_row(row) if row is not None else None
+
+    async def freeze_publication(
+        self,
+        *,
+        document_descriptor: PrototypeObjectDescriptor,
+        revision_reference: PrototypeObjectReference,
+        input_descriptor: PrototypeObjectDescriptor,
+        input_reference: PrototypeObjectReference,
+        revision: PrototypeRevisionRecord,
+        revision_checkpoint: PrototypeCheckpointRecord,
+        render_run: PrototypeRenderRunRecord,
+        expected_draft_id: str,
+        expected_head_sequence_no: int,
+        expected_document_hash: str,
+        running_operation: PrototypeOperation,
+        completed_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+    ) -> PrototypePublicationFreezeResult:
+        if (
+            revision.document_id != render_run.document_id
+            or revision.id != render_run.revision_id
+            or revision.checkpoint_id != revision_checkpoint.id
+            or revision_checkpoint.revision_id != revision.id
+            or revision_checkpoint.draft_id is not None
+            or revision.document_object_hash != document_descriptor.content_hash
+            or revision.document_hash != expected_document_hash
+            or revision_checkpoint.document_object_hash != expected_document_hash
+            or render_run.document_object_hash != expected_document_hash
+            or input_descriptor.content_hash != render_run.input_manifest_hash
+        ):
+            raise StructuredPrototypeStoreError(
+                "publication_identity_mismatch",
+                "prototype publication freeze identities are inconsistent",
+            )
+        if (
+            revision_reference.owner_kind != "checkpoint"
+            or revision_reference.owner_id != revision_checkpoint.id
+            or revision_reference.content_hash != document_descriptor.content_hash
+            or input_reference.owner_kind != "render_run"
+            or input_reference.owner_id != render_run.id
+            or input_reference.content_hash != input_descriptor.content_hash
+        ):
+            raise StructuredPrototypeStoreError(
+                "publication_reference_mismatch",
+                "prototype publication object references are inconsistent",
+            )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                draft = await self._require_draft(conn, expected_draft_id)
+                document = await self._require_document(conn, revision.document_id)
+                if (
+                    document.active_draft_id != draft.id
+                    or draft.status != "active"
+                    or draft.head_sequence_no != expected_head_sequence_no
+                    or draft.head_document_hash != expected_document_hash
+                    or draft.latest_checkpoint_id is None
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "draft_conflict",
+                        "prototype draft head changed before publication freeze",
+                    )
+                draft_checkpoint = await self._require_checkpoint(
+                    conn,
+                    draft.latest_checkpoint_id,
+                )
+                if (
+                    draft_checkpoint.checkpoint_sequence_no != expected_head_sequence_no
+                    or draft_checkpoint.document_hash != expected_document_hash
+                    or draft_checkpoint.document_object_hash != document_descriptor.content_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "publication_checkpoint_mismatch",
+                        "prototype publication checkpoint does not match the draft head",
+                    )
+                async with conn.execute(
+                    "SELECT COALESCE(MAX(revision_no), 0) + 1 FROM prototype_revisions WHERE document_id = ?",
+                    (revision.document_id,),
+                ) as cursor:
+                    next_row = await cursor.fetchone()
+                if next_row is None or revision.revision_no != _required_positive_int(
+                    next_row[0], "revision.next_no"
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "revision_sequence_conflict",
+                        "prototype revision number is no longer available",
+                    )
+                await self._register_object_tx(conn, document_descriptor)
+                await self._register_object_tx(conn, input_descriptor)
+                await self._insert_checkpoint(conn, revision_checkpoint)
+                await self._insert_object_reference(conn, revision_reference)
+                await self._insert_revision(conn, revision)
+                await self._insert_object_reference(conn, input_reference)
+                await self._insert_render_run(conn, render_run)
+                cursor = await conn.execute(
+                    """
+                    UPDATE prototype_drafts
+                    SET status = 'publishing', publish_revision_no = ?, updated_at = ?
+                    WHERE id = ?
+                      AND status = 'active'
+                      AND head_sequence_no = ?
+                      AND head_document_hash = ?
+                    """,
+                    (
+                        revision.revision_no,
+                        render_run.created_at.isoformat(),
+                        draft.id,
+                        expected_head_sequence_no,
+                        expected_document_hash,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "draft_conflict",
+                        "prototype draft changed before publication freeze commit",
+                    )
+                await self._apply_operation_transition(
+                    conn,
+                    running_operation,
+                    completed_step,
+                    completion_event,
+                )
+                updated_draft = await self._require_draft(conn, draft.id)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return PrototypePublicationFreezeResult(
+            revision=revision,
+            revision_checkpoint=revision_checkpoint,
+            draft=updated_draft,
+            render_run=render_run,
+        )
+
+    async def mark_publication_rendering(
+        self,
+        *,
+        render_run_id: str,
+        started_at: datetime,
+        running_operation: PrototypeOperation,
+        running_step: PrototypeOperationStep,
+        started_event: PrototypeOperationEvent,
+    ) -> PrototypeRenderRunRecord:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                run = await self._require_render_run(conn, render_run_id)
+                if run.kind != "publication" or run.status != "queued":
+                    raise StructuredPrototypeStoreError(
+                        "render_run_conflict",
+                        "prototype publication render run is not queued",
+                    )
+                cursor = await conn.execute(
+                    """
+                    UPDATE prototype_render_runs
+                    SET status = 'rendering', started_at = ?, updated_at = ?
+                    WHERE id = ? AND status = 'queued'
+                    """,
+                    (started_at.isoformat(), started_at.isoformat(), render_run_id),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "render_run_conflict",
+                        "prototype publication render run changed before start",
+                    )
+                await self._apply_operation_transition(
+                    conn,
+                    running_operation,
+                    running_step,
+                    started_event,
+                )
+                updated = await self._require_render_run(conn, render_run_id)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return updated
+
+    async def fail_publication(
+        self,
+        *,
+        render_run_id: str,
+        draft_id: str,
+        error_code: str,
+        error_message: str,
+        failed_at: datetime,
+        failed_operation: PrototypeOperation,
+        failed_step: PrototypeOperationStep,
+        failed_event: PrototypeOperationEvent,
+    ) -> None:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                run = await self._require_render_run(conn, render_run_id)
+                draft = await self._require_draft(conn, draft_id)
+                if run.status not in {"queued", "rendering"}:
+                    raise StructuredPrototypeStoreError(
+                        "render_run_conflict",
+                        "prototype publication render run is already terminal",
+                    )
+                if draft.status != "publishing" or draft.publish_revision_no is None:
+                    raise StructuredPrototypeStoreError(
+                        "publication_state_conflict",
+                        "prototype publishing draft is no longer recoverable",
+                    )
+                await conn.execute(
+                    """
+                    UPDATE prototype_render_runs
+                    SET status = 'failed', error_code = ?, error_message = ?,
+                        completed_at = ?, updated_at = ?
+                    WHERE id = ? AND status IN ('queued', 'rendering')
+                    """,
+                    (
+                        error_code,
+                        error_message[:1000],
+                        failed_at.isoformat(),
+                        failed_at.isoformat(),
+                        run.id,
+                    ),
+                )
+                await conn.execute(
+                    """
+                    UPDATE prototype_drafts
+                    SET status = 'active', publish_revision_no = NULL, updated_at = ?
+                    WHERE id = ? AND status = 'publishing'
+                    """,
+                    (failed_at.isoformat(), draft.id),
+                )
+                await self._apply_operation_transition(
+                    conn,
+                    failed_operation,
+                    failed_step,
+                    failed_event,
+                )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+
+    async def complete_publication(
+        self,
+        *,
+        artifact: PrototypeRenderArtifactRecord,
+        output_descriptor: PrototypeObjectDescriptor,
+        output_reference: PrototypeObjectReference,
+        preflight_descriptor: PrototypeObjectDescriptor,
+        preflight_reference: PrototypeObjectReference,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
+        publishing_draft_id: str,
+        active_draft: PrototypeDraftRecord,
+        active_checkpoint: PrototypeCheckpointRecord,
+        active_checkpoint_reference: PrototypeObjectReference,
+        completed_operation: PrototypeOperation,
+        completed_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+    ) -> PrototypePublicationCompletionResult:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                run = await self._require_render_run(conn, artifact.render_run_id)
+                revision = await self._require_revision(conn, artifact.revision_id or "")
+                publishing_draft = await self._require_draft(conn, publishing_draft_id)
+                document = await self._require_document(conn, artifact.document_id)
+                if (
+                    run.status != "rendering"
+                    or run.kind != "publication"
+                    or run.revision_id != revision.id
+                    or publishing_draft.status != "publishing"
+                    or publishing_draft.publish_revision_no != revision.revision_no
+                    or document.active_draft_id != publishing_draft.id
+                    or artifact.document_hash != revision.document_hash
+                    or artifact.output_manifest_hash != output_descriptor.content_hash
+                    or artifact.visual_preflight_report_hash != preflight_descriptor.content_hash
+                    or active_draft.document_id != document.id
+                    or active_draft.base_revision_no != revision.revision_no
+                    or active_draft.status != "active"
+                    or active_draft.head_document_hash != revision.document_hash
+                    or active_checkpoint.draft_id != active_draft.id
+                    or active_checkpoint.document_hash != revision.document_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "publication_completion_mismatch",
+                        "prototype publication completion identities are inconsistent",
+                    )
+                for descriptor in (
+                    output_descriptor,
+                    preflight_descriptor,
+                    replay_descriptor,
+                ):
+                    await self._register_object_tx(conn, descriptor)
+                for reference in (
+                    output_reference,
+                    preflight_reference,
+                    replay_reference,
+                ):
+                    await self._insert_object_reference(conn, reference)
+                await self._insert_render_artifact(conn, artifact)
+                cursor = await conn.execute(
+                    """
+                    UPDATE prototype_render_runs
+                    SET status = 'ready', artifact_id = ?, output_manifest_hash = ?,
+                        completed_at = ?, updated_at = ?
+                    WHERE id = ? AND status = 'rendering' AND revision_id = ?
+                    """,
+                    (
+                        artifact.id,
+                        artifact.output_manifest_hash,
+                        artifact.created_at.isoformat(),
+                        artifact.created_at.isoformat(),
+                        run.id,
+                        revision.id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "render_run_conflict",
+                        "prototype render run changed before publication completion",
+                    )
+                cursor = await conn.execute(
+                    """
+                    UPDATE prototype_drafts
+                    SET status = 'closed', closed_at = ?, updated_at = ?
+                    WHERE id = ? AND status = 'publishing' AND publish_revision_no = ?
+                    """,
+                    (
+                        artifact.created_at.isoformat(),
+                        artifact.created_at.isoformat(),
+                        publishing_draft.id,
+                        revision.revision_no,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "publication_state_conflict",
+                        "prototype publishing draft changed before completion",
+                    )
+                await conn.execute(
+                    """
+                    INSERT INTO prototype_drafts (
+                        id, document_id, base_revision_no, status, head_sequence_no,
+                        head_document_hash, latest_checkpoint_id, publish_revision_no,
+                        created_at, updated_at, closed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+                    """,
+                    self._initial_draft_params(active_draft),
+                )
+                await self._insert_checkpoint(conn, active_checkpoint)
+                await self._insert_object_reference(conn, active_checkpoint_reference)
+                await conn.execute(
+                    "UPDATE prototype_drafts SET latest_checkpoint_id = ? WHERE id = ?",
+                    (active_checkpoint.id, active_draft.id),
+                )
+                cursor = await conn.execute(
+                    """
+                    UPDATE prototype_documents
+                    SET published_revision_no = ?, active_draft_id = ?, updated_at = ?
+                    WHERE id = ? AND active_draft_id = ?
+                    """,
+                    (
+                        revision.revision_no,
+                        active_draft.id,
+                        artifact.created_at.isoformat(),
+                        document.id,
+                        publishing_draft.id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "publication_state_conflict",
+                        "prototype public pointer changed before completion",
+                    )
+                await self._apply_operation_transition(
+                    conn,
+                    completed_operation,
+                    completed_step,
+                    completion_event,
+                )
+                updated_document = await self._require_document(conn, document.id)
+                closed_draft = await self._require_draft(conn, publishing_draft.id)
+                opened_draft = await self._require_draft(conn, active_draft.id)
+                opened_checkpoint = await self._require_checkpoint(conn, active_checkpoint.id)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return PrototypePublicationCompletionResult(
+            document=updated_document,
+            revision=revision,
+            artifact=artifact,
+            closed_draft=closed_draft,
+            active_draft=opened_draft,
+            active_checkpoint=opened_checkpoint,
+        )
+
+    async def load_published_record(self, document_id: str) -> PrototypePublishedRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        document = await self.load_document(document_id)
+        if document is None or document.published_revision_no is None:
+            return None
+        revision = await self.load_revision_by_no(document_id, document.published_revision_no)
+        if revision is None:
+            raise StructuredPrototypeStoreError(
+                "published_revision_corrupt",
+                "prototype public pointer references a missing revision",
+            )
+        async with conn.execute(
+            """
+            SELECT
+                id, document_id, kind, revision_id, ai_edit_run_id, status,
+                renderer_version, renderer_environment_version, runtime_core_version,
+                runtime_core_source_hash, runtime_core_bundle_hash,
+                state_machine_kernel_version, render_runtime_image_hash, browser_version,
+                font_pack_hash, viewport_profile_hash, sandbox_policy_version,
+                input_manifest_hash, document_object_hash, document_hash, operation_id,
+                attempt, artifact_id, output_manifest_hash, error_code, error_message,
+                started_at, completed_at, created_at, updated_at
+            FROM prototype_render_runs
+            WHERE revision_id = ? AND status = 'ready'
+            ORDER BY attempt DESC
+            LIMIT 1
+            """,
+            (revision.id,),
+        ) as cursor:
+            run_row = await cursor.fetchone()
+        if run_row is None:
+            raise StructuredPrototypeStoreError(
+                "published_render_corrupt",
+                "prototype public revision has no ready render run",
+            )
+        run = self._render_run_from_row(run_row)
+        if run.artifact_id is None:
+            raise StructuredPrototypeStoreError(
+                "published_render_corrupt",
+                "prototype ready render run has no artifact",
+            )
+        artifact = await self.load_render_artifact(run.artifact_id)
+        if artifact is None:
+            raise StructuredPrototypeStoreError(
+                "published_artifact_corrupt",
+                "prototype public render artifact is missing",
+            )
+        return PrototypePublishedRecord(
+            document=document,
+            revision=revision,
+            render_run=run,
+            artifact=artifact,
+        )
+
+    async def load_ready_publication(
+        self,
+        document_id: str,
+        revision_no: int,
+        artifact_id: str,
+    ) -> PrototypePublishedRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        document = await self.load_document(document_id)
+        revision = await self.load_revision_by_no(document_id, revision_no)
+        artifact = await self.load_render_artifact(artifact_id)
+        if document is None or revision is None or artifact is None:
+            return None
+        if artifact.document_id != document_id or artifact.revision_id != revision.id:
+            return None
+        async with conn.execute(
+            """
+            SELECT
+                id, document_id, kind, revision_id, ai_edit_run_id, status,
+                renderer_version, renderer_environment_version, runtime_core_version,
+                runtime_core_source_hash, runtime_core_bundle_hash,
+                state_machine_kernel_version, render_runtime_image_hash, browser_version,
+                font_pack_hash, viewport_profile_hash, sandbox_policy_version,
+                input_manifest_hash, document_object_hash, document_hash, operation_id,
+                attempt, artifact_id, output_manifest_hash, error_code, error_message,
+                started_at, completed_at, created_at, updated_at
+            FROM prototype_render_runs
+            WHERE id = ? AND revision_id = ? AND artifact_id = ? AND status = 'ready'
+            """,
+            (artifact.render_run_id, revision.id, artifact.id),
+        ) as cursor:
+            run_row = await cursor.fetchone()
+        if run_row is None:
+            return None
+        return PrototypePublishedRecord(
+            document=document,
+            revision=revision,
+            render_run=self._render_run_from_row(run_row),
+            artifact=artifact,
+        )
+
+    async def recover_interrupted_publications(self, recovered_at: datetime) -> int:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                async with conn.execute(
+                    """
+                    SELECT
+                        id, document_id, kind, revision_id, ai_edit_run_id, status,
+                        renderer_version, renderer_environment_version, runtime_core_version,
+                        runtime_core_source_hash, runtime_core_bundle_hash,
+                        state_machine_kernel_version, render_runtime_image_hash, browser_version,
+                        font_pack_hash, viewport_profile_hash, sandbox_policy_version,
+                        input_manifest_hash, document_object_hash, document_hash, operation_id,
+                        attempt, artifact_id, output_manifest_hash, error_code, error_message,
+                        started_at, completed_at, created_at, updated_at
+                    FROM prototype_render_runs
+                    WHERE kind = 'publication' AND status IN ('queued', 'rendering')
+                    ORDER BY created_at, id
+                    """
+                ) as cursor:
+                    rows = list(await cursor.fetchall())
+                for row in rows:
+                    run = self._render_run_from_row(row)
+                    if run.revision_id is None:
+                        raise StructuredPrototypeStoreError(
+                            "publication_state_corrupt",
+                            "prototype publication render run has no revision",
+                        )
+                    revision = await self._require_revision(conn, run.revision_id)
+                    await conn.execute(
+                        """
+                        UPDATE prototype_render_runs
+                        SET status = 'interrupted', error_code = 'service_restart',
+                            error_message = 'render interrupted by service restart',
+                            completed_at = ?, updated_at = ?
+                        WHERE id = ? AND status IN ('queued', 'rendering')
+                        """,
+                        (recovered_at.isoformat(), recovered_at.isoformat(), run.id),
+                    )
+                    await conn.execute(
+                        """
+                        UPDATE prototype_drafts
+                        SET status = 'active', publish_revision_no = NULL, updated_at = ?
+                        WHERE document_id = ? AND status = 'publishing' AND publish_revision_no = ?
+                        """,
+                        (
+                            recovered_at.isoformat(),
+                            run.document_id,
+                            revision.revision_no,
+                        ),
+                    )
+                    operation_row = await self._load_operation_row(conn, run.operation_id)
+                    if operation_row is None:
+                        raise StructuredPrototypeStoreError(
+                            "operation_missing",
+                            "prototype interrupted publication operation is missing",
+                        )
+                    operation = self._operation_from_row(operation_row)
+                    if operation.status not in {"queued", "running"}:
+                        continue
+                    failure_hash = (
+                        "sha256:"
+                        + hashlib.sha256(
+                            f"{operation.id}:service_restart:{run.id}".encode()
+                        ).hexdigest()
+                    )
+                    async with conn.execute(
+                        """
+                        SELECT
+                            id, operation_id, parent_step_id, step_kind, step_ordinal,
+                            attempt, status, phase, input_manifest_hash, config_manifest_hash,
+                            output_manifest_hash, completion_evidence_kind,
+                            completion_evidence_ref, error_code, started_at, completed_at
+                        FROM prototype_operation_steps
+                        WHERE operation_id = ?
+                        ORDER BY step_ordinal DESC, attempt DESC
+                        LIMIT 1
+                        """,
+                        (operation.id,),
+                    ) as cursor:
+                        step_row = await cursor.fetchone()
+                    next_event_no = await self._next_operation_event_no(conn, operation.id)
+                    if step_row is not None and step_row[6] == "running":
+                        step_id = _required_str(step_row[0], "step.id")
+                        await conn.execute(
+                            """
+                            UPDATE prototype_operation_steps
+                            SET status = 'interrupted', phase = 'service_restart_recovery',
+                                output_manifest_hash = ?,
+                                completion_evidence_kind = 'failure_manifest_hash',
+                                completion_evidence_ref = ?, error_code = 'service_restart',
+                                completed_at = ?
+                            WHERE id = ? AND status = 'running'
+                            """,
+                            (
+                                failure_hash,
+                                failure_hash,
+                                recovered_at.isoformat(),
+                                step_id,
+                            ),
+                        )
+                    else:
+                        step_ordinal = (
+                            _required_non_negative_int(step_row[4], "step.step_ordinal") + 1
+                            if step_row is not None
+                            else 0
+                        )
+                        step_id = f"{operation.id}:restart:{step_ordinal}"
+                        await conn.execute(
+                            """
+                            INSERT INTO prototype_operation_steps (
+                                id, operation_id, parent_step_id, step_kind, step_ordinal,
+                                attempt, status, phase, input_manifest_hash,
+                                config_manifest_hash, output_manifest_hash,
+                                completion_evidence_kind, completion_evidence_ref,
+                                error_code, started_at, completed_at
+                            ) VALUES (?, ?, NULL, 'service_restart_recovery', ?, 1,
+                                'interrupted', 'service_restart_recovery', ?, ?, ?,
+                                'failure_manifest_hash', ?, 'service_restart', ?, ?)
+                            """,
+                            (
+                                step_id,
+                                operation.id,
+                                step_ordinal,
+                                operation.request_manifest_hash,
+                                operation.config_manifest_hash,
+                                failure_hash,
+                                failure_hash,
+                                recovered_at.isoformat(),
+                                recovered_at.isoformat(),
+                            ),
+                        )
+                    await conn.execute(
+                        """
+                        UPDATE prototype_operations
+                        SET status = 'interrupted', phase = 'service_restart_recovery',
+                            failure_evidence_hash = ?, error_code = 'service_restart',
+                            completed_at = ?
+                        WHERE id = ? AND status IN ('queued', 'running')
+                        """,
+                        (failure_hash, recovered_at.isoformat(), operation.id),
+                    )
+                    await conn.execute(
+                        """
+                        INSERT INTO prototype_operation_events (
+                            operation_id, event_no, step_id, event_kind, status, phase,
+                            input_hash, output_hash, evidence_hash, error_code, occurred_at
+                        ) VALUES (?, ?, ?, 'publication_interrupted', 'interrupted',
+                            'service_restart_recovery', ?, NULL, ?, 'service_restart', ?)
+                        """,
+                        (
+                            operation.id,
+                            next_event_no,
+                            step_id,
+                            operation.request_manifest_hash,
+                            failure_hash,
+                            recovered_at.isoformat(),
+                        ),
+                    )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return len(rows)
+
+    async def mark_draft_corrupt(
+        self,
+        *,
+        draft_id: str,
+        expected_head_sequence_no: int,
+        expected_document_hash: str,
+        failed_operation: PrototypeOperation,
+        failed_step: PrototypeOperationStep,
+        failure_event: PrototypeOperationEvent,
+    ) -> PrototypeDraftRecord:
+        self._validate_operation_transition_payload(
+            failed_operation,
+            failed_step,
+            failure_event,
+        )
+        if (
+            failed_operation.operation_kind != "recover_draft"
+            or failed_operation.resource_kind != "draft"
+            or failed_operation.resource_id != draft_id
+            or failed_operation.status != "failed"
+            or failed_step.status != "failed"
+            or failed_operation.error_code is None
+            or failed_step.error_code != failed_operation.error_code
+            or failure_event.error_code != failed_operation.error_code
+        ):
+            raise StructuredPrototypeStoreError(
+                "draft_corruption_evidence_invalid",
+                "prototype draft corruption evidence is invalid",
+            )
+        _required_hash(expected_document_hash, "draft.expected_document_hash")
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                draft = await self._require_draft(conn, draft_id)
+                if (
+                    draft.head_sequence_no != expected_head_sequence_no
+                    or draft.head_document_hash != expected_document_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "draft_conflict",
+                        "prototype draft head changed before corruption was recorded",
+                    )
+                if draft.status not in {"active", "publishing"}:
+                    raise StructuredPrototypeStoreError(
+                        "draft_not_active",
+                        "prototype draft cannot be marked corrupt in its current state",
+                    )
+                cursor = await conn.execute(
+                    """
+                    UPDATE prototype_drafts
+                    SET status = 'corrupt', updated_at = ?
+                    WHERE id = ?
+                      AND status IN ('active', 'publishing')
+                      AND head_sequence_no = ?
+                      AND head_document_hash = ?
+                    """,
+                    (
+                        failed_operation.completed_at.isoformat()
+                        if failed_operation.completed_at is not None
+                        else failure_event.occurred_at.isoformat(),
+                        draft_id,
+                        expected_head_sequence_no,
+                        expected_document_hash,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "draft_conflict",
+                        "prototype draft changed before corruption was recorded",
+                    )
+                await self._apply_operation_transition(
+                    conn,
+                    failed_operation,
+                    failed_step,
+                    failure_event,
+                )
+                result = await self._require_draft(conn, draft_id)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return result
+
+    async def load_draft_recovery_bundle(
+        self,
+        draft_id: str,
+    ) -> PrototypeDraftRecoveryBundle:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN")
+            try:
+                draft = await self._require_draft(conn, draft_id)
+                if draft.latest_checkpoint_id is None:
+                    raise StructuredPrototypeStoreError(
+                        "draft_corrupt",
+                        "prototype draft has no latest checkpoint",
+                    )
+                document = await self._require_document(conn, draft.document_id)
+                checkpoint = await self._require_checkpoint(conn, draft.latest_checkpoint_id)
+                descriptor_row = await self._load_object_row(
+                    conn,
+                    document.project_id,
+                    checkpoint.document_object_hash,
+                )
+                if descriptor_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "object_missing",
+                        "prototype checkpoint object descriptor is missing",
+                    )
+                descriptor = self._descriptor_from_row(descriptor_row)
+                batches = await self._list_command_batches_after(
+                    conn,
+                    draft.id,
+                    checkpoint.checkpoint_sequence_no,
+                )
+                self._validate_recovery_chain(draft, checkpoint, batches)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return PrototypeDraftRecoveryBundle(
+            document=document,
+            draft=draft,
+            checkpoint=checkpoint,
+            object_descriptor=descriptor,
+            command_batches=tuple(batches),
+        )
+
+    async def load_runtime_session(
+        self,
+        session_id: str,
+    ) -> PrototypeRuntimeSessionRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_runtime_session_row(conn, session_id)
+        return self._runtime_session_from_row(row) if row is not None else None
+
+    async def load_runtime_event_batch_by_request(
+        self,
+        session_id: str,
+        client_event_id: str,
+    ) -> PrototypeRuntimeEventBatchRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_runtime_event_batch_by_request_row(
+            conn,
+            session_id,
+            client_event_id,
+        )
+        return self._runtime_event_batch_from_row(row) if row is not None else None
+
+    async def create_runtime_session_with_initial_checkpoint(
+        self,
+        *,
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+        session: PrototypeRuntimeSessionRecord,
+        checkpoint: PrototypeRuntimeCheckpointRecord,
+        completed_operation: PrototypeOperation,
+        completion_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+    ) -> None:
+        self._validate_runtime_initial_checkpoint(
+            descriptor=descriptor,
+            reference=reference,
+            session=session,
+            checkpoint=checkpoint,
+            operation=completed_operation,
+            step=completion_step,
+            event=completion_event,
+        )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                document = await self._require_document(conn, session.document_id)
+                if document.project_id != session.project_id:
+                    raise StructuredPrototypeStoreError(
+                        "runtime_session_identity_mismatch",
+                        "prototype runtime session document belongs to another project",
+                    )
+                pinned_document = await self._load_object_row(
+                    conn,
+                    session.project_id,
+                    session.pinned_document_object_hash,
+                )
+                if pinned_document is None:
+                    raise StructuredPrototypeStoreError(
+                        "object_missing",
+                        "prototype runtime pinned document object is not registered",
+                    )
+                await self._register_object_tx(conn, descriptor)
+                await self._insert_runtime_session(conn, session, latest_checkpoint_id=None)
+                await self._insert_runtime_checkpoint(conn, checkpoint)
+                await self._insert_object_reference(conn, reference)
+                cursor = await conn.execute(
+                    "UPDATE prototype_runtime_sessions SET latest_checkpoint_id = ? WHERE id = ?",
+                    (checkpoint.id, session.id),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "runtime_session_conflict",
+                        "prototype runtime session disappeared before checkpoint commit",
+                    )
+                await self._apply_operation_transition(
+                    conn,
+                    completed_operation,
+                    completion_step,
+                    completion_event,
+                )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+
+    async def append_runtime_event_batch(
+        self,
+        *,
+        event_batch: PrototypeRuntimeEventBatchRecord,
+        completed_operation: PrototypeOperation,
+        completion_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+    ) -> PrototypeRuntimeEventAppendResult:
+        self._validate_runtime_event_append(
+            event_batch,
+            completed_operation,
+            completion_step,
+            completion_event,
+        )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing_row = await self._load_runtime_event_batch_by_request_row(
+                    conn,
+                    event_batch.session_id,
+                    event_batch.client_event_id,
+                )
+                if existing_row is not None:
+                    existing = self._runtime_event_batch_from_row(existing_row)
+                    self._assert_idempotent_runtime_event_batch(existing, event_batch)
+                    session = await self._require_runtime_session(conn, event_batch.session_id)
+                    result = PrototypeRuntimeEventAppendResult(
+                        event_batch=existing,
+                        session=session,
+                        created=False,
+                    )
+                else:
+                    session = await self._require_runtime_session(conn, event_batch.session_id)
+                    if completed_operation.project_id != session.project_id:
+                        raise StructuredPrototypeStoreError(
+                            "runtime_session_identity_mismatch",
+                            "prototype runtime event operation belongs to another project",
+                        )
+                    await self._assert_runtime_session_accepts_event(conn, session, event_batch)
+                    await self._insert_runtime_event_batch(conn, event_batch)
+                    cursor = await conn.execute(
+                        """
+                        UPDATE prototype_runtime_sessions
+                        SET head_sequence_no = ?,
+                            head_state_hash = ?,
+                            head_view_model_hash = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                          AND status = 'active'
+                          AND head_sequence_no = ?
+                          AND head_state_hash = ?
+                        """,
+                        (
+                            event_batch.result_sequence_no,
+                            event_batch.result_state_hash,
+                            event_batch.result_view_model_hash,
+                            event_batch.created_at.isoformat(),
+                            event_batch.session_id,
+                            event_batch.base_sequence_no,
+                            event_batch.base_state_hash,
+                        ),
+                    )
+                    if cursor.rowcount != 1:
+                        raise StructuredPrototypeStoreError(
+                            "runtime_session_conflict",
+                            "prototype runtime session head changed before event commit",
+                        )
+                    await self._apply_operation_transition(
+                        conn,
+                        completed_operation,
+                        completion_step,
+                        completion_event,
+                    )
+                    updated = await self._require_runtime_session(conn, event_batch.session_id)
+                    result = PrototypeRuntimeEventAppendResult(
+                        event_batch=event_batch,
+                        session=updated,
+                        created=True,
+                    )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return result
+
+    async def register_runtime_checkpoint(
+        self,
+        *,
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+        checkpoint: PrototypeRuntimeCheckpointRecord,
+        completed_operation: PrototypeOperation,
+        completion_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+    ) -> PrototypeRuntimeSessionRecord:
+        self._validate_runtime_checkpoint_registration(
+            descriptor,
+            reference,
+            checkpoint,
+            completed_operation,
+            completion_step,
+            completion_event,
+        )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                session = await self._require_runtime_session(conn, checkpoint.session_id)
+                if completed_operation.project_id != session.project_id:
+                    raise StructuredPrototypeStoreError(
+                        "runtime_session_identity_mismatch",
+                        "prototype runtime checkpoint operation belongs to another project",
+                    )
+                if session.status != "active":
+                    raise StructuredPrototypeStoreError(
+                        "runtime_session_not_active",
+                        "prototype runtime session does not accept checkpoints",
+                    )
+                if (
+                    session.head_sequence_no != checkpoint.checkpoint_sequence_no
+                    or session.head_state_hash != checkpoint.state_hash
+                    or session.head_view_model_hash != checkpoint.view_model_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "runtime_checkpoint_head_conflict",
+                        "prototype runtime checkpoint does not match the session head",
+                    )
+                await self._register_object_tx(conn, descriptor)
+                await self._insert_runtime_checkpoint(conn, checkpoint)
+                await self._insert_object_reference(conn, reference)
+                cursor = await conn.execute(
+                    """
+                    UPDATE prototype_runtime_sessions
+                    SET latest_checkpoint_id = ?, updated_at = ?
+                    WHERE id = ?
+                      AND head_sequence_no = ?
+                      AND head_state_hash = ?
+                      AND head_view_model_hash = ?
+                    """,
+                    (
+                        checkpoint.id,
+                        checkpoint.created_at.isoformat(),
+                        session.id,
+                        checkpoint.checkpoint_sequence_no,
+                        checkpoint.state_hash,
+                        checkpoint.view_model_hash,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "runtime_checkpoint_head_conflict",
+                        "prototype runtime session changed before checkpoint commit",
+                    )
+                await self._apply_operation_transition(
+                    conn,
+                    completed_operation,
+                    completion_step,
+                    completion_event,
+                )
+                result = await self._require_runtime_session(conn, session.id)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return result
+
+    async def mark_runtime_session_corrupt(
+        self,
+        *,
+        session_id: str,
+        expected_head_sequence_no: int,
+        expected_state_hash: str,
+        expected_view_model_hash: str,
+        failed_operation: PrototypeOperation,
+        failed_step: PrototypeOperationStep,
+        failure_event: PrototypeOperationEvent,
+    ) -> PrototypeRuntimeSessionRecord:
+        self._validate_operation_transition_payload(
+            failed_operation,
+            failed_step,
+            failure_event,
+        )
+        if (
+            failed_operation.operation_kind != "replay_runtime_session"
+            or failed_operation.resource_kind != "runtime_session"
+            or failed_operation.resource_id != session_id
+            or failed_operation.status != "failed"
+            or failed_step.status != "failed"
+            or failed_operation.error_code is None
+            or failed_step.error_code != failed_operation.error_code
+            or failure_event.error_code != failed_operation.error_code
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_corruption_evidence_invalid",
+                "prototype runtime corruption evidence is invalid",
+            )
+        _required_hash(expected_state_hash, "runtime_session.expected_state_hash")
+        _required_hash(
+            expected_view_model_hash,
+            "runtime_session.expected_view_model_hash",
+        )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                session = await self._require_runtime_session(conn, session_id)
+                if failed_operation.project_id != session.project_id:
+                    raise StructuredPrototypeStoreError(
+                        "runtime_session_identity_mismatch",
+                        "prototype runtime recovery operation belongs to another project",
+                    )
+                if (
+                    session.head_sequence_no != expected_head_sequence_no
+                    or session.head_state_hash != expected_state_hash
+                    or session.head_view_model_hash != expected_view_model_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "runtime_session_conflict",
+                        "prototype runtime head changed before corruption was recorded",
+                    )
+                if session.status not in {"active", "interrupted"}:
+                    raise StructuredPrototypeStoreError(
+                        "runtime_session_not_active",
+                        "prototype runtime session cannot be marked corrupt in its current state",
+                    )
+                occurred_at = (
+                    failed_operation.completed_at
+                    if failed_operation.completed_at is not None
+                    else failure_event.occurred_at
+                )
+                cursor = await conn.execute(
+                    """
+                    UPDATE prototype_runtime_sessions
+                    SET status = 'corrupt', updated_at = ?, completed_at = ?
+                    WHERE id = ?
+                      AND status IN ('active', 'interrupted')
+                      AND head_sequence_no = ?
+                      AND head_state_hash = ?
+                      AND head_view_model_hash = ?
+                    """,
+                    (
+                        occurred_at.isoformat(),
+                        occurred_at.isoformat(),
+                        session_id,
+                        expected_head_sequence_no,
+                        expected_state_hash,
+                        expected_view_model_hash,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "runtime_session_conflict",
+                        "prototype runtime session changed before corruption was recorded",
+                    )
+                await self._apply_operation_transition(
+                    conn,
+                    failed_operation,
+                    failed_step,
+                    failure_event,
+                )
+                result = await self._require_runtime_session(conn, session_id)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return result
+
+    async def load_runtime_recovery_bundle(
+        self,
+        session_id: str,
+    ) -> PrototypeRuntimeRecoveryBundle:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN")
+            try:
+                session = await self._require_runtime_session(conn, session_id)
+                if session.latest_checkpoint_id is None:
+                    raise StructuredPrototypeStoreError(
+                        "runtime_session_corrupt",
+                        "prototype runtime session has no checkpoint",
+                    )
+                checkpoint = await self._require_runtime_checkpoint(
+                    conn,
+                    session.latest_checkpoint_id,
+                )
+                descriptor_row = await self._load_object_row(
+                    conn,
+                    session.project_id,
+                    checkpoint.state_object_hash,
+                )
+                if descriptor_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "object_missing",
+                        "prototype runtime checkpoint object descriptor is missing",
+                    )
+                descriptor = self._descriptor_from_row(descriptor_row)
+                event_batches = await self._list_runtime_event_batches_after(
+                    conn,
+                    session.id,
+                    checkpoint.checkpoint_sequence_no,
+                )
+                self._validate_runtime_recovery_chain(session, checkpoint, event_batches)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return PrototypeRuntimeRecoveryBundle(
+            session=session,
+            checkpoint=checkpoint,
+            object_descriptor=descriptor,
+            event_batches=tuple(event_batches),
+        )
+
+    async def register_object_reference(
+        self,
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+    ) -> None:
+        self._validate_registration(descriptor, reference)
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = await self._load_object_row(
+                    conn, descriptor.project_id, descriptor.content_hash
+                )
+                if existing is None:
+                    await conn.execute(
+                        """
+                        INSERT INTO prototype_objects (
+                            project_id,
+                            content_hash,
+                            media_type,
+                            storage_codec,
+                            storage_codec_version,
+                            canonical_byte_size,
+                            stored_byte_size,
+                            storage_hash,
+                            storage_key,
+                            created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        self._descriptor_params(descriptor),
+                    )
+                else:
+                    self._assert_descriptor_matches(existing, descriptor)
+                await conn.execute(
+                    """
+                    INSERT OR IGNORE INTO prototype_object_references (
+                        project_id,
+                        owner_kind,
+                        owner_id,
+                        role,
+                        content_hash,
+                        payload_type,
+                        schema_version,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        reference.project_id,
+                        reference.owner_kind,
+                        reference.owner_id,
+                        reference.role,
+                        reference.content_hash,
+                        reference.payload_type,
+                        reference.schema_version,
+                        reference.created_at.isoformat(),
+                    ),
+                )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+
+    async def load_object(
+        self,
+        project_id: str,
+        content_hash: str,
+    ) -> PrototypeObjectDescriptor | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_object_row(conn, project_id, content_hash)
+        return self._descriptor_from_row(row) if row is not None else None
+
+    async def list_object_references(
+        self,
+        project_id: str,
+        owner_kind: str,
+        owner_id: str,
+    ) -> list[PrototypeObjectReference]:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with conn.execute(
+            """
+            SELECT
+                project_id,
+                owner_kind,
+                owner_id,
+                role,
+                content_hash,
+                payload_type,
+                schema_version,
+                created_at
+            FROM prototype_object_references
+            WHERE project_id = ? AND owner_kind = ? AND owner_id = ?
+            ORDER BY role, content_hash, payload_type, schema_version
+            """,
+            (project_id, owner_kind, owner_id),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            PrototypeObjectReference(
+                project_id=_required_str(row[0], "reference.project_id"),
+                owner_kind=_owner_kind(row[1]),
+                owner_id=_required_str(row[2], "reference.owner_id"),
+                role=_required_str(row[3], "reference.role"),
+                content_hash=_required_str(row[4], "reference.content_hash"),
+                payload_type=_payload_type(row[5]),
+                schema_version=_required_positive_int(row[6], "reference.schema_version"),
+                created_at=_datetime(row[7], "reference.created_at"),
+            )
+            for row in rows
+        ]
+
+    @staticmethod
+    def _validate_new_operation(
+        operation: PrototypeOperation,
+        event: PrototypeOperationEvent,
+    ) -> None:
+        if operation.status != "queued" or operation.attempt <= 0:
+            raise StructuredPrototypeStoreError(
+                "operation_invalid",
+                "new prototype operation must start queued with a positive attempt",
+            )
+        if (
+            operation.result_manifest_hash is not None
+            or operation.failure_evidence_hash is not None
+            or operation.error_code is not None
+            or operation.started_at is not None
+            or operation.completed_at is not None
+        ):
+            raise StructuredPrototypeStoreError(
+                "operation_invalid",
+                "new prototype operation contains terminal fields",
+            )
+        _required_hash(operation.request_manifest_hash, "operation.request_manifest_hash")
+        _required_hash(operation.config_manifest_hash, "operation.config_manifest_hash")
+        if (
+            event.operation_id != operation.id
+            or event.event_no != 0
+            or event.step_id is not None
+            or event.status != "queued"
+            or event.phase != operation.phase
+        ):
+            raise StructuredPrototypeStoreError(
+                "operation_event_invalid",
+                "new prototype operation requires matching event zero",
+            )
+
+    @staticmethod
+    def _validate_operation_transition_payload(
+        operation: PrototypeOperation,
+        step: PrototypeOperationStep,
+        event: PrototypeOperationEvent,
+    ) -> None:
+        if step.operation_id != operation.id or event.operation_id != operation.id:
+            raise StructuredPrototypeStoreError(
+                "operation_event_invalid",
+                "prototype operation, step, and event identities do not match",
+            )
+        if event.step_id != step.id or event.status != step.status:
+            raise StructuredPrototypeStoreError(
+                "operation_event_invalid",
+                "prototype operation event does not describe its step state",
+            )
+        if event.phase != step.phase or operation.phase != step.phase:
+            raise StructuredPrototypeStoreError(
+                "operation_event_invalid",
+                "prototype operation phase does not match its step event",
+            )
+        if step.step_ordinal < 0 or step.attempt <= 0 or event.event_no <= 0:
+            raise StructuredPrototypeStoreError(
+                "operation_event_invalid",
+                "prototype operation ordinals and attempts are invalid",
+            )
+        _required_hash(operation.request_manifest_hash, "operation.request_manifest_hash")
+        _required_hash(operation.config_manifest_hash, "operation.config_manifest_hash")
+        _required_hash(step.input_manifest_hash, "step.input_manifest_hash")
+        _required_hash(step.config_manifest_hash, "step.config_manifest_hash")
+        if step.output_manifest_hash is not None:
+            _required_hash(step.output_manifest_hash, "step.output_manifest_hash")
+        for value, field in (
+            (event.input_hash, "event.input_hash"),
+            (event.output_hash, "event.output_hash"),
+            (event.evidence_hash, "event.evidence_hash"),
+        ):
+            if value is not None:
+                _required_hash(value, field)
+        if operation.status == "succeeded":
+            if operation.result_manifest_hash is None or operation.completed_at is None:
+                raise StructuredPrototypeStoreError(
+                    "operation_invalid",
+                    "successful prototype operation requires result evidence and completion time",
+                )
+            _required_hash(operation.result_manifest_hash, "operation.result_manifest_hash")
+        if operation.status == "failed":
+            if (
+                operation.failure_evidence_hash is None
+                or operation.error_code is None
+                or operation.completed_at is None
+            ):
+                raise StructuredPrototypeStoreError(
+                    "operation_invalid",
+                    "failed prototype operation requires failure evidence and error code",
+                )
+            _required_hash(
+                operation.failure_evidence_hash,
+                "operation.failure_evidence_hash",
+            )
+        if step.status == "succeeded" and (
+            step.output_manifest_hash is None
+            or step.completion_evidence_kind is None
+            or step.completion_evidence_ref is None
+            or step.completed_at is None
+        ):
+            raise StructuredPrototypeStoreError(
+                "operation_step_invalid",
+                "successful prototype step requires output and completion evidence",
+            )
+        if step.status == "failed" and (step.error_code is None or step.completed_at is None):
+            raise StructuredPrototypeStoreError(
+                "operation_step_invalid",
+                "failed prototype step requires error code and completion time",
+            )
+
+    @classmethod
+    def _validate_initial_checkpoint(
+        cls,
+        *,
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+        document: PrototypeDocumentRecord,
+        draft: PrototypeDraftRecord,
+        checkpoint: PrototypeCheckpointRecord,
+        completed_operation: PrototypeOperation,
+        completion_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+    ) -> None:
+        cls._validate_registration(descriptor, reference)
+        cls._validate_operation_transition_payload(
+            completed_operation,
+            completion_step,
+            completion_event,
+        )
+        if (
+            document.project_id != descriptor.project_id
+            or document.active_draft_id != draft.id
+            or draft.document_id != document.id
+            or draft.status != "active"
+            or draft.head_sequence_no != 0
+            or draft.head_document_hash != descriptor.content_hash
+            or draft.latest_checkpoint_id != checkpoint.id
+        ):
+            raise StructuredPrototypeStoreError(
+                "initial_checkpoint_invalid",
+                "prototype document and initial draft identities do not match",
+            )
+        if (
+            checkpoint.document_id != document.id
+            or checkpoint.draft_id != draft.id
+            or checkpoint.revision_id is not None
+            or checkpoint.checkpoint_kind not in {"draft", "generation_accept"}
+            or checkpoint.checkpoint_sequence_no != 0
+            or checkpoint.document_object_hash != descriptor.content_hash
+            or checkpoint.document_hash != descriptor.content_hash
+            or checkpoint.created_by_operation_id != completed_operation.id
+        ):
+            raise StructuredPrototypeStoreError(
+                "initial_checkpoint_invalid",
+                "prototype initial checkpoint does not match its object and draft",
+            )
+        if (
+            reference.owner_kind != "checkpoint"
+            or reference.owner_id != checkpoint.id
+            or reference.payload_type != "prototype_document"
+            or reference.schema_version != checkpoint.document_schema_version
+        ):
+            raise StructuredPrototypeStoreError(
+                "initial_checkpoint_invalid",
+                "prototype initial checkpoint object reference is invalid",
+            )
+        if (
+            completed_operation.operation_kind != "create_document"
+            or completed_operation.project_id != document.project_id
+            or completed_operation.resource_kind != "document"
+            or completed_operation.resource_id != document.id
+            or completed_operation.status != "succeeded"
+            or completion_step.status != "succeeded"
+            or completion_step.completion_evidence_ref != checkpoint.id
+        ):
+            raise StructuredPrototypeStoreError(
+                "initial_checkpoint_invalid",
+                "prototype create-document completion evidence is invalid",
+            )
+
+    @classmethod
+    def _validate_command_append(
+        cls,
+        batch: PrototypeCommandBatchRecord,
+        operation: PrototypeOperation,
+        step: PrototypeOperationStep,
+        event: PrototypeOperationEvent,
+    ) -> None:
+        cls._validate_operation_transition_payload(operation, step, event)
+        if batch.result_sequence_no != batch.base_sequence_no + 1:
+            raise StructuredPrototypeStoreError(
+                "command_batch_invalid",
+                "prototype command result sequence must follow its base",
+            )
+        if (
+            not batch.commands_json
+            or not batch.inverse_commands_json
+            or len(batch.commands_json.encode("utf-8"))
+            + len(batch.inverse_commands_json.encode("utf-8"))
+            > 262_144
+        ):
+            raise StructuredPrototypeStoreError(
+                "command_batch_invalid",
+                "prototype command payload is empty or exceeds 256 KiB",
+            )
+        for value, field in (
+            (batch.command_batch_hash, "batch.command_batch_hash"),
+            (batch.base_document_hash, "batch.base_document_hash"),
+            (batch.result_document_hash, "batch.result_document_hash"),
+        ):
+            _required_hash(value, field)
+        expected_operation_kind = {
+            "forward": "apply_command_batch",
+            "undo": "undo",
+            "redo": "redo",
+        }[batch.operation_kind]
+        if (
+            batch.operation_id != operation.id
+            or operation.operation_kind != expected_operation_kind
+            or operation.resource_kind != "draft"
+            or operation.resource_id != batch.draft_id
+            or operation.status != "succeeded"
+            or step.status != "succeeded"
+            or step.completion_evidence_ref != batch.id
+        ):
+            raise StructuredPrototypeStoreError(
+                "command_batch_invalid",
+                "prototype command completion evidence is invalid",
+            )
+        if (batch.operation_kind == "forward") != (batch.target_batch_id is None):
+            raise StructuredPrototypeStoreError(
+                "command_batch_invalid",
+                "prototype command target does not match its operation kind",
+            )
+
+    @classmethod
+    def _validate_checkpoint_registration(
+        cls,
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+        checkpoint: PrototypeCheckpointRecord,
+        operation: PrototypeOperation,
+        step: PrototypeOperationStep,
+        event: PrototypeOperationEvent,
+    ) -> None:
+        cls._validate_registration(descriptor, reference)
+        cls._validate_operation_transition_payload(operation, step, event)
+        if (
+            checkpoint.document_object_hash != descriptor.content_hash
+            or checkpoint.document_hash != descriptor.content_hash
+            or checkpoint.created_by_operation_id != operation.id
+            or checkpoint.revision_id is not None
+            or reference.owner_kind != "checkpoint"
+            or reference.owner_id != checkpoint.id
+            or reference.payload_type != "prototype_document"
+            or reference.schema_version != checkpoint.document_schema_version
+        ):
+            raise StructuredPrototypeStoreError(
+                "checkpoint_identity_mismatch",
+                "prototype checkpoint does not match its object reference",
+            )
+        if (
+            operation.operation_kind != "create_checkpoint"
+            or operation.resource_kind != "draft"
+            or operation.resource_id != checkpoint.draft_id
+            or operation.status != "succeeded"
+            or step.status != "succeeded"
+            or step.completion_evidence_ref != checkpoint.id
+        ):
+            raise StructuredPrototypeStoreError(
+                "checkpoint_identity_mismatch",
+                "prototype checkpoint completion evidence is invalid",
+            )
+
+    @classmethod
+    def _validate_runtime_initial_checkpoint(
+        cls,
+        *,
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+        session: PrototypeRuntimeSessionRecord,
+        checkpoint: PrototypeRuntimeCheckpointRecord,
+        operation: PrototypeOperation,
+        step: PrototypeOperationStep,
+        event: PrototypeOperationEvent,
+    ) -> None:
+        cls._validate_registration(descriptor, reference)
+        cls._validate_operation_transition_payload(operation, step, event)
+        for value, field in (
+            (session.pinned_document_object_hash, "runtime_session.pinned_document_object_hash"),
+            (session.runtime_core_bundle_hash, "runtime_session.runtime_core_bundle_hash"),
+            (session.scenario_hash, "runtime_session.scenario_hash"),
+            (session.head_state_hash, "runtime_session.head_state_hash"),
+            (session.head_view_model_hash, "runtime_session.head_view_model_hash"),
+        ):
+            _required_hash(value, field)
+        for value, field in (
+            (session.id, "runtime_session.id"),
+            (session.project_id, "runtime_session.project_id"),
+            (session.document_id, "runtime_session.document_id"),
+            (session.source_id, "runtime_session.source_id"),
+            (session.runtime_core_version, "runtime_session.runtime_core_version"),
+            (
+                session.state_machine_kernel_version,
+                "runtime_session.state_machine_kernel_version",
+            ),
+            (session.scenario_id, "runtime_session.scenario_id"),
+        ):
+            _required_str(value, field)
+        if (
+            session.status != "active"
+            or session.head_sequence_no != 0
+            or session.completed_at is not None
+            or session.latest_checkpoint_id != checkpoint.id
+            or checkpoint.session_id != session.id
+            or checkpoint.checkpoint_sequence_no != 0
+            or checkpoint.state_object_hash != descriptor.content_hash
+            or checkpoint.state_hash != descriptor.content_hash
+            or checkpoint.state_hash != session.head_state_hash
+            or checkpoint.view_model_hash != session.head_view_model_hash
+            or checkpoint.created_by_operation_id != operation.id
+            or checkpoint.runtime_state_schema_version <= 0
+            or checkpoint.runtime_event_contract_version <= 0
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_initial_checkpoint_invalid",
+                "prototype runtime initial checkpoint does not match its session",
+            )
+        if (
+            reference.owner_kind != "runtime_checkpoint"
+            or reference.owner_id != checkpoint.id
+            or reference.payload_type != "prototype_runtime_state"
+            or reference.schema_version != checkpoint.runtime_state_schema_version
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_initial_checkpoint_invalid",
+                "prototype runtime initial checkpoint object reference is invalid",
+            )
+        if (
+            operation.operation_kind != "create_runtime_session"
+            or operation.project_id != session.project_id
+            or operation.resource_kind != "runtime_session"
+            or operation.resource_id != session.id
+            or operation.status != "succeeded"
+            or step.status != "succeeded"
+            or step.completion_evidence_ref != checkpoint.id
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_initial_checkpoint_invalid",
+                "prototype runtime create-session evidence is invalid",
+            )
+
+    @classmethod
+    def _validate_runtime_event_append(
+        cls,
+        event_batch: PrototypeRuntimeEventBatchRecord,
+        operation: PrototypeOperation,
+        step: PrototypeOperationStep,
+        event: PrototypeOperationEvent,
+    ) -> None:
+        cls._validate_operation_transition_payload(operation, step, event)
+        if event_batch.result_sequence_no != event_batch.base_sequence_no + 1:
+            raise StructuredPrototypeStoreError(
+                "runtime_event_batch_invalid",
+                "prototype runtime event sequence must follow its base",
+            )
+        if (
+            not event_batch.events_json
+            or not event_batch.matched_rule_ids_json
+            or len(event_batch.events_json.encode("utf-8"))
+            + len(event_batch.matched_rule_ids_json.encode("utf-8"))
+            > 131_072
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_event_batch_invalid",
+                "prototype runtime event payload is empty or exceeds 128 KiB",
+            )
+        for value, field in (
+            (event_batch.event_batch_hash, "runtime_event.event_batch_hash"),
+            (event_batch.guard_report_hash, "runtime_event.guard_report_hash"),
+            (event_batch.effect_report_hash, "runtime_event.effect_report_hash"),
+            (event_batch.base_state_hash, "runtime_event.base_state_hash"),
+            (event_batch.result_state_hash, "runtime_event.result_state_hash"),
+            (event_batch.result_view_model_hash, "runtime_event.result_view_model_hash"),
+            (event_batch.runtime_core_bundle_hash, "runtime_event.runtime_core_bundle_hash"),
+        ):
+            _required_hash(value, field)
+        for value, field in (
+            (event_batch.id, "runtime_event.id"),
+            (event_batch.session_id, "runtime_event.session_id"),
+            (event_batch.client_event_id, "runtime_event.client_event_id"),
+            (event_batch.runtime_core_version, "runtime_event.runtime_core_version"),
+            (
+                event_batch.state_machine_kernel_version,
+                "runtime_event.state_machine_kernel_version",
+            ),
+        ):
+            _required_str(value, field)
+        if (
+            event_batch.operation_id != operation.id
+            or operation.operation_kind != "apply_runtime_event"
+            or operation.resource_kind != "runtime_session"
+            or operation.resource_id != event_batch.session_id
+            or operation.status != "succeeded"
+            or step.status != "succeeded"
+            or step.completion_evidence_ref != event_batch.id
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_event_batch_invalid",
+                "prototype runtime event completion evidence is invalid",
+            )
+
+    @classmethod
+    def _validate_runtime_checkpoint_registration(
+        cls,
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+        checkpoint: PrototypeRuntimeCheckpointRecord,
+        operation: PrototypeOperation,
+        step: PrototypeOperationStep,
+        event: PrototypeOperationEvent,
+    ) -> None:
+        cls._validate_registration(descriptor, reference)
+        cls._validate_operation_transition_payload(operation, step, event)
+        if (
+            checkpoint.state_object_hash != descriptor.content_hash
+            or checkpoint.state_hash != descriptor.content_hash
+            or checkpoint.created_by_operation_id != operation.id
+            or reference.owner_kind != "runtime_checkpoint"
+            or reference.owner_id != checkpoint.id
+            or reference.payload_type != "prototype_runtime_state"
+            or reference.schema_version != checkpoint.runtime_state_schema_version
+            or checkpoint.runtime_state_schema_version <= 0
+            or checkpoint.runtime_event_contract_version <= 0
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_checkpoint_identity_mismatch",
+                "prototype runtime checkpoint does not match its object reference",
+            )
+        if (
+            operation.operation_kind != "create_checkpoint"
+            or operation.resource_kind != "runtime_session"
+            or operation.resource_id != checkpoint.session_id
+            or operation.status != "succeeded"
+            or step.status != "succeeded"
+            or step.completion_evidence_ref != checkpoint.id
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_checkpoint_identity_mismatch",
+                "prototype runtime checkpoint completion evidence is invalid",
+            )
+
+    async def _get_conn(self) -> aiosqlite.Connection:
+        async with self._conn_lock:
+            return await self._connect_locked()
+
+    async def _connect_locked(self) -> aiosqlite.Connection:
+        if self._conn is None:
+            self._conn = await aiosqlite.connect(self.db_path, timeout=30.0)
+            await self._conn.execute("PRAGMA journal_mode=WAL")
+            await self._conn.execute("PRAGMA synchronous=NORMAL")
+            await self._conn.execute("PRAGMA foreign_keys=ON")
+        return self._conn
+
+    async def _apply_operation_transition(
+        self,
+        conn: aiosqlite.Connection,
+        operation: PrototypeOperation,
+        step: PrototypeOperationStep,
+        event: PrototypeOperationEvent,
+    ) -> None:
+        existing_operation_row = await self._load_operation_row(conn, operation.id)
+        if existing_operation_row is None:
+            raise StructuredPrototypeStoreError(
+                "operation_missing",
+                "prototype operation does not exist",
+            )
+        existing_operation = self._operation_from_row(existing_operation_row)
+        self._assert_operation_identity(existing_operation, operation)
+        self._assert_operation_status_transition(existing_operation.status, operation.status)
+        expected_event_no = await self._next_operation_event_no(conn, operation.id)
+        if event.event_no != expected_event_no:
+            raise StructuredPrototypeStoreError(
+                "operation_event_sequence_conflict",
+                "prototype operation event number is not the next durable event",
+            )
+        existing_step_row = await self._load_operation_step_row(conn, step.id)
+        if existing_step_row is None:
+            self._assert_new_step_status(step.status)
+            await self._insert_operation_step(conn, step)
+        else:
+            existing_step = self._operation_step_from_row(existing_step_row)
+            self._assert_step_identity(existing_step, step)
+            self._assert_step_status_transition(existing_step.status, step.status)
+            await self._update_operation_step(conn, step)
+        await self._update_operation(conn, operation)
+        await self._insert_operation_event(conn, event)
+
+    @staticmethod
+    def _assert_operation_identity(
+        existing: PrototypeOperation,
+        incoming: PrototypeOperation,
+    ) -> None:
+        existing_identity = (
+            existing.id,
+            existing.operation_kind,
+            existing.project_id,
+            existing.resource_kind,
+            existing.resource_id,
+            existing.client_request_id,
+            existing.correlation_id,
+            existing.parent_operation_id,
+            existing.attempt,
+            existing.request_manifest_hash,
+            existing.config_manifest_hash,
+            existing.created_at,
+        )
+        incoming_identity = (
+            incoming.id,
+            incoming.operation_kind,
+            incoming.project_id,
+            incoming.resource_kind,
+            incoming.resource_id,
+            incoming.client_request_id,
+            incoming.correlation_id,
+            incoming.parent_operation_id,
+            incoming.attempt,
+            incoming.request_manifest_hash,
+            incoming.config_manifest_hash,
+            incoming.created_at,
+        )
+        if existing_identity != incoming_identity:
+            raise StructuredPrototypeStoreError(
+                "operation_identity_conflict",
+                "prototype operation immutable identity changed",
+            )
+
+    @classmethod
+    def _assert_idempotent_operation(
+        cls,
+        existing: PrototypeOperation,
+        incoming: PrototypeOperation,
+    ) -> None:
+        if (
+            existing.operation_kind,
+            existing.project_id,
+            existing.resource_kind,
+            existing.resource_id,
+            existing.client_request_id,
+            existing.parent_operation_id,
+            existing.attempt,
+            existing.request_manifest_hash,
+            existing.config_manifest_hash,
+        ) != (
+            incoming.operation_kind,
+            incoming.project_id,
+            incoming.resource_kind,
+            incoming.resource_id,
+            incoming.client_request_id,
+            incoming.parent_operation_id,
+            incoming.attempt,
+            incoming.request_manifest_hash,
+            incoming.config_manifest_hash,
+        ):
+            raise StructuredPrototypeStoreError(
+                "operation_idempotency_conflict",
+                "prototype client request was retried with different inputs",
+            )
+
+    @staticmethod
+    def _assert_operation_status_transition(
+        existing: PrototypeOperationStatus,
+        incoming: PrototypeOperationStatus,
+    ) -> None:
+        allowed: dict[PrototypeOperationStatus, set[PrototypeOperationStatus]] = {
+            "queued": {"running", "failed", "cancelled"},
+            "running": {"running", "succeeded", "failed", "interrupted", "cancelled"},
+            "succeeded": set(),
+            "failed": set(),
+            "interrupted": set(),
+            "cancelled": set(),
+        }
+        if incoming not in allowed[existing]:
+            raise StructuredPrototypeStoreError(
+                "operation_transition_invalid",
+                f"prototype operation cannot transition from {existing} to {incoming}",
+            )
+
+    @staticmethod
+    def _assert_new_step_status(status: PrototypeOperationStepStatus) -> None:
+        if status not in {"pending", "running", "failed", "skipped"}:
+            raise StructuredPrototypeStoreError(
+                "operation_step_transition_invalid",
+                f"prototype operation step cannot start as {status}",
+            )
+
+    @staticmethod
+    def _assert_step_status_transition(
+        existing: PrototypeOperationStepStatus,
+        incoming: PrototypeOperationStepStatus,
+    ) -> None:
+        allowed: dict[PrototypeOperationStepStatus, set[PrototypeOperationStepStatus]] = {
+            "pending": {"running", "failed", "skipped", "interrupted"},
+            "running": {"succeeded", "failed", "interrupted"},
+            "succeeded": set(),
+            "failed": set(),
+            "skipped": set(),
+            "interrupted": set(),
+        }
+        if incoming not in allowed[existing]:
+            raise StructuredPrototypeStoreError(
+                "operation_step_transition_invalid",
+                f"prototype operation step cannot transition from {existing} to {incoming}",
+            )
+
+    @staticmethod
+    def _assert_step_identity(
+        existing: PrototypeOperationStep,
+        incoming: PrototypeOperationStep,
+    ) -> None:
+        if (
+            existing.id,
+            existing.operation_id,
+            existing.parent_step_id,
+            existing.step_kind,
+            existing.step_ordinal,
+            existing.attempt,
+            existing.input_manifest_hash,
+            existing.config_manifest_hash,
+        ) != (
+            incoming.id,
+            incoming.operation_id,
+            incoming.parent_step_id,
+            incoming.step_kind,
+            incoming.step_ordinal,
+            incoming.attempt,
+            incoming.input_manifest_hash,
+            incoming.config_manifest_hash,
+        ):
+            raise StructuredPrototypeStoreError(
+                "operation_step_identity_conflict",
+                "prototype operation step immutable identity changed",
+            )
+
+    @staticmethod
+    async def _next_operation_event_no(conn: aiosqlite.Connection, operation_id: str) -> int:
+        async with conn.execute(
+            "SELECT COALESCE(MAX(event_no), -1) + 1 FROM prototype_operation_events WHERE operation_id = ?",
+            (operation_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            raise StructuredPrototypeStoreError(
+                "operation_event_corrupt",
+                "prototype operation event sequence could not be read",
+            )
+        return _required_non_negative_int(row[0], "operation_event.next_no")
+
+    @staticmethod
+    async def _insert_operation(conn: aiosqlite.Connection, operation: PrototypeOperation) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_operations (
+                id,
+                operation_kind,
+                project_id,
+                resource_kind,
+                resource_id,
+                client_request_id,
+                correlation_id,
+                parent_operation_id,
+                status,
+                phase,
+                attempt,
+                request_manifest_hash,
+                config_manifest_hash,
+                result_manifest_hash,
+                failure_evidence_hash,
+                error_code,
+                created_at,
+                started_at,
+                completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            AsyncStructuredPrototypeStore._operation_params(operation),
+        )
+
+    @staticmethod
+    async def _update_operation(conn: aiosqlite.Connection, operation: PrototypeOperation) -> None:
+        await conn.execute(
+            """
+            UPDATE prototype_operations
+            SET status = ?,
+                phase = ?,
+                result_manifest_hash = ?,
+                failure_evidence_hash = ?,
+                error_code = ?,
+                started_at = ?,
+                completed_at = ?
+            WHERE id = ?
+            """,
+            (
+                operation.status,
+                operation.phase,
+                operation.result_manifest_hash,
+                operation.failure_evidence_hash,
+                operation.error_code,
+                operation.started_at.isoformat() if operation.started_at else None,
+                operation.completed_at.isoformat() if operation.completed_at else None,
+                operation.id,
+            ),
+        )
+
+    @staticmethod
+    async def _insert_operation_step(
+        conn: aiosqlite.Connection,
+        step: PrototypeOperationStep,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_operation_steps (
+                id,
+                operation_id,
+                parent_step_id,
+                step_kind,
+                step_ordinal,
+                attempt,
+                status,
+                phase,
+                input_manifest_hash,
+                config_manifest_hash,
+                output_manifest_hash,
+                completion_evidence_kind,
+                completion_evidence_ref,
+                error_code,
+                started_at,
+                completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            AsyncStructuredPrototypeStore._operation_step_params(step),
+        )
+
+    @staticmethod
+    async def _update_operation_step(
+        conn: aiosqlite.Connection,
+        step: PrototypeOperationStep,
+    ) -> None:
+        await conn.execute(
+            """
+            UPDATE prototype_operation_steps
+            SET status = ?,
+                phase = ?,
+                output_manifest_hash = ?,
+                completion_evidence_kind = ?,
+                completion_evidence_ref = ?,
+                error_code = ?,
+                started_at = ?,
+                completed_at = ?
+            WHERE id = ?
+            """,
+            (
+                step.status,
+                step.phase,
+                step.output_manifest_hash,
+                step.completion_evidence_kind,
+                step.completion_evidence_ref,
+                step.error_code,
+                step.started_at.isoformat() if step.started_at else None,
+                step.completed_at.isoformat() if step.completed_at else None,
+                step.id,
+            ),
+        )
+
+    @staticmethod
+    async def _insert_operation_event(
+        conn: aiosqlite.Connection,
+        event: PrototypeOperationEvent,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_operation_events (
+                operation_id,
+                event_no,
+                step_id,
+                event_kind,
+                status,
+                phase,
+                input_hash,
+                output_hash,
+                evidence_hash,
+                error_code,
+                occurred_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.operation_id,
+                event.event_no,
+                event.step_id,
+                event.event_kind,
+                event.status,
+                event.phase,
+                event.input_hash,
+                event.output_hash,
+                event.evidence_hash,
+                event.error_code,
+                event.occurred_at.isoformat(),
+            ),
+        )
+
+    async def _register_object_tx(
+        self,
+        conn: aiosqlite.Connection,
+        descriptor: PrototypeObjectDescriptor,
+    ) -> None:
+        existing = await self._load_object_row(
+            conn,
+            descriptor.project_id,
+            descriptor.content_hash,
+        )
+        if existing is None:
+            await conn.execute(
+                """
+                INSERT INTO prototype_objects (
+                    project_id,
+                    content_hash,
+                    media_type,
+                    storage_codec,
+                    storage_codec_version,
+                    canonical_byte_size,
+                    stored_byte_size,
+                    storage_hash,
+                    storage_key,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                self._descriptor_params(descriptor),
+            )
+        else:
+            self._assert_descriptor_matches(existing, descriptor)
+
+    @staticmethod
+    async def _insert_object_reference(
+        conn: aiosqlite.Connection,
+        reference: PrototypeObjectReference,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT OR IGNORE INTO prototype_object_references (
+                project_id,
+                owner_kind,
+                owner_id,
+                role,
+                content_hash,
+                payload_type,
+                schema_version,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                reference.project_id,
+                reference.owner_kind,
+                reference.owner_id,
+                reference.role,
+                reference.content_hash,
+                reference.payload_type,
+                reference.schema_version,
+                reference.created_at.isoformat(),
+            ),
+        )
+
+    @staticmethod
+    async def _insert_checkpoint(
+        conn: aiosqlite.Connection,
+        checkpoint: PrototypeCheckpointRecord,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_checkpoints (
+                id,
+                document_id,
+                draft_id,
+                revision_id,
+                checkpoint_kind,
+                checkpoint_sequence_no,
+                document_object_hash,
+                document_schema_version,
+                command_contract_version,
+                document_hash,
+                created_by_operation_id,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                checkpoint.id,
+                checkpoint.document_id,
+                checkpoint.draft_id,
+                checkpoint.revision_id,
+                checkpoint.checkpoint_kind,
+                checkpoint.checkpoint_sequence_no,
+                checkpoint.document_object_hash,
+                checkpoint.document_schema_version,
+                checkpoint.command_contract_version,
+                checkpoint.document_hash,
+                checkpoint.created_by_operation_id,
+                checkpoint.created_at.isoformat(),
+            ),
+        )
+
+    @staticmethod
+    async def _insert_command_batch(
+        conn: aiosqlite.Connection,
+        batch: PrototypeCommandBatchRecord,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_command_batches (
+                id,
+                draft_id,
+                base_sequence_no,
+                result_sequence_no,
+                client_request_id,
+                origin,
+                operation_kind,
+                target_batch_id,
+                command_contract_version,
+                commands_json,
+                inverse_commands_json,
+                command_batch_hash,
+                base_document_hash,
+                result_document_hash,
+                operation_id,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            AsyncStructuredPrototypeStore._command_batch_params(batch),
+        )
+
+    @staticmethod
+    async def _insert_revision(
+        conn: aiosqlite.Connection,
+        revision: PrototypeRevisionRecord,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_revisions (
+                id, document_id, revision_no, schema_version, checkpoint_id,
+                document_object_hash, document_hash, summary, source, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                revision.id,
+                revision.document_id,
+                revision.revision_no,
+                revision.schema_version,
+                revision.checkpoint_id,
+                revision.document_object_hash,
+                revision.document_hash,
+                revision.summary,
+                revision.source,
+                revision.created_at.isoformat(),
+            ),
+        )
+
+    @staticmethod
+    async def _insert_ai_message(
+        conn: aiosqlite.Connection,
+        message: PrototypeAiMessageRecord,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_ai_messages (
+                id, thread_id, client_message_id, role, kind, content, run_id,
+                command_batch_id, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            AsyncStructuredPrototypeStore._ai_message_params(message),
+        )
+
+    @staticmethod
+    async def _insert_ai_edit_run(
+        conn: aiosqlite.Connection,
+        run: PrototypeAiEditRunRecord,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_ai_edit_runs (
+                id, thread_id, user_message_id, assistant_message_id, document_id,
+                draft_id, operation_id, retry_of_run_id, status, scope_json,
+                base_head_sequence_no, base_document_hash, context_object_hash,
+                outcome_object_hash, submission_id, submission_request_hash,
+                submission_accepted_at, replay_manifest_object_hash,
+                proposed_command_batch_json,
+                proposed_command_batch_hash, candidate_object_hash,
+                preview_render_run_id, preview_artifact_id, summary,
+                affected_entity_ids_json, task_id, execution_process_id, error_code,
+                error_message, created_at, updated_at, completed_at
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            AsyncStructuredPrototypeStore._ai_edit_run_params(run),
+        )
+
+    @staticmethod
+    async def _update_ai_edit_run(
+        conn: aiosqlite.Connection,
+        run: PrototypeAiEditRunRecord,
+    ) -> None:
+        cursor = await conn.execute(
+            """
+            UPDATE prototype_ai_edit_runs
+            SET assistant_message_id = ?, status = ?, context_object_hash = ?,
+                outcome_object_hash = ?, submission_id = ?, submission_request_hash = ?,
+                submission_accepted_at = ?, replay_manifest_object_hash = ?,
+                proposed_command_batch_json = ?,
+                proposed_command_batch_hash = ?, candidate_object_hash = ?,
+                preview_render_run_id = ?, preview_artifact_id = ?, summary = ?,
+                affected_entity_ids_json = ?, task_id = ?, execution_process_id = ?,
+                error_code = ?, error_message = ?, updated_at = ?, completed_at = ?
+            WHERE id = ?
+            """,
+            (
+                run.assistant_message_id,
+                run.status,
+                run.context_object_hash,
+                run.outcome_object_hash,
+                run.submission_id,
+                run.submission_request_hash,
+                run.submission_accepted_at.isoformat()
+                if run.submission_accepted_at is not None
+                else None,
+                run.replay_manifest_object_hash,
+                run.proposed_command_batch_json,
+                run.proposed_command_batch_hash,
+                run.candidate_object_hash,
+                run.preview_render_run_id,
+                run.preview_artifact_id,
+                run.summary,
+                run.affected_entity_ids_json,
+                run.task_id,
+                run.execution_process_id,
+                run.error_code,
+                run.error_message,
+                run.updated_at.isoformat(),
+                run.completed_at.isoformat() if run.completed_at is not None else None,
+                run.id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise StructuredPrototypeStoreError(
+                "ai_run_missing",
+                "prototype AI edit run disappeared during transition",
+            )
+
+    @staticmethod
+    async def _insert_generation_job(
+        conn: aiosqlite.Connection,
+        job: PrototypeDocumentGenerationJobRecord,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_document_generation_jobs (
+                id, project_id, client_request_id, status, operation_id,
+                request_manifest_object_hash, request_hash, context_manifest_object_hash,
+                blueprint_object_hash, blueprint_version, blueprint_hash,
+                candidate_object_hash, candidate_document_hash, preview_render_run_id,
+                preview_artifact_id, preview_renderer_version, preview_storage_key,
+                preview_output_hash, preview_output_manifest_hash,
+                preview_visual_preflight_report_hash, replay_manifest_object_hash,
+                document_id, error_code, error_message, created_at, updated_at, completed_at
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            AsyncStructuredPrototypeStore._generation_job_params(job),
+        )
+
+    @staticmethod
+    async def _update_generation_job(
+        conn: aiosqlite.Connection,
+        job: PrototypeDocumentGenerationJobRecord,
+    ) -> None:
+        cursor = await conn.execute(
+            """
+            UPDATE prototype_document_generation_jobs
+            SET status = ?, blueprint_object_hash = ?, blueprint_version = ?,
+                blueprint_hash = ?, candidate_object_hash = ?, candidate_document_hash = ?,
+                preview_render_run_id = ?, preview_artifact_id = ?,
+                preview_renderer_version = ?, preview_storage_key = ?,
+                preview_output_hash = ?, preview_output_manifest_hash = ?,
+                preview_visual_preflight_report_hash = ?, replay_manifest_object_hash = ?,
+                document_id = ?, error_code = ?, error_message = ?, updated_at = ?,
+                completed_at = ?
+            WHERE id = ?
+            """,
+            (
+                job.status,
+                job.blueprint_object_hash,
+                job.blueprint_version,
+                job.blueprint_hash,
+                job.candidate_object_hash,
+                job.candidate_document_hash,
+                job.preview_render_run_id,
+                job.preview_artifact_id,
+                job.preview_renderer_version,
+                job.preview_storage_key,
+                job.preview_output_hash,
+                job.preview_output_manifest_hash,
+                job.preview_visual_preflight_report_hash,
+                job.replay_manifest_object_hash,
+                job.document_id,
+                job.error_code,
+                job.error_message,
+                job.updated_at.isoformat(),
+                job.completed_at.isoformat() if job.completed_at is not None else None,
+                job.id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise StructuredPrototypeStoreError(
+                "generation_job_missing",
+                "structured prototype generation job disappeared during transition",
+            )
+
+    @staticmethod
+    async def _insert_generation_run(
+        conn: aiosqlite.Connection,
+        run: PrototypeDocumentGenerationRunRecord,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_document_generation_runs (
+                id, job_id, status, blueprint_hash, total, processed, succeeded,
+                failed, running, pending, error_code, error_message, created_at,
+                updated_at, started_at, completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            AsyncStructuredPrototypeStore._generation_run_params(run),
+        )
+
+    @staticmethod
+    async def _update_generation_run(
+        conn: aiosqlite.Connection,
+        run: PrototypeDocumentGenerationRunRecord,
+    ) -> None:
+        cursor = await conn.execute(
+            """
+            UPDATE prototype_document_generation_runs
+            SET status = ?, blueprint_hash = ?, total = ?, processed = ?,
+                succeeded = ?, failed = ?, running = ?, pending = ?, error_code = ?,
+                error_message = ?, updated_at = ?, started_at = ?, completed_at = ?
+            WHERE id = ?
+            """,
+            (
+                run.status,
+                run.blueprint_hash,
+                run.total,
+                run.processed,
+                run.succeeded,
+                run.failed,
+                run.running,
+                run.pending,
+                run.error_code,
+                run.error_message,
+                run.updated_at.isoformat(),
+                run.started_at.isoformat() if run.started_at is not None else None,
+                run.completed_at.isoformat() if run.completed_at is not None else None,
+                run.id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise StructuredPrototypeStoreError(
+                "generation_run_missing",
+                "structured prototype generation run disappeared during transition",
+            )
+
+    @staticmethod
+    async def _insert_generation_item(
+        conn: aiosqlite.Connection,
+        item: PrototypeDocumentGenerationItemRecord,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_document_generation_run_items (
+                id, job_id, run_id, kind, item_key, page_key, status, phase,
+                attempt, task_kind, operation_id, context_object_hash, submission_id,
+                submission_request_hash, submission_normalized_fields_json,
+                submission_accepted_at, output_object_hash,
+                task_id, execution_process_id, error_code, error_message, created_at,
+                updated_at, completed_at
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            AsyncStructuredPrototypeStore._generation_item_params(item),
+        )
+
+    @staticmethod
+    async def _update_generation_item(
+        conn: aiosqlite.Connection,
+        item: PrototypeDocumentGenerationItemRecord,
+    ) -> None:
+        cursor = await conn.execute(
+            """
+            UPDATE prototype_document_generation_run_items
+            SET status = ?, phase = ?, submission_id = ?, submission_request_hash = ?,
+                submission_normalized_fields_json = ?, submission_accepted_at = ?,
+                output_object_hash = ?, task_id = ?,
+                execution_process_id = ?, error_code = ?, error_message = ?,
+                updated_at = ?, completed_at = ?
+            WHERE id = ?
+            """,
+            (
+                item.status,
+                item.phase,
+                item.submission_id,
+                item.submission_request_hash,
+                json.dumps(
+                    list(item.submission_normalized_fields),
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ),
+                item.submission_accepted_at.isoformat()
+                if item.submission_accepted_at is not None
+                else None,
+                item.output_object_hash,
+                item.task_id,
+                item.execution_process_id,
+                item.error_code,
+                item.error_message,
+                item.updated_at.isoformat(),
+                item.completed_at.isoformat() if item.completed_at is not None else None,
+                item.id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise StructuredPrototypeStoreError(
+                "generation_item_missing",
+                "structured prototype generation item disappeared during transition",
+            )
+
+    @staticmethod
+    async def _insert_render_run(
+        conn: aiosqlite.Connection,
+        run: PrototypeRenderRunRecord,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_render_runs (
+                id, document_id, kind, revision_id, ai_edit_run_id, status,
+                renderer_version, renderer_environment_version, runtime_core_version,
+                runtime_core_source_hash, runtime_core_bundle_hash,
+                state_machine_kernel_version, render_runtime_image_hash, browser_version,
+                font_pack_hash, viewport_profile_hash, sandbox_policy_version,
+                input_manifest_hash, document_object_hash, document_hash, operation_id,
+                attempt, artifact_id, output_manifest_hash, error_code, error_message,
+                started_at, completed_at, created_at, updated_at
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?
+            )
+            """,
+            (
+                run.id,
+                run.document_id,
+                run.kind,
+                run.revision_id,
+                run.ai_edit_run_id,
+                run.status,
+                run.renderer_version,
+                run.renderer_environment_version,
+                run.runtime_core_version,
+                run.runtime_core_source_hash,
+                run.runtime_core_bundle_hash,
+                run.state_machine_kernel_version,
+                run.render_runtime_image_hash,
+                run.browser_version,
+                run.font_pack_hash,
+                run.viewport_profile_hash,
+                run.sandbox_policy_version,
+                run.input_manifest_hash,
+                run.document_object_hash,
+                run.document_hash,
+                run.operation_id,
+                run.attempt,
+                run.artifact_id,
+                run.output_manifest_hash,
+                run.error_code,
+                run.error_message,
+                run.started_at.isoformat() if run.started_at is not None else None,
+                run.completed_at.isoformat() if run.completed_at is not None else None,
+                run.created_at.isoformat(),
+                run.updated_at.isoformat(),
+            ),
+        )
+
+    @staticmethod
+    async def _insert_render_artifact(
+        conn: aiosqlite.Connection,
+        artifact: PrototypeRenderArtifactRecord,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_render_artifacts (
+                id, render_run_id, document_id, revision_id, renderer_version,
+                document_hash, output_hash, output_manifest_hash, storage_key,
+                entrypoint, visual_preflight_report_hash, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                artifact.id,
+                artifact.render_run_id,
+                artifact.document_id,
+                artifact.revision_id,
+                artifact.renderer_version,
+                artifact.document_hash,
+                artifact.output_hash,
+                artifact.output_manifest_hash,
+                artifact.storage_key,
+                artifact.entrypoint,
+                artifact.visual_preflight_report_hash,
+                artifact.created_at.isoformat(),
+            ),
+        )
+
+    @staticmethod
+    async def _insert_runtime_session(
+        conn: aiosqlite.Connection,
+        session: PrototypeRuntimeSessionRecord,
+        *,
+        latest_checkpoint_id: str | None,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_runtime_sessions (
+                id,
+                project_id,
+                document_id,
+                source_kind,
+                source_id,
+                pinned_document_object_hash,
+                runtime_core_version,
+                runtime_core_bundle_hash,
+                state_machine_kernel_version,
+                scenario_id,
+                scenario_hash,
+                status,
+                head_sequence_no,
+                head_state_hash,
+                head_view_model_hash,
+                latest_checkpoint_id,
+                recording_kind,
+                allow_simulated_role_switch,
+                actor_subject_id,
+                created_at,
+                updated_at,
+                completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session.id,
+                session.project_id,
+                session.document_id,
+                session.source_kind,
+                session.source_id,
+                session.pinned_document_object_hash,
+                session.runtime_core_version,
+                session.runtime_core_bundle_hash,
+                session.state_machine_kernel_version,
+                session.scenario_id,
+                session.scenario_hash,
+                session.status,
+                session.head_sequence_no,
+                session.head_state_hash,
+                session.head_view_model_hash,
+                latest_checkpoint_id,
+                session.recording_kind,
+                1 if session.allow_simulated_role_switch else 0,
+                session.actor_subject_id,
+                session.created_at.isoformat(),
+                session.updated_at.isoformat(),
+                session.completed_at.isoformat() if session.completed_at else None,
+            ),
+        )
+
+    @staticmethod
+    async def _insert_runtime_event_batch(
+        conn: aiosqlite.Connection,
+        event_batch: PrototypeRuntimeEventBatchRecord,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_runtime_event_batches (
+                id,
+                session_id,
+                client_event_id,
+                base_sequence_no,
+                result_sequence_no,
+                events_json,
+                event_batch_hash,
+                matched_rule_ids_json,
+                guard_report_hash,
+                effect_report_hash,
+                outcome,
+                base_state_hash,
+                result_state_hash,
+                result_view_model_hash,
+                runtime_core_version,
+                runtime_core_bundle_hash,
+                state_machine_kernel_version,
+                operation_id,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_batch.id,
+                event_batch.session_id,
+                event_batch.client_event_id,
+                event_batch.base_sequence_no,
+                event_batch.result_sequence_no,
+                event_batch.events_json,
+                event_batch.event_batch_hash,
+                event_batch.matched_rule_ids_json,
+                event_batch.guard_report_hash,
+                event_batch.effect_report_hash,
+                event_batch.outcome,
+                event_batch.base_state_hash,
+                event_batch.result_state_hash,
+                event_batch.result_view_model_hash,
+                event_batch.runtime_core_version,
+                event_batch.runtime_core_bundle_hash,
+                event_batch.state_machine_kernel_version,
+                event_batch.operation_id,
+                event_batch.created_at.isoformat(),
+            ),
+        )
+
+    @staticmethod
+    async def _insert_runtime_checkpoint(
+        conn: aiosqlite.Connection,
+        checkpoint: PrototypeRuntimeCheckpointRecord,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO prototype_runtime_checkpoints (
+                id,
+                session_id,
+                checkpoint_sequence_no,
+                state_object_hash,
+                runtime_state_schema_version,
+                runtime_event_contract_version,
+                state_hash,
+                view_model_hash,
+                created_by_operation_id,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                checkpoint.id,
+                checkpoint.session_id,
+                checkpoint.checkpoint_sequence_no,
+                checkpoint.state_object_hash,
+                checkpoint.runtime_state_schema_version,
+                checkpoint.runtime_event_contract_version,
+                checkpoint.state_hash,
+                checkpoint.view_model_hash,
+                checkpoint.created_by_operation_id,
+                checkpoint.created_at.isoformat(),
+            ),
+        )
+
+    @staticmethod
+    async def _load_object_row(
+        conn: aiosqlite.Connection,
+        project_id: str,
+        content_hash: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            """
+            SELECT
+                project_id,
+                content_hash,
+                media_type,
+                storage_codec,
+                storage_codec_version,
+                canonical_byte_size,
+                stored_byte_size,
+                storage_hash,
+                storage_key,
+                created_at
+            FROM prototype_objects
+            WHERE project_id = ? AND content_hash = ?
+            """,
+            (project_id, content_hash),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_operation_row(
+        conn: aiosqlite.Connection,
+        operation_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            """
+            SELECT
+                id,
+                operation_kind,
+                project_id,
+                resource_kind,
+                resource_id,
+                client_request_id,
+                correlation_id,
+                parent_operation_id,
+                status,
+                phase,
+                attempt,
+                request_manifest_hash,
+                config_manifest_hash,
+                result_manifest_hash,
+                failure_evidence_hash,
+                error_code,
+                created_at,
+                started_at,
+                completed_at
+            FROM prototype_operations
+            WHERE id = ?
+            """,
+            (operation_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_operation_by_request_row(
+        conn: aiosqlite.Connection,
+        project_id: str,
+        operation_kind: PrototypeOperationKind,
+        client_request_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            """
+            SELECT
+                id,
+                operation_kind,
+                project_id,
+                resource_kind,
+                resource_id,
+                client_request_id,
+                correlation_id,
+                parent_operation_id,
+                status,
+                phase,
+                attempt,
+                request_manifest_hash,
+                config_manifest_hash,
+                result_manifest_hash,
+                failure_evidence_hash,
+                error_code,
+                created_at,
+                started_at,
+                completed_at
+            FROM prototype_operations
+            WHERE project_id = ? AND operation_kind = ? AND client_request_id = ?
+            """,
+            (project_id, operation_kind, client_request_id),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_operation_step_row(
+        conn: aiosqlite.Connection,
+        step_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            """
+            SELECT
+                id,
+                operation_id,
+                parent_step_id,
+                step_kind,
+                step_ordinal,
+                attempt,
+                status,
+                phase,
+                input_manifest_hash,
+                config_manifest_hash,
+                output_manifest_hash,
+                completion_evidence_kind,
+                completion_evidence_ref,
+                error_code,
+                started_at,
+                completed_at
+            FROM prototype_operation_steps
+            WHERE id = ?
+            """,
+            (step_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_command_batch_by_request_row(
+        conn: aiosqlite.Connection,
+        draft_id: str,
+        client_request_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            """
+            SELECT
+                id,
+                draft_id,
+                base_sequence_no,
+                result_sequence_no,
+                client_request_id,
+                origin,
+                operation_kind,
+                target_batch_id,
+                command_contract_version,
+                commands_json,
+                inverse_commands_json,
+                command_batch_hash,
+                base_document_hash,
+                result_document_hash,
+                operation_id,
+                created_at
+            FROM prototype_command_batches
+            WHERE draft_id = ? AND client_request_id = ?
+            """,
+            (draft_id, client_request_id),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_ai_thread_row(
+        conn: aiosqlite.Connection,
+        thread_id: str,
+    ) -> aiosqlite.Row | None:
+        async with conn.execute(
+            """
+            SELECT id, document_id, title, status, summary_json,
+                   summary_through_message_id, created_at, updated_at
+            FROM prototype_ai_threads
+            WHERE id = ?
+            """,
+            (thread_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_ai_message_by_request_row(
+        conn: aiosqlite.Connection,
+        thread_id: str,
+        client_message_id: str | None,
+    ) -> aiosqlite.Row | None:
+        if client_message_id is None:
+            return None
+        async with conn.execute(
+            """
+            SELECT id, thread_id, client_message_id, role, kind, content,
+                   run_id, command_batch_id, status, created_at, updated_at
+            FROM prototype_ai_messages
+            WHERE thread_id = ? AND client_message_id = ?
+            """,
+            (thread_id, client_message_id),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @classmethod
+    async def _load_ai_edit_run_row(
+        cls,
+        conn: aiosqlite.Connection,
+        run_id: str,
+    ) -> aiosqlite.Row | None:
+        async with conn.execute(
+            f"""
+            SELECT {cls._AI_EDIT_RUN_COLUMNS}
+            FROM prototype_ai_edit_runs
+            WHERE id = ?
+            """,
+            (run_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @classmethod
+    async def _load_generation_job_row(
+        cls,
+        conn: aiosqlite.Connection,
+        job_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            f"""
+            SELECT {cls._GENERATION_JOB_COLUMNS}
+            FROM prototype_document_generation_jobs
+            WHERE id = ?
+            """,
+            (job_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @classmethod
+    async def _load_generation_job_by_request_row(
+        cls,
+        conn: aiosqlite.Connection,
+        project_id: str,
+        client_request_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            f"""
+            SELECT {cls._GENERATION_JOB_COLUMNS}
+            FROM prototype_document_generation_jobs
+            WHERE project_id = ? AND client_request_id = ?
+            """,
+            (project_id, client_request_id),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @classmethod
+    async def _load_generation_run_row(
+        cls,
+        conn: aiosqlite.Connection,
+        run_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            f"""
+            SELECT {cls._GENERATION_RUN_COLUMNS}
+            FROM prototype_document_generation_runs
+            WHERE id = ?
+            """,
+            (run_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @classmethod
+    async def _load_generation_item_row(
+        cls,
+        conn: aiosqlite.Connection,
+        item_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            f"""
+            SELECT {cls._GENERATION_ITEM_COLUMNS}
+            FROM prototype_document_generation_run_items
+            WHERE id = ?
+            """,
+            (item_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @classmethod
+    async def _load_generation_snapshot_tx(
+        cls,
+        conn: aiosqlite.Connection,
+        job_id: str,
+    ) -> PrototypeDocumentGenerationSnapshot:
+        job_row = await cls._load_generation_job_row(conn, job_id)
+        if job_row is None:
+            raise StructuredPrototypeStoreError(
+                "generation_job_missing",
+                "structured prototype generation job does not exist",
+            )
+        async with conn.execute(
+            f"""
+            SELECT {cls._GENERATION_RUN_COLUMNS}
+            FROM prototype_document_generation_runs
+            WHERE job_id = ?
+            ORDER BY rowid DESC
+            LIMIT 1
+            """,
+            (job_id,),
+        ) as cursor:
+            run_row = await cursor.fetchone()
+        if run_row is None:
+            return PrototypeDocumentGenerationSnapshot(
+                job=cls._generation_job_from_row(job_row),
+                latest_run=None,
+                items=(),
+            )
+        run = cls._generation_run_from_row(run_row)
+        async with conn.execute(
+            f"""
+            SELECT {cls._GENERATION_ITEM_COLUMNS}
+            FROM prototype_document_generation_run_items
+            WHERE run_id = ?
+            ORDER BY CASE kind WHEN 'blueprint' THEN 0 WHEN 'foundation' THEN 1 ELSE 2 END,
+                     CASE item_key
+                         WHEN 'purchase-list' THEN 0
+                         WHEN 'purchase-create' THEN 1
+                         WHEN 'purchase-detail' THEN 2
+                         ELSE 3
+                     END,
+                     item_key
+            """,
+            (run.id,),
+        ) as cursor:
+            item_rows = await cursor.fetchall()
+        return PrototypeDocumentGenerationSnapshot(
+            job=cls._generation_job_from_row(job_row),
+            latest_run=run,
+            items=tuple(cls._generation_item_from_row(row) for row in item_rows),
+        )
+
+    @staticmethod
+    async def _load_runtime_session_row(
+        conn: aiosqlite.Connection,
+        session_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            """
+            SELECT
+                id,
+                project_id,
+                document_id,
+                source_kind,
+                source_id,
+                pinned_document_object_hash,
+                runtime_core_version,
+                runtime_core_bundle_hash,
+                state_machine_kernel_version,
+                scenario_id,
+                scenario_hash,
+                status,
+                head_sequence_no,
+                head_state_hash,
+                head_view_model_hash,
+                latest_checkpoint_id,
+                recording_kind,
+                allow_simulated_role_switch,
+                actor_subject_id,
+                created_at,
+                updated_at,
+                completed_at
+            FROM prototype_runtime_sessions
+            WHERE id = ?
+            """,
+            (session_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_runtime_event_batch_by_request_row(
+        conn: aiosqlite.Connection,
+        session_id: str,
+        client_event_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            """
+            SELECT
+                id,
+                session_id,
+                client_event_id,
+                base_sequence_no,
+                result_sequence_no,
+                events_json,
+                event_batch_hash,
+                matched_rule_ids_json,
+                guard_report_hash,
+                effect_report_hash,
+                outcome,
+                base_state_hash,
+                result_state_hash,
+                result_view_model_hash,
+                runtime_core_version,
+                runtime_core_bundle_hash,
+                state_machine_kernel_version,
+                operation_id,
+                created_at
+            FROM prototype_runtime_event_batches
+            WHERE session_id = ? AND client_event_id = ?
+            """,
+            (session_id, client_event_id),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_revision_row(
+        conn: aiosqlite.Connection,
+        revision_id: str,
+    ) -> aiosqlite.Row | None:
+        async with conn.execute(
+            """
+            SELECT
+                id, document_id, revision_no, schema_version, checkpoint_id,
+                document_object_hash, document_hash, summary, source, created_at
+            FROM prototype_revisions
+            WHERE id = ?
+            """,
+            (revision_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_revision_by_no_row(
+        conn: aiosqlite.Connection,
+        document_id: str,
+        revision_no: int,
+    ) -> aiosqlite.Row | None:
+        async with conn.execute(
+            """
+            SELECT
+                id, document_id, revision_no, schema_version, checkpoint_id,
+                document_object_hash, document_hash, summary, source, created_at
+            FROM prototype_revisions
+            WHERE document_id = ? AND revision_no = ?
+            """,
+            (document_id, revision_no),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_render_run_row(
+        conn: aiosqlite.Connection,
+        render_run_id: str,
+    ) -> aiosqlite.Row | None:
+        async with conn.execute(
+            """
+            SELECT
+                id, document_id, kind, revision_id, ai_edit_run_id, status,
+                renderer_version, renderer_environment_version, runtime_core_version,
+                runtime_core_source_hash, runtime_core_bundle_hash,
+                state_machine_kernel_version, render_runtime_image_hash, browser_version,
+                font_pack_hash, viewport_profile_hash, sandbox_policy_version,
+                input_manifest_hash, document_object_hash, document_hash, operation_id,
+                attempt, artifact_id, output_manifest_hash, error_code, error_message,
+                started_at, completed_at, created_at, updated_at
+            FROM prototype_render_runs
+            WHERE id = ?
+            """,
+            (render_run_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_render_artifact_row(
+        conn: aiosqlite.Connection,
+        artifact_id: str,
+    ) -> aiosqlite.Row | None:
+        async with conn.execute(
+            """
+            SELECT
+                id, render_run_id, document_id, revision_id, renderer_version,
+                document_hash, output_hash, output_manifest_hash, storage_key,
+                entrypoint, visual_preflight_report_hash, created_at
+            FROM prototype_render_artifacts
+            WHERE id = ?
+            """,
+            (artifact_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_document_row(
+        conn: aiosqlite.Connection,
+        document_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            """
+            SELECT
+                id,
+                project_id,
+                title,
+                published_revision_no,
+                active_draft_id,
+                created_at,
+                updated_at
+            FROM prototype_documents
+            WHERE id = ?
+            """,
+            (document_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_draft_row(
+        conn: aiosqlite.Connection,
+        draft_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            """
+            SELECT
+                id,
+                document_id,
+                base_revision_no,
+                status,
+                head_sequence_no,
+                head_document_hash,
+                latest_checkpoint_id,
+                publish_revision_no,
+                created_at,
+                updated_at,
+                closed_at
+            FROM prototype_drafts
+            WHERE id = ?
+            """,
+            (draft_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_checkpoint_row(
+        conn: aiosqlite.Connection,
+        checkpoint_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            """
+            SELECT
+                id,
+                document_id,
+                draft_id,
+                revision_id,
+                checkpoint_kind,
+                checkpoint_sequence_no,
+                document_object_hash,
+                document_schema_version,
+                command_contract_version,
+                document_hash,
+                created_by_operation_id,
+                created_at
+            FROM prototype_checkpoints
+            WHERE id = ?
+            """,
+            (checkpoint_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
+    async def _load_runtime_checkpoint_row(
+        conn: aiosqlite.Connection,
+        checkpoint_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            """
+            SELECT
+                id,
+                session_id,
+                checkpoint_sequence_no,
+                state_object_hash,
+                runtime_state_schema_version,
+                runtime_event_contract_version,
+                state_hash,
+                view_model_hash,
+                created_by_operation_id,
+                created_at
+            FROM prototype_runtime_checkpoints
+            WHERE id = ?
+            """,
+            (checkpoint_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    async def _require_document(
+        self,
+        conn: aiosqlite.Connection,
+        document_id: str,
+    ) -> PrototypeDocumentRecord:
+        row = await self._load_document_row(conn, document_id)
+        if row is None:
+            raise StructuredPrototypeStoreError(
+                "document_missing",
+                "prototype document does not exist",
+            )
+        return self._document_from_row(row)
+
+    async def _require_draft(
+        self,
+        conn: aiosqlite.Connection,
+        draft_id: str,
+    ) -> PrototypeDraftRecord:
+        row = await self._load_draft_row(conn, draft_id)
+        if row is None:
+            raise StructuredPrototypeStoreError(
+                "draft_missing",
+                "prototype draft does not exist",
+            )
+        return self._draft_from_row(row)
+
+    async def _require_checkpoint(
+        self,
+        conn: aiosqlite.Connection,
+        checkpoint_id: str,
+    ) -> PrototypeCheckpointRecord:
+        row = await self._load_checkpoint_row(conn, checkpoint_id)
+        if row is None:
+            raise StructuredPrototypeStoreError(
+                "checkpoint_missing",
+                "prototype checkpoint does not exist",
+            )
+        return self._checkpoint_from_row(row)
+
+    async def _require_revision(
+        self,
+        conn: aiosqlite.Connection,
+        revision_id: str,
+    ) -> PrototypeRevisionRecord:
+        row = await self._load_revision_row(conn, revision_id)
+        if row is None:
+            raise StructuredPrototypeStoreError(
+                "revision_missing",
+                "prototype revision does not exist",
+            )
+        return self._revision_from_row(row)
+
+    async def _require_render_run(
+        self,
+        conn: aiosqlite.Connection,
+        render_run_id: str,
+    ) -> PrototypeRenderRunRecord:
+        row = await self._load_render_run_row(conn, render_run_id)
+        if row is None:
+            raise StructuredPrototypeStoreError(
+                "render_run_missing",
+                "prototype render run does not exist",
+            )
+        return self._render_run_from_row(row)
+
+    async def _require_runtime_session(
+        self,
+        conn: aiosqlite.Connection,
+        session_id: str,
+    ) -> PrototypeRuntimeSessionRecord:
+        row = await self._load_runtime_session_row(conn, session_id)
+        if row is None:
+            raise StructuredPrototypeStoreError(
+                "runtime_session_missing",
+                "prototype runtime session does not exist",
+            )
+        return self._runtime_session_from_row(row)
+
+    async def _require_runtime_checkpoint(
+        self,
+        conn: aiosqlite.Connection,
+        checkpoint_id: str,
+    ) -> PrototypeRuntimeCheckpointRecord:
+        row = await self._load_runtime_checkpoint_row(conn, checkpoint_id)
+        if row is None:
+            raise StructuredPrototypeStoreError(
+                "runtime_checkpoint_missing",
+                "prototype runtime checkpoint does not exist",
+            )
+        return self._runtime_checkpoint_from_row(row)
+
+    @staticmethod
+    async def _list_command_batches_after(
+        conn: aiosqlite.Connection,
+        draft_id: str,
+        checkpoint_sequence_no: int,
+    ) -> list[PrototypeCommandBatchRecord]:
+        async with conn.execute(
+            """
+            SELECT
+                id,
+                draft_id,
+                base_sequence_no,
+                result_sequence_no,
+                client_request_id,
+                origin,
+                operation_kind,
+                target_batch_id,
+                command_contract_version,
+                commands_json,
+                inverse_commands_json,
+                command_batch_hash,
+                base_document_hash,
+                result_document_hash,
+                operation_id,
+                created_at
+            FROM prototype_command_batches
+            WHERE draft_id = ? AND result_sequence_no > ?
+            ORDER BY result_sequence_no
+            """,
+            (draft_id, checkpoint_sequence_no),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [AsyncStructuredPrototypeStore._command_batch_from_row(row) for row in rows]
+
+    @staticmethod
+    async def _list_runtime_event_batches_after(
+        conn: aiosqlite.Connection,
+        session_id: str,
+        checkpoint_sequence_no: int,
+    ) -> list[PrototypeRuntimeEventBatchRecord]:
+        async with conn.execute(
+            """
+            SELECT
+                id,
+                session_id,
+                client_event_id,
+                base_sequence_no,
+                result_sequence_no,
+                events_json,
+                event_batch_hash,
+                matched_rule_ids_json,
+                guard_report_hash,
+                effect_report_hash,
+                outcome,
+                base_state_hash,
+                result_state_hash,
+                result_view_model_hash,
+                runtime_core_version,
+                runtime_core_bundle_hash,
+                state_machine_kernel_version,
+                operation_id,
+                created_at
+            FROM prototype_runtime_event_batches
+            WHERE session_id = ? AND result_sequence_no > ?
+            ORDER BY result_sequence_no
+            """,
+            (session_id, checkpoint_sequence_no),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [AsyncStructuredPrototypeStore._runtime_event_batch_from_row(row) for row in rows]
+
+    async def _assert_draft_accepts_batch(
+        self,
+        conn: aiosqlite.Connection,
+        draft: PrototypeDraftRecord,
+        batch: PrototypeCommandBatchRecord,
+    ) -> None:
+        if draft.status != "active":
+            raise StructuredPrototypeStoreError(
+                "draft_not_active",
+                "prototype draft does not accept commands in its current state",
+            )
+        if (
+            draft.head_sequence_no != batch.base_sequence_no
+            or draft.head_document_hash != batch.base_document_hash
+        ):
+            raise StructuredPrototypeStoreError(
+                "draft_conflict",
+                "prototype command base does not match the current draft head",
+            )
+        if draft.latest_checkpoint_id is None:
+            raise StructuredPrototypeStoreError(
+                "draft_corrupt",
+                "prototype draft has no checkpoint",
+            )
+        checkpoint = await self._require_checkpoint(conn, draft.latest_checkpoint_id)
+        if draft.head_sequence_no - checkpoint.checkpoint_sequence_no >= MAX_REPLAY_TAIL_BATCHES:
+            raise StructuredPrototypeStoreError(
+                "checkpoint_required_unavailable",
+                "prototype command requires a checkpoint before the replay tail can grow",
+            )
+
+    async def _assert_runtime_session_accepts_event(
+        self,
+        conn: aiosqlite.Connection,
+        session: PrototypeRuntimeSessionRecord,
+        event_batch: PrototypeRuntimeEventBatchRecord,
+    ) -> None:
+        if session.status != "active":
+            raise StructuredPrototypeStoreError(
+                "runtime_session_not_active",
+                "prototype runtime session does not accept events",
+            )
+        if (
+            session.head_sequence_no != event_batch.base_sequence_no
+            or session.head_state_hash != event_batch.base_state_hash
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_session_conflict",
+                "prototype runtime event base does not match the current session head",
+            )
+        if (
+            event_batch.runtime_core_version != session.runtime_core_version
+            or event_batch.runtime_core_bundle_hash != session.runtime_core_bundle_hash
+            or event_batch.state_machine_kernel_version != session.state_machine_kernel_version
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_version_mismatch",
+                "prototype runtime event versions do not match the pinned session",
+            )
+        if session.latest_checkpoint_id is None:
+            raise StructuredPrototypeStoreError(
+                "runtime_session_corrupt",
+                "prototype runtime session has no checkpoint",
+            )
+        checkpoint = await self._require_runtime_checkpoint(conn, session.latest_checkpoint_id)
+        if checkpoint.session_id != session.id:
+            raise StructuredPrototypeStoreError(
+                "runtime_session_corrupt",
+                "prototype runtime checkpoint belongs to another session",
+            )
+        if session.head_sequence_no - checkpoint.checkpoint_sequence_no >= MAX_REPLAY_TAIL_BATCHES:
+            raise StructuredPrototypeStoreError(
+                "runtime_checkpoint_required_unavailable",
+                "prototype runtime event requires a checkpoint before the replay tail can grow",
+            )
+
+    @staticmethod
+    def _validate_recovery_chain(
+        draft: PrototypeDraftRecord,
+        checkpoint: PrototypeCheckpointRecord,
+        batches: list[PrototypeCommandBatchRecord],
+    ) -> None:
+        if (
+            checkpoint.draft_id != draft.id
+            or checkpoint.document_id != draft.document_id
+            or checkpoint.checkpoint_sequence_no > draft.head_sequence_no
+        ):
+            raise StructuredPrototypeStoreError(
+                "draft_corrupt",
+                "prototype checkpoint does not belong to the draft head",
+            )
+        if len(batches) > MAX_REPLAY_TAIL_BATCHES:
+            raise StructuredPrototypeStoreError(
+                "replay_tail_limit_exceeded",
+                "prototype replay tail exceeds the hard limit",
+            )
+        expected_sequence = checkpoint.checkpoint_sequence_no
+        expected_hash = checkpoint.document_hash
+        for batch in batches:
+            if (
+                batch.base_sequence_no != expected_sequence
+                or batch.result_sequence_no != expected_sequence + 1
+            ):
+                raise StructuredPrototypeStoreError(
+                    "replay_sequence_gap",
+                    "prototype command replay sequence is not continuous",
+                )
+            if batch.base_document_hash != expected_hash:
+                raise StructuredPrototypeStoreError(
+                    "replay_document_hash_mismatch",
+                    "prototype command replay base hash does not match",
+                )
+            expected_sequence = batch.result_sequence_no
+            expected_hash = batch.result_document_hash
+        if expected_sequence != draft.head_sequence_no or expected_hash != draft.head_document_hash:
+            raise StructuredPrototypeStoreError(
+                "replay_document_hash_mismatch",
+                "prototype replay result does not match the durable draft head",
+            )
+
+    @staticmethod
+    def _validate_runtime_recovery_chain(
+        session: PrototypeRuntimeSessionRecord,
+        checkpoint: PrototypeRuntimeCheckpointRecord,
+        event_batches: list[PrototypeRuntimeEventBatchRecord],
+    ) -> None:
+        if (
+            checkpoint.session_id != session.id
+            or checkpoint.checkpoint_sequence_no > session.head_sequence_no
+            or checkpoint.state_object_hash != checkpoint.state_hash
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_session_corrupt",
+                "prototype runtime checkpoint does not belong to the session head",
+            )
+        if len(event_batches) > MAX_REPLAY_TAIL_BATCHES:
+            raise StructuredPrototypeStoreError(
+                "runtime_replay_tail_limit_exceeded",
+                "prototype runtime replay tail exceeds the hard limit",
+            )
+        expected_sequence = checkpoint.checkpoint_sequence_no
+        expected_state_hash = checkpoint.state_hash
+        expected_view_model_hash = checkpoint.view_model_hash
+        for event_batch in event_batches:
+            if (
+                event_batch.session_id != session.id
+                or event_batch.base_sequence_no != expected_sequence
+                or event_batch.result_sequence_no != expected_sequence + 1
+            ):
+                raise StructuredPrototypeStoreError(
+                    "runtime_replay_sequence_gap",
+                    "prototype runtime event replay sequence is not continuous",
+                )
+            if event_batch.base_state_hash != expected_state_hash:
+                raise StructuredPrototypeStoreError(
+                    "runtime_replay_state_hash_mismatch",
+                    "prototype runtime event replay base state hash does not match",
+                )
+            if (
+                event_batch.runtime_core_version != session.runtime_core_version
+                or event_batch.runtime_core_bundle_hash != session.runtime_core_bundle_hash
+                or event_batch.state_machine_kernel_version != session.state_machine_kernel_version
+            ):
+                raise StructuredPrototypeStoreError(
+                    "runtime_replay_version_mismatch",
+                    "prototype runtime event replay version does not match the session",
+                )
+            expected_sequence = event_batch.result_sequence_no
+            expected_state_hash = event_batch.result_state_hash
+            expected_view_model_hash = event_batch.result_view_model_hash
+        if (
+            expected_sequence != session.head_sequence_no
+            or expected_state_hash != session.head_state_hash
+            or expected_view_model_hash != session.head_view_model_hash
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_replay_state_hash_mismatch",
+                "prototype runtime replay result does not match the durable session head",
+            )
+
+    @staticmethod
+    def _operation_params(operation: PrototypeOperation) -> tuple[object, ...]:
+        return (
+            operation.id,
+            operation.operation_kind,
+            operation.project_id,
+            operation.resource_kind,
+            operation.resource_id,
+            operation.client_request_id,
+            operation.correlation_id,
+            operation.parent_operation_id,
+            operation.status,
+            operation.phase,
+            operation.attempt,
+            operation.request_manifest_hash,
+            operation.config_manifest_hash,
+            operation.result_manifest_hash,
+            operation.failure_evidence_hash,
+            operation.error_code,
+            operation.created_at.isoformat(),
+            operation.started_at.isoformat() if operation.started_at else None,
+            operation.completed_at.isoformat() if operation.completed_at else None,
+        )
+
+    @staticmethod
+    def _operation_step_params(step: PrototypeOperationStep) -> tuple[object, ...]:
+        return (
+            step.id,
+            step.operation_id,
+            step.parent_step_id,
+            step.step_kind,
+            step.step_ordinal,
+            step.attempt,
+            step.status,
+            step.phase,
+            step.input_manifest_hash,
+            step.config_manifest_hash,
+            step.output_manifest_hash,
+            step.completion_evidence_kind,
+            step.completion_evidence_ref,
+            step.error_code,
+            step.started_at.isoformat() if step.started_at else None,
+            step.completed_at.isoformat() if step.completed_at else None,
+        )
+
+    @staticmethod
+    def _generation_job_params(job: PrototypeDocumentGenerationJobRecord) -> tuple[object, ...]:
+        return (
+            job.id,
+            job.project_id,
+            job.client_request_id,
+            job.status,
+            job.operation_id,
+            job.request_manifest_object_hash,
+            job.request_hash,
+            job.context_manifest_object_hash,
+            job.blueprint_object_hash,
+            job.blueprint_version,
+            job.blueprint_hash,
+            job.candidate_object_hash,
+            job.candidate_document_hash,
+            job.preview_render_run_id,
+            job.preview_artifact_id,
+            job.preview_renderer_version,
+            job.preview_storage_key,
+            job.preview_output_hash,
+            job.preview_output_manifest_hash,
+            job.preview_visual_preflight_report_hash,
+            job.replay_manifest_object_hash,
+            job.document_id,
+            job.error_code,
+            job.error_message,
+            job.created_at.isoformat(),
+            job.updated_at.isoformat(),
+            job.completed_at.isoformat() if job.completed_at is not None else None,
+        )
+
+    @staticmethod
+    def _generation_run_params(run: PrototypeDocumentGenerationRunRecord) -> tuple[object, ...]:
+        return (
+            run.id,
+            run.job_id,
+            run.status,
+            run.blueprint_hash,
+            run.total,
+            run.processed,
+            run.succeeded,
+            run.failed,
+            run.running,
+            run.pending,
+            run.error_code,
+            run.error_message,
+            run.created_at.isoformat(),
+            run.updated_at.isoformat(),
+            run.started_at.isoformat() if run.started_at is not None else None,
+            run.completed_at.isoformat() if run.completed_at is not None else None,
+        )
+
+    @staticmethod
+    def _generation_item_params(item: PrototypeDocumentGenerationItemRecord) -> tuple[object, ...]:
+        return (
+            item.id,
+            item.job_id,
+            item.run_id,
+            item.kind,
+            item.item_key,
+            item.page_key,
+            item.status,
+            item.phase,
+            item.attempt,
+            item.task_kind,
+            item.operation_id,
+            item.context_object_hash,
+            item.submission_id,
+            item.submission_request_hash,
+            json.dumps(
+                list(item.submission_normalized_fields),
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ),
+            item.submission_accepted_at.isoformat()
+            if item.submission_accepted_at is not None
+            else None,
+            item.output_object_hash,
+            item.task_id,
+            item.execution_process_id,
+            item.error_code,
+            item.error_message,
+            item.created_at.isoformat(),
+            item.updated_at.isoformat(),
+            item.completed_at.isoformat() if item.completed_at is not None else None,
+        )
+
+    @staticmethod
+    def _draft_params(draft: PrototypeDraftRecord) -> tuple[object, ...]:
+        return (
+            draft.id,
+            draft.document_id,
+            draft.base_revision_no,
+            draft.status,
+            draft.head_sequence_no,
+            draft.head_document_hash,
+            draft.latest_checkpoint_id,
+            draft.publish_revision_no,
+            draft.created_at.isoformat(),
+            draft.updated_at.isoformat(),
+            draft.closed_at.isoformat() if draft.closed_at else None,
+        )
+
+    @staticmethod
+    def _initial_draft_params(draft: PrototypeDraftRecord) -> tuple[object, ...]:
+        return (
+            draft.id,
+            draft.document_id,
+            draft.base_revision_no,
+            draft.status,
+            draft.head_sequence_no,
+            draft.head_document_hash,
+            draft.publish_revision_no,
+            draft.created_at.isoformat(),
+            draft.updated_at.isoformat(),
+            draft.closed_at.isoformat() if draft.closed_at else None,
+        )
+
+    @staticmethod
+    def _ai_thread_params(thread: PrototypeAiThreadRecord) -> tuple[object, ...]:
+        return (
+            thread.id,
+            thread.document_id,
+            thread.title,
+            thread.status,
+            thread.summary_json,
+            thread.summary_through_message_id,
+            thread.created_at.isoformat(),
+            thread.updated_at.isoformat(),
+        )
+
+    @staticmethod
+    def _ai_message_params(message: PrototypeAiMessageRecord) -> tuple[object, ...]:
+        return (
+            message.id,
+            message.thread_id,
+            message.client_message_id,
+            message.role,
+            message.kind,
+            message.content,
+            message.run_id,
+            message.command_batch_id,
+            message.status,
+            message.created_at.isoformat(),
+            message.updated_at.isoformat(),
+        )
+
+    @staticmethod
+    def _ai_edit_run_params(run: PrototypeAiEditRunRecord) -> tuple[object, ...]:
+        return (
+            run.id,
+            run.thread_id,
+            run.user_message_id,
+            run.assistant_message_id,
+            run.document_id,
+            run.draft_id,
+            run.operation_id,
+            run.retry_of_run_id,
+            run.status,
+            run.scope_json,
+            run.base_head_sequence_no,
+            run.base_document_hash,
+            run.context_object_hash,
+            run.outcome_object_hash,
+            run.submission_id,
+            run.submission_request_hash,
+            run.submission_accepted_at.isoformat()
+            if run.submission_accepted_at is not None
+            else None,
+            run.replay_manifest_object_hash,
+            run.proposed_command_batch_json,
+            run.proposed_command_batch_hash,
+            run.candidate_object_hash,
+            run.preview_render_run_id,
+            run.preview_artifact_id,
+            run.summary,
+            run.affected_entity_ids_json,
+            run.task_id,
+            run.execution_process_id,
+            run.error_code,
+            run.error_message,
+            run.created_at.isoformat(),
+            run.updated_at.isoformat(),
+            run.completed_at.isoformat() if run.completed_at else None,
+        )
+
+    @staticmethod
+    def _command_batch_params(batch: PrototypeCommandBatchRecord) -> tuple[object, ...]:
+        return (
+            batch.id,
+            batch.draft_id,
+            batch.base_sequence_no,
+            batch.result_sequence_no,
+            batch.client_request_id,
+            batch.origin,
+            batch.operation_kind,
+            batch.target_batch_id,
+            batch.command_contract_version,
+            batch.commands_json,
+            batch.inverse_commands_json,
+            batch.command_batch_hash,
+            batch.base_document_hash,
+            batch.result_document_hash,
+            batch.operation_id,
+            batch.created_at.isoformat(),
+        )
+
+    @staticmethod
+    def _operation_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeOperation:
+        return PrototypeOperation(
+            id=_required_str(row[0], "operation.id"),
+            operation_kind=_literal(
+                row[1],
+                (
+                    "create_document",
+                    "apply_command_batch",
+                    "undo",
+                    "redo",
+                    "create_checkpoint",
+                    "recover_draft",
+                    "generation_job",
+                    "generation_item",
+                    "ai_edit",
+                    "reject_ai_proposal",
+                    "semantic_repair",
+                    "render_preview",
+                    "publish",
+                    "create_runtime_session",
+                    "apply_runtime_event",
+                    "replay_runtime_session",
+                    "gc_run",
+                    "diagnostic_replay",
+                ),
+                "operation.operation_kind",
+            ),
+            project_id=_required_str(row[2], "operation.project_id"),
+            resource_kind=_required_str(row[3], "operation.resource_kind"),
+            resource_id=_optional_str(row[4], "operation.resource_id"),
+            client_request_id=_required_str(row[5], "operation.client_request_id"),
+            correlation_id=_required_str(row[6], "operation.correlation_id"),
+            parent_operation_id=_optional_str(row[7], "operation.parent_operation_id"),
+            status=_literal(
+                row[8],
+                ("queued", "running", "succeeded", "failed", "interrupted", "cancelled"),
+                "operation.status",
+            ),
+            phase=_required_str(row[9], "operation.phase"),
+            attempt=_required_positive_int(row[10], "operation.attempt"),
+            request_manifest_hash=_required_hash(row[11], "operation.request_manifest_hash"),
+            config_manifest_hash=_required_hash(row[12], "operation.config_manifest_hash"),
+            result_manifest_hash=_optional_hash(row[13], "operation.result_manifest_hash"),
+            failure_evidence_hash=_optional_hash(row[14], "operation.failure_evidence_hash"),
+            error_code=_optional_str(row[15], "operation.error_code"),
+            created_at=_datetime(row[16], "operation.created_at"),
+            started_at=_optional_datetime(row[17], "operation.started_at"),
+            completed_at=_optional_datetime(row[18], "operation.completed_at"),
+        )
+
+    @staticmethod
+    def _operation_step_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeOperationStep:
+        return PrototypeOperationStep(
+            id=_required_str(row[0], "step.id"),
+            operation_id=_required_str(row[1], "step.operation_id"),
+            parent_step_id=_optional_str(row[2], "step.parent_step_id"),
+            step_kind=_required_str(row[3], "step.step_kind"),
+            step_ordinal=_required_non_negative_int(row[4], "step.step_ordinal"),
+            attempt=_required_positive_int(row[5], "step.attempt"),
+            status=_literal(
+                row[6],
+                ("pending", "running", "succeeded", "failed", "skipped", "interrupted"),
+                "step.status",
+            ),
+            phase=_required_str(row[7], "step.phase"),
+            input_manifest_hash=_required_hash(row[8], "step.input_manifest_hash"),
+            config_manifest_hash=_required_hash(row[9], "step.config_manifest_hash"),
+            output_manifest_hash=_optional_hash(row[10], "step.output_manifest_hash"),
+            completion_evidence_kind=_optional_str(row[11], "step.completion_evidence_kind"),
+            completion_evidence_ref=_optional_str(row[12], "step.completion_evidence_ref"),
+            error_code=_optional_str(row[13], "step.error_code"),
+            started_at=_optional_datetime(row[14], "step.started_at"),
+            completed_at=_optional_datetime(row[15], "step.completed_at"),
+        )
+
+    @staticmethod
+    def _operation_event_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeOperationEvent:
+        return PrototypeOperationEvent(
+            operation_id=_required_str(row[0], "event.operation_id"),
+            event_no=_required_non_negative_int(row[1], "event.event_no"),
+            step_id=_optional_str(row[2], "event.step_id"),
+            event_kind=_required_str(row[3], "event.event_kind"),
+            status=_required_str(row[4], "event.status"),
+            phase=_required_str(row[5], "event.phase"),
+            input_hash=_optional_hash(row[6], "event.input_hash"),
+            output_hash=_optional_hash(row[7], "event.output_hash"),
+            evidence_hash=_optional_hash(row[8], "event.evidence_hash"),
+            error_code=_optional_str(row[9], "event.error_code"),
+            occurred_at=_datetime(row[10], "event.occurred_at"),
+        )
+
+    @staticmethod
+    def _generation_job_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeDocumentGenerationJobRecord:
+        return PrototypeDocumentGenerationJobRecord(
+            id=_required_str(row[0], "generation_job.id"),
+            project_id=_required_str(row[1], "generation_job.project_id"),
+            client_request_id=_required_str(row[2], "generation_job.client_request_id"),
+            status=_literal(
+                row[3],
+                (
+                    "queued",
+                    "planning",
+                    "awaiting_confirmation",
+                    "generating",
+                    "assembling",
+                    "validating",
+                    "rendering_preview",
+                    "ready",
+                    "accepted",
+                    "failed",
+                    "interrupted",
+                    "cancelled",
+                ),
+                "generation_job.status",
+            ),
+            operation_id=_required_str(row[4], "generation_job.operation_id"),
+            request_manifest_object_hash=_required_hash(
+                row[5], "generation_job.request_manifest_object_hash"
+            ),
+            request_hash=_required_hash(row[6], "generation_job.request_hash"),
+            context_manifest_object_hash=_required_hash(
+                row[7], "generation_job.context_manifest_object_hash"
+            ),
+            blueprint_object_hash=_optional_hash(row[8], "generation_job.blueprint_object_hash"),
+            blueprint_version=_required_non_negative_int(
+                row[9], "generation_job.blueprint_version"
+            ),
+            blueprint_hash=_optional_hash(row[10], "generation_job.blueprint_hash"),
+            candidate_object_hash=_optional_hash(row[11], "generation_job.candidate_object_hash"),
+            candidate_document_hash=_optional_hash(
+                row[12], "generation_job.candidate_document_hash"
+            ),
+            preview_render_run_id=_optional_str(row[13], "generation_job.preview_render_run_id"),
+            preview_artifact_id=_optional_str(row[14], "generation_job.preview_artifact_id"),
+            preview_renderer_version=_optional_str(
+                row[15], "generation_job.preview_renderer_version"
+            ),
+            preview_storage_key=_optional_str(row[16], "generation_job.preview_storage_key"),
+            preview_output_hash=_optional_hash(row[17], "generation_job.preview_output_hash"),
+            preview_output_manifest_hash=_optional_hash(
+                row[18], "generation_job.preview_output_manifest_hash"
+            ),
+            preview_visual_preflight_report_hash=_optional_hash(
+                row[19], "generation_job.preview_visual_preflight_report_hash"
+            ),
+            replay_manifest_object_hash=_optional_hash(
+                row[20], "generation_job.replay_manifest_object_hash"
+            ),
+            document_id=_optional_str(row[21], "generation_job.document_id"),
+            error_code=_optional_str(row[22], "generation_job.error_code"),
+            error_message=_optional_str(row[23], "generation_job.error_message"),
+            created_at=_datetime(row[24], "generation_job.created_at"),
+            updated_at=_datetime(row[25], "generation_job.updated_at"),
+            completed_at=_optional_datetime(row[26], "generation_job.completed_at"),
+        )
+
+    @staticmethod
+    def _generation_run_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeDocumentGenerationRunRecord:
+        return PrototypeDocumentGenerationRunRecord(
+            id=_required_str(row[0], "generation_run.id"),
+            job_id=_required_str(row[1], "generation_run.job_id"),
+            status=_literal(
+                row[2],
+                ("queued", "running", "completed", "failed", "interrupted", "cancelled"),
+                "generation_run.status",
+            ),
+            blueprint_hash=_optional_hash(row[3], "generation_run.blueprint_hash"),
+            total=_required_positive_int(row[4], "generation_run.total"),
+            processed=_required_non_negative_int(row[5], "generation_run.processed"),
+            succeeded=_required_non_negative_int(row[6], "generation_run.succeeded"),
+            failed=_required_non_negative_int(row[7], "generation_run.failed"),
+            running=_required_non_negative_int(row[8], "generation_run.running"),
+            pending=_required_non_negative_int(row[9], "generation_run.pending"),
+            error_code=_optional_str(row[10], "generation_run.error_code"),
+            error_message=_optional_str(row[11], "generation_run.error_message"),
+            created_at=_datetime(row[12], "generation_run.created_at"),
+            updated_at=_datetime(row[13], "generation_run.updated_at"),
+            started_at=_optional_datetime(row[14], "generation_run.started_at"),
+            completed_at=_optional_datetime(row[15], "generation_run.completed_at"),
+        )
+
+    @staticmethod
+    def _generation_item_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeDocumentGenerationItemRecord:
+        return PrototypeDocumentGenerationItemRecord(
+            id=_required_str(row[0], "generation_item.id"),
+            job_id=_required_str(row[1], "generation_item.job_id"),
+            run_id=_required_str(row[2], "generation_item.run_id"),
+            kind=_literal(row[3], ("blueprint", "foundation", "page"), "generation_item.kind"),
+            item_key=_required_str(row[4], "generation_item.item_key"),
+            page_key=_optional_str(row[5], "generation_item.page_key"),
+            status=_literal(
+                row[6],
+                ("pending", "generating", "validating", "done", "failed", "interrupted"),
+                "generation_item.status",
+            ),
+            phase=_required_str(row[7], "generation_item.phase"),
+            attempt=_required_positive_int(row[8], "generation_item.attempt"),
+            task_kind=_required_str(row[9], "generation_item.task_kind"),
+            operation_id=_required_str(row[10], "generation_item.operation_id"),
+            context_object_hash=_required_hash(row[11], "generation_item.context_object_hash"),
+            submission_id=_optional_str(row[12], "generation_item.submission_id"),
+            submission_request_hash=_optional_hash(
+                row[13], "generation_item.submission_request_hash"
+            ),
+            submission_normalized_fields=_string_tuple_from_json(
+                row[14], "generation_item.submission_normalized_fields_json"
+            ),
+            submission_accepted_at=_optional_datetime(
+                row[15], "generation_item.submission_accepted_at"
+            ),
+            output_object_hash=_optional_hash(row[16], "generation_item.output_object_hash"),
+            task_id=_optional_str(row[17], "generation_item.task_id"),
+            execution_process_id=_optional_str(row[18], "generation_item.execution_process_id"),
+            error_code=_optional_str(row[19], "generation_item.error_code"),
+            error_message=_optional_str(row[20], "generation_item.error_message"),
+            created_at=_datetime(row[21], "generation_item.created_at"),
+            updated_at=_datetime(row[22], "generation_item.updated_at"),
+            completed_at=_optional_datetime(row[23], "generation_item.completed_at"),
+        )
+
+    @staticmethod
+    def _document_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeDocumentRecord:
+        return PrototypeDocumentRecord(
+            id=_required_str(row[0], "document.id"),
+            project_id=_required_str(row[1], "document.project_id"),
+            title=_required_str(row[2], "document.title"),
+            published_revision_no=_optional_positive_int(row[3], "document.published_revision_no"),
+            active_draft_id=_optional_str(row[4], "document.active_draft_id"),
+            created_at=_datetime(row[5], "document.created_at"),
+            updated_at=_datetime(row[6], "document.updated_at"),
+        )
+
+    @staticmethod
+    def _draft_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeDraftRecord:
+        return PrototypeDraftRecord(
+            id=_required_str(row[0], "draft.id"),
+            document_id=_required_str(row[1], "draft.document_id"),
+            base_revision_no=_optional_positive_int(row[2], "draft.base_revision_no"),
+            status=_literal(
+                row[3],
+                ("active", "publishing", "closed", "corrupt"),
+                "draft.status",
+            ),
+            head_sequence_no=_required_non_negative_int(row[4], "draft.head_sequence_no"),
+            head_document_hash=_required_hash(row[5], "draft.head_document_hash"),
+            latest_checkpoint_id=_optional_str(row[6], "draft.latest_checkpoint_id"),
+            publish_revision_no=_optional_positive_int(row[7], "draft.publish_revision_no"),
+            created_at=_datetime(row[8], "draft.created_at"),
+            updated_at=_datetime(row[9], "draft.updated_at"),
+            closed_at=_optional_datetime(row[10], "draft.closed_at"),
+        )
+
+    @staticmethod
+    def _checkpoint_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeCheckpointRecord:
+        return PrototypeCheckpointRecord(
+            id=_required_str(row[0], "checkpoint.id"),
+            document_id=_required_str(row[1], "checkpoint.document_id"),
+            draft_id=_optional_str(row[2], "checkpoint.draft_id"),
+            revision_id=_optional_str(row[3], "checkpoint.revision_id"),
+            checkpoint_kind=_literal(
+                row[4],
+                ("draft", "revision", "generation_accept", "ai_apply"),
+                "checkpoint.checkpoint_kind",
+            ),
+            checkpoint_sequence_no=_required_non_negative_int(
+                row[5], "checkpoint.checkpoint_sequence_no"
+            ),
+            document_object_hash=_required_hash(row[6], "checkpoint.document_object_hash"),
+            document_schema_version=_required_positive_int(
+                row[7], "checkpoint.document_schema_version"
+            ),
+            command_contract_version=_required_positive_int(
+                row[8], "checkpoint.command_contract_version"
+            ),
+            document_hash=_required_hash(row[9], "checkpoint.document_hash"),
+            created_by_operation_id=_required_str(row[10], "checkpoint.created_by_operation_id"),
+            created_at=_datetime(row[11], "checkpoint.created_at"),
+        )
+
+    @staticmethod
+    def _revision_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeRevisionRecord:
+        return PrototypeRevisionRecord(
+            id=_required_str(row[0], "revision.id"),
+            document_id=_required_str(row[1], "revision.document_id"),
+            revision_no=_required_positive_int(row[2], "revision.revision_no"),
+            schema_version=_required_positive_int(row[3], "revision.schema_version"),
+            checkpoint_id=_required_str(row[4], "revision.checkpoint_id"),
+            document_object_hash=_required_hash(row[5], "revision.document_object_hash"),
+            document_hash=_required_hash(row[6], "revision.document_hash"),
+            summary=_required_str(row[7], "revision.summary"),
+            source=_literal(
+                row[8],
+                ("user", "ai", "initial_generation"),
+                "revision.source",
+            ),
+            created_at=_datetime(row[9], "revision.created_at"),
+        )
+
+    @staticmethod
+    def _render_run_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeRenderRunRecord:
+        return PrototypeRenderRunRecord(
+            id=_required_str(row[0], "render_run.id"),
+            document_id=_required_str(row[1], "render_run.document_id"),
+            kind=_literal(row[2], ("ai_preview", "publication"), "render_run.kind"),
+            revision_id=_optional_str(row[3], "render_run.revision_id"),
+            ai_edit_run_id=_optional_str(row[4], "render_run.ai_edit_run_id"),
+            status=_literal(
+                row[5],
+                ("queued", "rendering", "ready", "failed", "interrupted"),
+                "render_run.status",
+            ),
+            renderer_version=_required_str(row[6], "render_run.renderer_version"),
+            renderer_environment_version=_required_str(
+                row[7], "render_run.renderer_environment_version"
+            ),
+            runtime_core_version=_required_str(row[8], "render_run.runtime_core_version"),
+            runtime_core_source_hash=_required_hash(row[9], "render_run.runtime_core_source_hash"),
+            runtime_core_bundle_hash=_required_hash(row[10], "render_run.runtime_core_bundle_hash"),
+            state_machine_kernel_version=_required_str(
+                row[11], "render_run.state_machine_kernel_version"
+            ),
+            render_runtime_image_hash=_required_hash(
+                row[12], "render_run.render_runtime_image_hash"
+            ),
+            browser_version=_required_str(row[13], "render_run.browser_version"),
+            font_pack_hash=_required_hash(row[14], "render_run.font_pack_hash"),
+            viewport_profile_hash=_required_hash(row[15], "render_run.viewport_profile_hash"),
+            sandbox_policy_version=_required_str(row[16], "render_run.sandbox_policy_version"),
+            input_manifest_hash=_required_hash(row[17], "render_run.input_manifest_hash"),
+            document_object_hash=_required_hash(row[18], "render_run.document_object_hash"),
+            document_hash=_required_hash(row[19], "render_run.document_hash"),
+            operation_id=_required_str(row[20], "render_run.operation_id"),
+            attempt=_required_positive_int(row[21], "render_run.attempt"),
+            artifact_id=_optional_str(row[22], "render_run.artifact_id"),
+            output_manifest_hash=_optional_hash(row[23], "render_run.output_manifest_hash"),
+            error_code=_optional_str(row[24], "render_run.error_code"),
+            error_message=_optional_str(row[25], "render_run.error_message"),
+            started_at=_optional_datetime(row[26], "render_run.started_at"),
+            completed_at=_optional_datetime(row[27], "render_run.completed_at"),
+            created_at=_datetime(row[28], "render_run.created_at"),
+            updated_at=_datetime(row[29], "render_run.updated_at"),
+        )
+
+    @staticmethod
+    def _render_artifact_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeRenderArtifactRecord:
+        return PrototypeRenderArtifactRecord(
+            id=_required_str(row[0], "render_artifact.id"),
+            render_run_id=_required_str(row[1], "render_artifact.render_run_id"),
+            document_id=_required_str(row[2], "render_artifact.document_id"),
+            revision_id=_optional_str(row[3], "render_artifact.revision_id"),
+            renderer_version=_required_str(row[4], "render_artifact.renderer_version"),
+            document_hash=_required_hash(row[5], "render_artifact.document_hash"),
+            output_hash=_required_hash(row[6], "render_artifact.output_hash"),
+            output_manifest_hash=_required_hash(row[7], "render_artifact.output_manifest_hash"),
+            storage_key=_required_str(row[8], "render_artifact.storage_key"),
+            entrypoint=_required_str(row[9], "render_artifact.entrypoint"),
+            visual_preflight_report_hash=_required_hash(
+                row[10], "render_artifact.visual_preflight_report_hash"
+            ),
+            created_at=_datetime(row[11], "render_artifact.created_at"),
+        )
+
+    @staticmethod
+    def _ai_thread_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeAiThreadRecord:
+        return PrototypeAiThreadRecord(
+            id=_required_str(row[0], "ai_thread.id"),
+            document_id=_required_str(row[1], "ai_thread.document_id"),
+            title=_required_str(row[2], "ai_thread.title"),
+            status=_literal(row[3], ("active", "archived"), "ai_thread.status"),
+            summary_json=_optional_str(row[4], "ai_thread.summary_json"),
+            summary_through_message_id=_optional_str(
+                row[5], "ai_thread.summary_through_message_id"
+            ),
+            created_at=_datetime(row[6], "ai_thread.created_at"),
+            updated_at=_datetime(row[7], "ai_thread.updated_at"),
+        )
+
+    @staticmethod
+    def _ai_message_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeAiMessageRecord:
+        return PrototypeAiMessageRecord(
+            id=_required_str(row[0], "ai_message.id"),
+            thread_id=_required_str(row[1], "ai_message.thread_id"),
+            client_message_id=_optional_str(row[2], "ai_message.client_message_id"),
+            role=_literal(row[3], ("user", "assistant"), "ai_message.role"),
+            kind=_literal(
+                row[4],
+                ("instruction", "answer", "clarification", "proposal", "error"),
+                "ai_message.kind",
+            ),
+            content=_required_str(row[5], "ai_message.content"),
+            run_id=_optional_str(row[6], "ai_message.run_id"),
+            command_batch_id=_optional_str(row[7], "ai_message.command_batch_id"),
+            status=_literal(
+                row[8],
+                ("pending", "completed", "failed", "rejected", "applied"),
+                "ai_message.status",
+            ),
+            created_at=_datetime(row[9], "ai_message.created_at"),
+            updated_at=_datetime(row[10], "ai_message.updated_at"),
+        )
+
+    @staticmethod
+    def _ai_edit_run_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeAiEditRunRecord:
+        return PrototypeAiEditRunRecord(
+            id=_required_str(row[0], "ai_run.id"),
+            thread_id=_required_str(row[1], "ai_run.thread_id"),
+            user_message_id=_required_str(row[2], "ai_run.user_message_id"),
+            assistant_message_id=_optional_str(row[3], "ai_run.assistant_message_id"),
+            document_id=_required_str(row[4], "ai_run.document_id"),
+            draft_id=_required_str(row[5], "ai_run.draft_id"),
+            operation_id=_required_str(row[6], "ai_run.operation_id"),
+            retry_of_run_id=_optional_str(row[7], "ai_run.retry_of_run_id"),
+            status=_literal(
+                row[8],
+                (
+                    "queued",
+                    "building_context",
+                    "generating",
+                    "validating",
+                    "rendering_preview",
+                    "preview_ready",
+                    "completed_answer",
+                    "completed_clarification",
+                    "applied",
+                    "rejected",
+                    "stale",
+                    "failed",
+                    "interrupted",
+                ),
+                "ai_run.status",
+            ),
+            scope_json=_required_str(row[9], "ai_run.scope_json"),
+            base_head_sequence_no=_required_non_negative_int(
+                row[10], "ai_run.base_head_sequence_no"
+            ),
+            base_document_hash=_required_hash(row[11], "ai_run.base_document_hash"),
+            context_object_hash=_optional_hash(row[12], "ai_run.context_object_hash"),
+            outcome_object_hash=_optional_hash(row[13], "ai_run.outcome_object_hash"),
+            submission_id=_optional_str(row[14], "ai_run.submission_id"),
+            submission_request_hash=_optional_hash(row[15], "ai_run.submission_request_hash"),
+            submission_accepted_at=_optional_datetime(row[16], "ai_run.submission_accepted_at"),
+            replay_manifest_object_hash=_optional_hash(
+                row[17], "ai_run.replay_manifest_object_hash"
+            ),
+            proposed_command_batch_json=_optional_str(
+                row[18], "ai_run.proposed_command_batch_json"
+            ),
+            proposed_command_batch_hash=_optional_hash(
+                row[19], "ai_run.proposed_command_batch_hash"
+            ),
+            candidate_object_hash=_optional_hash(row[20], "ai_run.candidate_object_hash"),
+            preview_render_run_id=_optional_str(row[21], "ai_run.preview_render_run_id"),
+            preview_artifact_id=_optional_str(row[22], "ai_run.preview_artifact_id"),
+            summary=_optional_str(row[23], "ai_run.summary"),
+            affected_entity_ids_json=_optional_str(row[24], "ai_run.affected_entity_ids_json"),
+            task_id=_optional_str(row[25], "ai_run.task_id"),
+            execution_process_id=_optional_str(row[26], "ai_run.execution_process_id"),
+            error_code=_optional_str(row[27], "ai_run.error_code"),
+            error_message=_optional_str(row[28], "ai_run.error_message"),
+            created_at=_datetime(row[29], "ai_run.created_at"),
+            updated_at=_datetime(row[30], "ai_run.updated_at"),
+            completed_at=_optional_datetime(row[31], "ai_run.completed_at"),
+        )
+
+    @staticmethod
+    def _command_batch_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeCommandBatchRecord:
+        return PrototypeCommandBatchRecord(
+            id=_required_str(row[0], "batch.id"),
+            draft_id=_required_str(row[1], "batch.draft_id"),
+            base_sequence_no=_required_non_negative_int(row[2], "batch.base_sequence_no"),
+            result_sequence_no=_required_positive_int(row[3], "batch.result_sequence_no"),
+            client_request_id=_required_str(row[4], "batch.client_request_id"),
+            origin=_literal(row[5], ("user", "ai", "system"), "batch.origin"),
+            operation_kind=_literal(
+                row[6],
+                ("forward", "undo", "redo"),
+                "batch.operation_kind",
+            ),
+            target_batch_id=_optional_str(row[7], "batch.target_batch_id"),
+            command_contract_version=_required_positive_int(
+                row[8], "batch.command_contract_version"
+            ),
+            commands_json=_required_str(row[9], "batch.commands_json"),
+            inverse_commands_json=_required_str(row[10], "batch.inverse_commands_json"),
+            command_batch_hash=_required_hash(row[11], "batch.command_batch_hash"),
+            base_document_hash=_required_hash(row[12], "batch.base_document_hash"),
+            result_document_hash=_required_hash(row[13], "batch.result_document_hash"),
+            operation_id=_required_str(row[14], "batch.operation_id"),
+            created_at=_datetime(row[15], "batch.created_at"),
+        )
+
+    @staticmethod
+    def _runtime_session_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeRuntimeSessionRecord:
+        return PrototypeRuntimeSessionRecord(
+            id=_required_str(row[0], "runtime_session.id"),
+            project_id=_required_str(row[1], "runtime_session.project_id"),
+            document_id=_required_str(row[2], "runtime_session.document_id"),
+            source_kind=_literal(
+                row[3],
+                ("draft", "ai_preview", "published_revision"),
+                "runtime_session.source_kind",
+            ),
+            source_id=_required_str(row[4], "runtime_session.source_id"),
+            pinned_document_object_hash=_required_hash(
+                row[5], "runtime_session.pinned_document_object_hash"
+            ),
+            runtime_core_version=_required_str(row[6], "runtime_session.runtime_core_version"),
+            runtime_core_bundle_hash=_required_hash(
+                row[7], "runtime_session.runtime_core_bundle_hash"
+            ),
+            state_machine_kernel_version=_required_str(
+                row[8], "runtime_session.state_machine_kernel_version"
+            ),
+            scenario_id=_required_str(row[9], "runtime_session.scenario_id"),
+            scenario_hash=_required_hash(row[10], "runtime_session.scenario_hash"),
+            status=_literal(
+                row[11],
+                ("active", "completed", "interrupted", "corrupt"),
+                "runtime_session.status",
+            ),
+            head_sequence_no=_required_non_negative_int(
+                row[12], "runtime_session.head_sequence_no"
+            ),
+            head_state_hash=_required_hash(row[13], "runtime_session.head_state_hash"),
+            head_view_model_hash=_required_hash(row[14], "runtime_session.head_view_model_hash"),
+            latest_checkpoint_id=_optional_str(row[15], "runtime_session.latest_checkpoint_id"),
+            recording_kind=_literal(
+                row[16],
+                ("studio_preview", "recorded_review", "shared_preview"),
+                "runtime_session.recording_kind",
+            ),
+            allow_simulated_role_switch=_required_sqlite_bool(
+                row[17], "runtime_session.allow_simulated_role_switch"
+            ),
+            actor_subject_id=_optional_str(row[18], "runtime_session.actor_subject_id"),
+            created_at=_datetime(row[19], "runtime_session.created_at"),
+            updated_at=_datetime(row[20], "runtime_session.updated_at"),
+            completed_at=_optional_datetime(row[21], "runtime_session.completed_at"),
+        )
+
+    @staticmethod
+    def _runtime_event_batch_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeRuntimeEventBatchRecord:
+        return PrototypeRuntimeEventBatchRecord(
+            id=_required_str(row[0], "runtime_event.id"),
+            session_id=_required_str(row[1], "runtime_event.session_id"),
+            client_event_id=_required_str(row[2], "runtime_event.client_event_id"),
+            base_sequence_no=_required_non_negative_int(row[3], "runtime_event.base_sequence_no"),
+            result_sequence_no=_required_positive_int(row[4], "runtime_event.result_sequence_no"),
+            events_json=_required_str(row[5], "runtime_event.events_json"),
+            event_batch_hash=_required_hash(row[6], "runtime_event.event_batch_hash"),
+            matched_rule_ids_json=_required_str(row[7], "runtime_event.matched_rule_ids_json"),
+            guard_report_hash=_required_hash(row[8], "runtime_event.guard_report_hash"),
+            effect_report_hash=_required_hash(row[9], "runtime_event.effect_report_hash"),
+            outcome=_literal(
+                row[10],
+                ("applied", "guard_false", "validation_failed"),
+                "runtime_event.outcome",
+            ),
+            base_state_hash=_required_hash(row[11], "runtime_event.base_state_hash"),
+            result_state_hash=_required_hash(row[12], "runtime_event.result_state_hash"),
+            result_view_model_hash=_required_hash(row[13], "runtime_event.result_view_model_hash"),
+            runtime_core_version=_required_str(row[14], "runtime_event.runtime_core_version"),
+            runtime_core_bundle_hash=_required_hash(
+                row[15], "runtime_event.runtime_core_bundle_hash"
+            ),
+            state_machine_kernel_version=_required_str(
+                row[16], "runtime_event.state_machine_kernel_version"
+            ),
+            operation_id=_required_str(row[17], "runtime_event.operation_id"),
+            created_at=_datetime(row[18], "runtime_event.created_at"),
+        )
+
+    @staticmethod
+    def _runtime_checkpoint_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeRuntimeCheckpointRecord:
+        return PrototypeRuntimeCheckpointRecord(
+            id=_required_str(row[0], "runtime_checkpoint.id"),
+            session_id=_required_str(row[1], "runtime_checkpoint.session_id"),
+            checkpoint_sequence_no=_required_non_negative_int(
+                row[2], "runtime_checkpoint.checkpoint_sequence_no"
+            ),
+            state_object_hash=_required_hash(row[3], "runtime_checkpoint.state_object_hash"),
+            runtime_state_schema_version=_required_positive_int(
+                row[4], "runtime_checkpoint.runtime_state_schema_version"
+            ),
+            runtime_event_contract_version=_required_positive_int(
+                row[5], "runtime_checkpoint.runtime_event_contract_version"
+            ),
+            state_hash=_required_hash(row[6], "runtime_checkpoint.state_hash"),
+            view_model_hash=_required_hash(row[7], "runtime_checkpoint.view_model_hash"),
+            created_by_operation_id=_required_str(
+                row[8], "runtime_checkpoint.created_by_operation_id"
+            ),
+            created_at=_datetime(row[9], "runtime_checkpoint.created_at"),
+        )
+
+    @staticmethod
+    def _assert_idempotent_runtime_event_batch(
+        existing: PrototypeRuntimeEventBatchRecord,
+        incoming: PrototypeRuntimeEventBatchRecord,
+    ) -> None:
+        if (
+            existing.session_id,
+            existing.client_event_id,
+            existing.base_sequence_no,
+            existing.result_sequence_no,
+            existing.events_json,
+            existing.event_batch_hash,
+            existing.matched_rule_ids_json,
+            existing.guard_report_hash,
+            existing.effect_report_hash,
+            existing.outcome,
+            existing.base_state_hash,
+            existing.result_state_hash,
+            existing.result_view_model_hash,
+            existing.runtime_core_version,
+            existing.runtime_core_bundle_hash,
+            existing.state_machine_kernel_version,
+            existing.operation_id,
+        ) != (
+            incoming.session_id,
+            incoming.client_event_id,
+            incoming.base_sequence_no,
+            incoming.result_sequence_no,
+            incoming.events_json,
+            incoming.event_batch_hash,
+            incoming.matched_rule_ids_json,
+            incoming.guard_report_hash,
+            incoming.effect_report_hash,
+            incoming.outcome,
+            incoming.base_state_hash,
+            incoming.result_state_hash,
+            incoming.result_view_model_hash,
+            incoming.runtime_core_version,
+            incoming.runtime_core_bundle_hash,
+            incoming.state_machine_kernel_version,
+            incoming.operation_id,
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_event_idempotency_conflict",
+                "prototype runtime event request was retried with different inputs",
+            )
+
+    @staticmethod
+    def _assert_idempotent_command_batch(
+        existing: PrototypeCommandBatchRecord,
+        incoming: PrototypeCommandBatchRecord,
+    ) -> None:
+        if (
+            existing.draft_id,
+            existing.base_sequence_no,
+            existing.result_sequence_no,
+            existing.client_request_id,
+            existing.origin,
+            existing.operation_kind,
+            existing.target_batch_id,
+            existing.command_contract_version,
+            existing.commands_json,
+            existing.inverse_commands_json,
+            existing.command_batch_hash,
+            existing.base_document_hash,
+            existing.result_document_hash,
+            existing.operation_id,
+        ) != (
+            incoming.draft_id,
+            incoming.base_sequence_no,
+            incoming.result_sequence_no,
+            incoming.client_request_id,
+            incoming.origin,
+            incoming.operation_kind,
+            incoming.target_batch_id,
+            incoming.command_contract_version,
+            incoming.commands_json,
+            incoming.inverse_commands_json,
+            incoming.command_batch_hash,
+            incoming.base_document_hash,
+            incoming.result_document_hash,
+            incoming.operation_id,
+        ):
+            raise StructuredPrototypeStoreError(
+                "command_idempotency_conflict",
+                "prototype command request was retried with different inputs",
+            )
+
+    @staticmethod
+    def _assert_ai_message_idempotent(
+        existing: PrototypeAiMessageRecord,
+        incoming: PrototypeAiMessageRecord,
+    ) -> None:
+        if (
+            existing.id,
+            existing.thread_id,
+            existing.client_message_id,
+            existing.role,
+            existing.kind,
+            existing.content,
+            existing.run_id,
+        ) != (
+            incoming.id,
+            incoming.thread_id,
+            incoming.client_message_id,
+            incoming.role,
+            incoming.kind,
+            incoming.content,
+            incoming.run_id,
+        ):
+            raise StructuredPrototypeStoreError(
+                "ai_message_idempotency_conflict",
+                "prototype AI message was retried with different inputs",
+            )
+
+    @staticmethod
+    def _assert_ai_edit_run_immutable_identity(
+        existing: PrototypeAiEditRunRecord,
+        incoming: PrototypeAiEditRunRecord,
+    ) -> None:
+        if (
+            existing.id,
+            existing.thread_id,
+            existing.user_message_id,
+            existing.document_id,
+            existing.draft_id,
+            existing.operation_id,
+            existing.retry_of_run_id,
+            existing.scope_json,
+            existing.base_head_sequence_no,
+            existing.base_document_hash,
+            existing.created_at,
+        ) != (
+            incoming.id,
+            incoming.thread_id,
+            incoming.user_message_id,
+            incoming.document_id,
+            incoming.draft_id,
+            incoming.operation_id,
+            incoming.retry_of_run_id,
+            incoming.scope_json,
+            incoming.base_head_sequence_no,
+            incoming.base_document_hash,
+            incoming.created_at,
+        ):
+            raise StructuredPrototypeStoreError(
+                "ai_run_identity_mismatch",
+                "prototype AI edit run immutable identity changed",
+            )
+
+    @classmethod
+    def _assert_ai_edit_run_idempotent(
+        cls,
+        existing: PrototypeAiEditRunRecord,
+        incoming: PrototypeAiEditRunRecord,
+    ) -> None:
+        cls._assert_ai_edit_run_immutable_identity(existing, incoming)
+        if existing.status != incoming.status:
+            raise StructuredPrototypeStoreError(
+                "ai_run_idempotency_conflict",
+                "prototype AI edit run retry resolved to a different lifecycle state",
+            )
+
+    @classmethod
+    def _validate_generation_job_create(
+        cls,
+        *,
+        job_operation: PrototypeOperation,
+        item_operation: PrototypeOperation,
+        job: PrototypeDocumentGenerationJobRecord,
+        run: PrototypeDocumentGenerationRunRecord,
+        item: PrototypeDocumentGenerationItemRecord,
+    ) -> None:
+        for value, field in (
+            (job.request_manifest_object_hash, "generation_job.request_manifest_object_hash"),
+            (job.request_hash, "generation_job.request_hash"),
+            (job.context_manifest_object_hash, "generation_job.context_manifest_object_hash"),
+            (item.context_object_hash, "generation_item.context_object_hash"),
+        ):
+            _required_hash(value, field)
+        if (
+            job.status != "queued"
+            or job.blueprint_version != 0
+            or job.blueprint_object_hash is not None
+            or job.blueprint_hash is not None
+            or job.candidate_object_hash is not None
+            or job.candidate_document_hash is not None
+            or job.preview_render_run_id is not None
+            or job.preview_artifact_id is not None
+            or job.preview_renderer_version is not None
+            or job.preview_storage_key is not None
+            or job.preview_output_hash is not None
+            or job.preview_output_manifest_hash is not None
+            or job.preview_visual_preflight_report_hash is not None
+            or job.replay_manifest_object_hash is not None
+            or job.document_id is not None
+            or job.error_code is not None
+            or job.error_message is not None
+            or job.completed_at is not None
+            or run.status != "queued"
+            or run.blueprint_hash is not None
+            or run.job_id != job.id
+            or item.job_id != job.id
+            or item.run_id != run.id
+            or item.kind != "blueprint"
+            or item.item_key != "blueprint"
+            or item.page_key is not None
+            or item.status != "pending"
+            or item.task_kind != "generation_blueprint"
+            or item.context_object_hash != job.context_manifest_object_hash
+            or item.submission_id is not None
+            or item.submission_request_hash is not None
+            or item.submission_normalized_fields
+            or item.submission_accepted_at is not None
+            or item.output_object_hash is not None
+            or item.task_id is None
+            or item.execution_process_id is not None
+            or item.error_code is not None
+            or item.error_message is not None
+            or item.completed_at is not None
+        ):
+            raise StructuredPrototypeStoreError(
+                "generation_job_invalid",
+                "new structured prototype generation records are inconsistent",
+            )
+        if (
+            job.operation_id != job_operation.id
+            or job_operation.operation_kind != "generation_job"
+            or job_operation.project_id != job.project_id
+            or job_operation.resource_kind != "generation_job"
+            or job_operation.resource_id != job.id
+            or job_operation.status != "queued"
+            or item.operation_id != item_operation.id
+            or item_operation.operation_kind != "generation_item"
+            or item_operation.project_id != job.project_id
+            or item_operation.resource_kind != "generation_item"
+            or item_operation.resource_id != item.id
+            or item_operation.parent_operation_id != job_operation.id
+            or item_operation.status != "queued"
+        ):
+            raise StructuredPrototypeStoreError(
+                "generation_operation_identity_mismatch",
+                "generation job and item operation identities are inconsistent",
+            )
+
+    @staticmethod
+    def _validate_generation_run_counts(
+        run: PrototypeDocumentGenerationRunRecord,
+        items: tuple[PrototypeDocumentGenerationItemRecord, ...],
+    ) -> None:
+        if not items or any(item.run_id != run.id or item.job_id != run.job_id for item in items):
+            raise StructuredPrototypeStoreError(
+                "generation_run_invalid",
+                "generation run items do not belong to the supplied run",
+            )
+        succeeded = sum(item.status == "done" for item in items)
+        failed = sum(item.status in {"failed", "interrupted"} for item in items)
+        running = sum(item.status in {"generating", "validating"} for item in items)
+        pending = sum(item.status == "pending" for item in items)
+        processed = succeeded + failed
+        if (
+            run.total != len(items)
+            or run.processed != processed
+            or run.succeeded != succeeded
+            or run.failed != failed
+            or run.running != running
+            or run.pending != pending
+            or processed + running + pending != run.total
+        ):
+            raise StructuredPrototypeStoreError(
+                "generation_run_invalid",
+                "generation run counters do not match its durable items",
+            )
+        if run.status == "completed" and succeeded != run.total:
+            raise StructuredPrototypeStoreError(
+                "generation_run_invalid",
+                "completed generation run must have only successful items",
+            )
+
+    @staticmethod
+    def _validate_generation_run_create(
+        operation: PrototypeOperation,
+        job: PrototypeDocumentGenerationJobRecord,
+        run: PrototypeDocumentGenerationRunRecord,
+        item_operations: tuple[
+            tuple[
+                PrototypeDocumentGenerationItemRecord,
+                PrototypeOperation,
+                PrototypeOperationEvent,
+            ],
+            ...,
+        ],
+    ) -> None:
+        items = tuple(item for item, _, _ in item_operations)
+        if (
+            job.status != "generating"
+            or job.blueprint_version <= 0
+            or job.blueprint_hash is None
+            or job.blueprint_object_hash != job.blueprint_hash
+            or run.job_id != job.id
+            or run.status != "queued"
+            or run.blueprint_hash != job.blueprint_hash
+            or operation.operation_kind != "generation_job"
+            or operation.project_id != job.project_id
+            or operation.resource_kind != "generation_job"
+            or operation.resource_id != job.id
+            or operation.parent_operation_id != job.operation_id
+            or operation.status != "queued"
+        ):
+            raise StructuredPrototypeStoreError(
+                "generation_run_invalid",
+                "scheduled generation run does not match its confirmed job",
+            )
+        item_kinds = {item.kind for item in items}
+        if item_kinds == {"foundation"}:
+            if len(items) != 1 or items[0].item_key != "foundation":
+                raise StructuredPrototypeStoreError(
+                    "generation_run_invalid",
+                    "foundation generation run must contain exactly one foundation item",
+                )
+        elif item_kinds == {"page"}:
+            page_keys = {"purchase-list", "purchase-create", "purchase-detail"}
+            if (
+                len(items) != 3
+                or {item.item_key for item in items} != page_keys
+                or {item.page_key for item in items} != page_keys
+            ):
+                raise StructuredPrototypeStoreError(
+                    "generation_run_invalid",
+                    "page generation run must contain the ordered procurement page set",
+                )
+        else:
+            raise StructuredPrototypeStoreError(
+                "generation_run_invalid",
+                "generation run must contain only one supported phase kind",
+            )
+        for item, item_operation, _ in item_operations:
+            expected_task_kind = f"generation_{item.kind}"
+            if (
+                item.status != "pending"
+                or item.phase != "queued"
+                or item.task_kind != expected_task_kind
+                or item.task_id is None
+                or item.submission_id is not None
+                or item.submission_request_hash is not None
+                or item.submission_normalized_fields
+                or item.submission_accepted_at is not None
+                or item.output_object_hash is not None
+                or item.execution_process_id is not None
+                or item.error_code is not None
+                or item.error_message is not None
+                or item.completed_at is not None
+                or item.operation_id != item_operation.id
+                or item_operation.operation_kind != "generation_item"
+                or item_operation.project_id != job.project_id
+                or item_operation.resource_kind != "generation_item"
+                or item_operation.resource_id != item.id
+                or item_operation.parent_operation_id != operation.id
+                or item_operation.status != "queued"
+            ):
+                raise StructuredPrototypeStoreError(
+                    "generation_item_invalid",
+                    "scheduled generation item or operation identity is inconsistent",
+                )
+
+    @staticmethod
+    def _assert_generation_job_identity(
+        existing: PrototypeDocumentGenerationJobRecord,
+        incoming: PrototypeDocumentGenerationJobRecord,
+    ) -> None:
+        if (
+            existing.id,
+            existing.project_id,
+            existing.client_request_id,
+            existing.operation_id,
+            existing.request_manifest_object_hash,
+            existing.request_hash,
+            existing.context_manifest_object_hash,
+            existing.created_at,
+        ) != (
+            incoming.id,
+            incoming.project_id,
+            incoming.client_request_id,
+            incoming.operation_id,
+            incoming.request_manifest_object_hash,
+            incoming.request_hash,
+            incoming.context_manifest_object_hash,
+            incoming.created_at,
+        ):
+            raise StructuredPrototypeStoreError(
+                "generation_job_identity_mismatch",
+                "structured prototype generation job immutable identity changed",
+            )
+
+    @classmethod
+    def _assert_generation_job_idempotent(
+        cls,
+        existing: PrototypeDocumentGenerationJobRecord,
+        incoming: PrototypeDocumentGenerationJobRecord,
+    ) -> None:
+        cls._assert_generation_job_identity(existing, incoming)
+        if existing.id != incoming.id or existing.status != incoming.status:
+            raise StructuredPrototypeStoreError(
+                "generation_job_idempotency_conflict",
+                "generation job request was retried with different initial state",
+            )
+
+    @staticmethod
+    def _assert_generation_run_identity(
+        existing: PrototypeDocumentGenerationRunRecord,
+        incoming: PrototypeDocumentGenerationRunRecord,
+    ) -> None:
+        if (existing.id, existing.job_id, existing.created_at) != (
+            incoming.id,
+            incoming.job_id,
+            incoming.created_at,
+        ):
+            raise StructuredPrototypeStoreError(
+                "generation_run_identity_mismatch",
+                "structured prototype generation run immutable identity changed",
+            )
+
+    @staticmethod
+    def _assert_generation_item_identity(
+        existing: PrototypeDocumentGenerationItemRecord,
+        incoming: PrototypeDocumentGenerationItemRecord,
+    ) -> None:
+        if (
+            existing.id,
+            existing.job_id,
+            existing.run_id,
+            existing.kind,
+            existing.item_key,
+            existing.page_key,
+            existing.attempt,
+            existing.task_kind,
+            existing.operation_id,
+            existing.context_object_hash,
+            existing.created_at,
+        ) != (
+            incoming.id,
+            incoming.job_id,
+            incoming.run_id,
+            incoming.kind,
+            incoming.item_key,
+            incoming.page_key,
+            incoming.attempt,
+            incoming.task_kind,
+            incoming.operation_id,
+            incoming.context_object_hash,
+            incoming.created_at,
+        ):
+            raise StructuredPrototypeStoreError(
+                "generation_item_identity_mismatch",
+                "structured prototype generation item immutable identity changed",
+            )
+
+    @staticmethod
+    def _assert_generation_job_status_transition(existing: str, incoming: str) -> None:
+        allowed = {
+            "queued": {"planning", "failed", "interrupted", "cancelled"},
+            "planning": {"awaiting_confirmation", "failed", "interrupted", "cancelled"},
+            "awaiting_confirmation": {"generating", "failed", "cancelled"},
+            "generating": {"assembling", "failed", "interrupted", "cancelled"},
+            "assembling": {"validating", "failed", "interrupted", "cancelled"},
+            "validating": {"rendering_preview", "failed", "interrupted", "cancelled"},
+            "rendering_preview": {"ready", "failed", "interrupted", "cancelled"},
+            "ready": {"accepted", "failed", "cancelled"},
+            "accepted": set(),
+            "failed": set(),
+            "interrupted": set(),
+            "cancelled": set(),
+        }
+        if incoming != existing and incoming not in allowed[existing]:
+            raise StructuredPrototypeStoreError(
+                "generation_job_transition_invalid",
+                f"generation job cannot transition from {existing} to {incoming}",
+            )
+
+    @staticmethod
+    def _assert_generation_run_status_transition(existing: str, incoming: str) -> None:
+        allowed = {
+            "queued": {"running", "failed", "interrupted", "cancelled"},
+            "running": {"completed", "failed", "interrupted", "cancelled"},
+            "completed": set(),
+            "failed": set(),
+            "interrupted": set(),
+            "cancelled": set(),
+        }
+        if incoming != existing and incoming not in allowed[existing]:
+            raise StructuredPrototypeStoreError(
+                "generation_run_transition_invalid",
+                f"generation run cannot transition from {existing} to {incoming}",
+            )
+
+    @staticmethod
+    def _assert_generation_item_status_transition(existing: str, incoming: str) -> None:
+        allowed = {
+            "pending": {"generating", "failed", "interrupted"},
+            "generating": {"validating", "failed", "interrupted"},
+            "validating": {"done", "failed", "interrupted"},
+            "done": set(),
+            "failed": set(),
+            "interrupted": set(),
+        }
+        if incoming != existing and incoming not in allowed[existing]:
+            raise StructuredPrototypeStoreError(
+                "generation_item_transition_invalid",
+                f"generation item cannot transition from {existing} to {incoming}",
+            )
+
+    @classmethod
+    async def _interrupt_generation_operation(
+        cls,
+        conn: aiosqlite.Connection,
+        operation_id: str,
+        interrupted_at: datetime,
+    ) -> None:
+        row = await cls._load_operation_row(conn, operation_id)
+        if row is None:
+            raise StructuredPrototypeStoreError(
+                "operation_missing",
+                "generation recovery operation does not exist",
+            )
+        operation = cls._operation_from_row(row)
+        if operation.status in {"succeeded", "failed", "interrupted", "cancelled"}:
+            return
+        await conn.execute(
+            """
+            UPDATE prototype_operations
+            SET status = 'interrupted', phase = 'interrupted',
+                error_code = 'restart_interrupted', completed_at = ?
+            WHERE id = ?
+            """,
+            (interrupted_at.isoformat(), operation_id),
+        )
+        event_no = await cls._next_operation_event_no(conn, operation_id)
+        await cls._insert_operation_event(
+            conn,
+            PrototypeOperationEvent(
+                operation_id=operation_id,
+                event_no=event_no,
+                step_id=None,
+                event_kind="operation_interrupted",
+                status="interrupted",
+                phase="interrupted",
+                input_hash=None,
+                output_hash=None,
+                evidence_hash=None,
+                error_code="restart_interrupted",
+                occurred_at=interrupted_at,
+            ),
+        )
+
+    @staticmethod
+    def _validate_registration(
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+    ) -> None:
+        if descriptor.project_id != reference.project_id:
+            raise StructuredPrototypeStoreError(
+                "object_reference_identity_mismatch",
+                "prototype object reference project does not match its descriptor",
+            )
+        if descriptor.content_hash != reference.content_hash:
+            raise StructuredPrototypeStoreError(
+                "object_reference_identity_mismatch",
+                "prototype object reference hash does not match its descriptor",
+            )
+        if not reference.owner_id or not reference.role:
+            raise StructuredPrototypeStoreError(
+                "object_reference_invalid",
+                "prototype object reference owner and role must not be empty",
+            )
+        if reference.schema_version <= 0:
+            raise StructuredPrototypeStoreError(
+                "object_reference_invalid",
+                "prototype object reference schema version must be positive",
+            )
+
+    @staticmethod
+    def _descriptor_params(descriptor: PrototypeObjectDescriptor) -> tuple[object, ...]:
+        return (
+            descriptor.project_id,
+            descriptor.content_hash,
+            descriptor.media_type,
+            descriptor.storage_codec,
+            descriptor.storage_codec_version,
+            descriptor.canonical_byte_size,
+            descriptor.stored_byte_size,
+            descriptor.storage_hash,
+            descriptor.storage_key,
+            descriptor.created_at.isoformat(),
+        )
+
+    @staticmethod
+    def _assert_descriptor_matches(
+        row: aiosqlite.Row | tuple[object, ...],
+        descriptor: PrototypeObjectDescriptor,
+    ) -> None:
+        stored = AsyncStructuredPrototypeStore._descriptor_from_row(row)
+        stored_identity = AsyncStructuredPrototypeStore._descriptor_params(stored)[:9]
+        incoming_identity = AsyncStructuredPrototypeStore._descriptor_params(descriptor)[:9]
+        if stored_identity != incoming_identity:
+            raise StructuredPrototypeStoreError(
+                "object_descriptor_conflict",
+                "prototype object descriptor conflicts with the registered object",
+            )
+
+    @staticmethod
+    def _descriptor_from_row(
+        row: aiosqlite.Row | tuple[object, ...],
+    ) -> PrototypeObjectDescriptor:
+        return PrototypeObjectDescriptor(
+            project_id=_required_str(row[0], "descriptor.project_id"),
+            content_hash=_required_str(row[1], "descriptor.content_hash"),
+            media_type=_media_type(row[2]),
+            storage_codec=_storage_codec(row[3]),
+            storage_codec_version=_required_str(row[4], "descriptor.storage_codec_version"),
+            canonical_byte_size=_required_non_negative_int(
+                row[5], "descriptor.canonical_byte_size"
+            ),
+            stored_byte_size=_required_non_negative_int(row[6], "descriptor.stored_byte_size"),
+            storage_hash=_required_str(row[7], "descriptor.storage_hash"),
+            storage_key=_required_str(row[8], "descriptor.storage_key"),
+            created_at=_datetime(row[9], "descriptor.created_at"),
+        )

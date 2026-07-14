@@ -37,9 +37,7 @@ function isUnknownRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isBudgetSteeringEventPayload(
-  value: unknown,
-): value is BackendBudgetSteeringEventPayload {
+function isBudgetSteeringEventPayload(value: unknown): value is BackendBudgetSteeringEventPayload {
   if (!isUnknownRecord(value)) return false;
   const type = value["type"];
   const issueId = value["issue_id"];
@@ -66,9 +64,7 @@ function isBudgetSteeringEventPayload(
  * events omit it. Exceeded events have crossed the hard ceiling, so `1` is the
  * tightest safe threshold when no prior endpoint snapshot is available.
  */
-export function readBudgetSteeringEvent(
-  event: unknown,
-): IssueBudgetStatus | null {
+export function readBudgetSteeringEvent(event: unknown): IssueBudgetStatus | null {
   if (!isBudgetSteeringEventPayload(event)) return null;
   const overBudget = event.type === "budget_exceeded";
   return {

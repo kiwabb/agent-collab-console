@@ -37,6 +37,7 @@ test("remaining issue-facing views are wired to i18n", () => {
   const issueBoard = readSource("features/issues/IssueBoard.tsx");
   const steerDialog = readSource("features/issues/components/SteerIssueDialog.tsx");
   const sideStack = readSource("features/issues/components/IssueSideStack.tsx");
+  const acceptanceCard = readSource("features/issues/components/AcceptanceCriteriaCard.tsx");
   const inboxDashboard = readSource("features/inbox/InboxDashboard.tsx");
 
   assert.match(issueBoard, /t\("issue\.toast\.created"\)/);
@@ -44,8 +45,8 @@ test("remaining issue-facing views are wired to i18n", () => {
   assert.match(issueBoard, /t\("issue\.bulkDelete\.title"\)/);
   assert.match(issueBoard, /t\("issue\.exportJson"\)/);
   assert.match(issueBoard, /t\("issue\.importAction"\)/);
-  // Acceptance checklist now lives in IssueSideStack (post-refactor).
-  assert.match(sideStack, /t\("issue\.side\.acceptance"\)/);
+  assert.match(sideStack, /AcceptanceCriteriaCard/);
+  assert.match(acceptanceCard, /t\("issue\.side\.acceptance"\)/);
   assert.match(steerDialog, /t\("issue\.steerDialogTitle"\)/);
   assert.match(steerDialog, /t\("issue\.steerPlaceholder"\)/);
   assert.match(inboxDashboard, /useI18n/);

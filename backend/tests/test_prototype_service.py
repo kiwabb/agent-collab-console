@@ -3,8 +3,8 @@
 We deliberately stay off the network — every test patches
 `PrototypeService._stream_html` (the actual HTTP SSE parser) with an
 async generator that yields a fixed chunk sequence, so the service-level
-prompt assembly, version bookkeeping, code-fence stripping, and disk
-mirror are exercised without needing a live LLM endpoint.
+prompt assembly, version bookkeeping, code-fence stripping, and project-local
+version persistence are exercised without needing a live LLM endpoint.
 
 Disk-touching tests are tagged `@pytest.mark.slow` per the PRD, so the
 default `pytest -v` run stays fast.
@@ -12,6 +12,7 @@ default `pytest -v` run stays fast.
 
 from __future__ import annotations  # noqa: I001
 
+import asyncio
 import shutil
 import subprocess
 from datetime import datetime
@@ -31,6 +32,7 @@ from app.application.prototype_service import (
     is_complete_html_document,
     strip_markdown_fence,
 )
+from app.application.prototype_version_artifacts import PrototypeVersionArtifactError
 from app.application.runtime_catalog_service import RuntimeCatalogService  # noqa: F401
 from app.domain.models import Project, Prototype, PrototypeVersion, RuntimeExecutorConfig
 from app.application.llm_runner import StreamingPlanContext
@@ -332,6 +334,23 @@ class _NoisyPrototypeStreamClient:
         )
 
 
+class _MissingStopPrototypeStreamClient:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def stream(self, method, url, headers=None, json=None):  # noqa: ANN001, RUF100
+        del method, url, headers, json
+        return _FakePrototypeStreamResponse(
+            [
+                'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"<!DOCTYPE html><html><body>complete</body></html>"}}',
+                'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
+            ]
+        )
+
+
 @pytest.mark.asyncio
 async def test_stream_html_skips_non_object_and_malformed_sse_events(monkeypatch):
     def fake_http_client(timeout_s: float):
@@ -359,8 +378,60 @@ async def test_stream_html_skips_non_object_and_malformed_sse_events(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_stream_html_rejects_complete_html_when_message_stop_is_missing(
+    monkeypatch,
+):
+    def fake_http_client(timeout_s: float):
+        del timeout_s
+        return _MissingStopPrototypeStreamClient()
+
+    monkeypatch.setattr("app.application.prototype_service._llm_http_client", fake_http_client)
+    chunks: list[str] = []
+
+    with pytest.raises(RuntimeError, match="required message_stop"):
+        async for chunk in _stream_html(
+            "prompt",
+            StreamingPlanContext(
+                executor_id="claude",
+                executor_label="Claude",
+                model="claude-test",
+                endpoint="https://example.test",
+                api_key="secret",
+                max_tokens=1024,
+                timeout_s=10,
+            ),
+        ):
+            chunks.append(chunk)
+
+    assert "".join(chunks) == "<!DOCTYPE html><html><body>complete</body></html>"
+
+
+@pytest.mark.asyncio
+async def test_manual_generation_uses_independent_token_limit(
+    svc: PrototypeService,
+    project: Project,
+    monkeypatch,
+) -> None:
+    seen_max_tokens: list[int] = []
+
+    async def capture_context(prompt: str, ctx: StreamingPlanContext) -> AsyncIterator[str]:
+        del prompt
+        seen_max_tokens.append(ctx.max_tokens)
+        yield "<!DOCTYPE html><html><body>fallback</body></html>"
+
+    monkeypatch.setenv("PROTOTYPE_GENERATION_MAX_TOKENS", "24576")
+    monkeypatch.setattr("app.application.prototype_service._stream_html", capture_context)
+    prototype = await svc.create(project.id, "Fallback", "Restore current UI")
+
+    events = [event async for event in svc.stream_events(prototype.id, None)]
+
+    assert seen_max_tokens == [24_576]
+    assert events[-1].event == "done"
+
+
+@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_generate_v1_writes_db_and_disk_mirror(
+async def test_generate_v1_writes_db_and_project_version_file(
     svc: PrototypeService, project: Project, monkeypatch
 ):
     monkeypatch.setattr(
@@ -390,13 +461,43 @@ async def test_generate_v1_writes_db_and_disk_mirror(
     assert v1 is not None
     assert v1.html == done["html"]
     assert v1.disk_path is not None
-    # Disk mirror exists under <repo>/.agent-collab/prototypes/<id>/v1/index.html
+    # The immutable version id, not a predicted version number, owns the path.
     disk = Path(v1.disk_path)
     assert disk.exists()
     assert disk.read_text(encoding="utf-8") == done["html"]
-    assert disk.parent.name == "v1"
-    # And it lives under the project's repo_path.
-    assert str(disk).startswith(project.repo_path)
+    assert disk.parent.name == v1.id == done["version_id"]
+    assert disk.parent.parent.name == proto.id
+    assert disk.parent.parent.parent == Path(project.repo_path) / "prototypes"
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_disk_write_failure_does_not_create_a_version(
+    svc: PrototypeService,
+    project: Project,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        _fake_stream_html_chunks,
+    )
+    prototype = await svc.create(project.id, "Pricing", "SaaS pricing page")
+
+    def fail_write(_project: Project, _version: PrototypeVersion) -> PrototypeVersion:
+        raise PrototypeVersionArtifactError("prototype version file could not be written")
+
+    monkeypatch.setattr(
+        "app.application.prototype_service.write_project_version",
+        fail_write,
+    )
+
+    events = await _collect(svc, prototype.id, None)
+
+    assert events[-1].event == "error"
+    assert events[-1].data["message"] == "prototype version file could not be written"
+    assert await svc.store.load_prototype_version(prototype.id, 1) is None
+    reloaded = await svc.get(prototype.id)
+    assert reloaded.current_version == 0
 
 
 @pytest.mark.asyncio
@@ -433,6 +534,50 @@ async def test_iterate_with_instruction_produces_v2(
     assert [v.version_no for v in _versions(detail)] == [1, 2]
     reloaded = await svc.get(proto.id)
     assert reloaded.current_version == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_concurrent_manual_iterations_allocate_distinct_versions_and_paths(
+    svc: PrototypeService,
+    project: Project,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.application.prototype_service._stream_html",
+        _fake_stream_html_chunks,
+    )
+    prototype = await svc.create(project.id, "Pricing", "initial brief")
+    await _collect(svc, prototype.id, None)
+
+    first_events, second_events = await asyncio.gather(
+        _collect(svc, prototype.id, "first concurrent refinement"),
+        _collect(svc, prototype.id, "second concurrent refinement"),
+    )
+
+    first_done = first_events[-1]
+    second_done = second_events[-1]
+    assert first_done.event == "done"
+    assert second_done.event == "done"
+    assert {first_done.data["version_no"], second_done.data["version_no"]} == {2, 3}
+    paths = {first_done.data["disk_path"], second_done.data["disk_path"]}
+    assert None not in paths
+    assert len(paths) == 2
+    for done in (first_done, second_done):
+        path = Path(str(done.data["disk_path"]))
+        assert path.parent.name == done.data["version_id"]
+        assert path.parent.parent.name == prototype.id
+        assert path.parent.parent.parent == Path(project.repo_path) / "prototypes"
+        assert path.exists()
+
+    versions = _versions(await svc.get_with_versions(prototype.id))
+    assert [version.version_no for version in versions] == [1, 2, 3]
+    assert {versions[1].instruction, versions[2].instruction} == {
+        "first concurrent refinement",
+        "second concurrent refinement",
+    }
+    reloaded = await svc.get(prototype.id)
+    assert reloaded.current_version == 3
 
 
 @pytest.mark.asyncio

@@ -422,7 +422,8 @@ export function IssueGrid({
                         : "bg-brand/10 text-brand border-brand/20",
                     )}
                   >
-                    {t(`phase.${issue.current_phase}` as TranslationKey) || issue.current_phase.replace("_", " ")}
+                    {t(`phase.${issue.current_phase}` as TranslationKey) ||
+                      issue.current_phase.replace("_", " ")}
                   </div>
                   <Button
                     type="button"
@@ -454,7 +455,9 @@ export function IssueGrid({
               <div className="mt-auto flex items-center gap-4 text-[10px] font-black uppercase tracking-widest text-text-muted">
                 <div className="flex items-center gap-1.5">
                   <div className="size-1 rounded-full bg-brand/30 transition-colors group-hover:bg-brand" />
-                  <span>{t("issue.idLabel")}: {issue.id.slice(0, 8)}</span>
+                  <span>
+                    {t("issue.idLabel")}: {issue.id.slice(0, 8)}
+                  </span>
                 </div>
                 <ChevronRight
                   size={14}

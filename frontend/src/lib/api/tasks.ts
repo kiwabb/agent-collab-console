@@ -1,6 +1,6 @@
 // AUTO-SPLIT from lib/api.ts by domain (frontend lib split).
 
-import { API_BASE, WS_BASE, apiJsonRequest, apiRequest, apiRequestOr } from "./fetch";
+import { API_BASE, apiJsonRequest, apiRequest, apiRequestOr, getWebSocketBase } from "./fetch";
 import type {
   CodexTask,
   CodexTaskMessage,
@@ -54,6 +54,13 @@ export async function getCodexTasks(
     errorMessage: (status) => `getCodexTasks failed: HTTP ${status}`,
   });
 }
+
+export async function getProjectTasks(projectId: string): Promise<CodexTask[]> {
+  return apiRequest<CodexTask[]>(
+    `${API_BASE}/codex/tasks?project_id=${encodeURIComponent(projectId)}`,
+  );
+}
+
 export async function getCodexTask(taskId: string): Promise<CodexTask> {
   return apiRequest<CodexTask>(`${API_BASE}/codex/tasks/${taskId}`);
 }
@@ -301,8 +308,8 @@ export function downloadFile(content: string, filename: string, mimeType: string
   URL.revokeObjectURL(url);
 }
 export function getProcessLogsUrl(processId: string): string {
-  return `${WS_BASE}/api/execution-processes/${processId}/logs/ws`;
+  return `${getWebSocketBase()}/api/execution-processes/${processId}/logs/ws`;
 }
 export function getProcessMessagesUrl(processId: string): string {
-  return `${WS_BASE}/api/execution-processes/${processId}/messages/ws`;
+  return `${getWebSocketBase()}/api/execution-processes/${processId}/messages/ws`;
 }

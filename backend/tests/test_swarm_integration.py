@@ -191,6 +191,8 @@ def _patch_subagent_execution(monkeypatch, *, write_plan):
         agent_worktree_path=None,
         batch_key=None,
         register_completion=False,
+        trace_id=None,
+        parent_span_id=None,
     ):
         counter["n"] += 1
         task_id = f"task-{counter['n']}"
@@ -614,6 +616,8 @@ async def test_dispatch_batch_tight_budget_downscales_concurrency(
         agent_worktree_path=None,
         batch_key=None,
         register_completion=False,
+        trace_id=None,
+        parent_span_id=None,
     ):
         counter["n"] += 1
         task_id = f"task-{counter['n']}"

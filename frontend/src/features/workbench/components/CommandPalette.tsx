@@ -394,7 +394,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         </div>
         <div className="px-3 py-1.5 border-t border-border-subtle text-[10px] text-text-muted flex justify-between">
           <span>Enter to open · Esc to close · type review, failed, or an issue title</span>
-          <span>{computedHits.length} {computedHits.length === 1 ? "result" : "results"}</span>
+          <span>
+            {computedHits.length} {computedHits.length === 1 ? "result" : "results"}
+          </span>
         </div>
       </div>
     </div>

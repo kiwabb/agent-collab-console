@@ -126,6 +126,37 @@ def test_start_status_logs_then_stop_via_manager(tmp_path):
     asyncio.run(scenario())
 
 
+def test_manager_isolates_processes_and_logs_by_service(tmp_path):
+    from app.application.project_run_manager import ProjectRunManager
+
+    async def scenario():
+        repo = _make_git_repo(tmp_path / "multi-service-mgr")
+        mgr = ProjectRunManager()
+        project_id = "project-1"
+        await mgr.start(
+            project_id,
+            _TICK_CMD,
+            str(repo),
+            service_id="backend",
+        )
+        await mgr.start(
+            project_id,
+            _TICK_CMD,
+            str(repo),
+            service_id="frontend",
+        )
+        try:
+            assert mgr.status(project_id, service_id="backend")["running"] is True
+            assert mgr.status(project_id, service_id="frontend")["running"] is True
+            await mgr.stop(project_id, service_id="backend")
+            assert mgr.status(project_id, service_id="backend")["running"] is False
+            assert mgr.status(project_id, service_id="frontend")["running"] is True
+        finally:
+            await mgr.stop(project_id, service_id="frontend")
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("exit_code", [0, 7])
 def test_project_run_redacts_success_and_failure_output(tmp_path, exit_code):
     from app.application.env_materializer import build_env_file_content

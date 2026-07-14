@@ -41,7 +41,6 @@ from app.json_safety import object_dict, string_value
 
 # Shared local CLI process runtime cleanup boundary.
 logger = logging.getLogger(__name__)
-RUNTIME_TRACE_PAYLOAD_LIMIT = 50_000
 RUNTIME_TRACE_PREVIEW_LIMIT = 4_000
 
 
@@ -126,14 +125,7 @@ def is_agent_message_item_type(item_type: str | None) -> bool:
 def _runtime_trace_json_and_preview(value: object) -> tuple[str, str, bool]:
     raw = json.dumps(value, ensure_ascii=False, default=str)
     preview = raw[:RUNTIME_TRACE_PREVIEW_LIMIT]
-    if len(raw) <= RUNTIME_TRACE_PAYLOAD_LIMIT:
-        return raw, preview, False
-    truncated = {
-        "__truncated__": True,
-        "preview": raw[:RUNTIME_TRACE_PAYLOAD_LIMIT],
-        "original_length": len(raw),
-    }
-    return json.dumps(truncated, ensure_ascii=False), preview, True
+    return raw, preview, False
 
 
 def is_cli_control_payload(text: str | None) -> bool:
@@ -236,9 +228,19 @@ class ProcessEntry:
         return self.session_id
 
 
+@dataclass(frozen=True)
+class RuntimeTaskContext:
+    execution_process_id: str | None = None
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
+    issue_id: str | None = None
+    is_workspace_console: bool = False
+
 @dataclass
 class AsyncProcessEntry:
     """Async-compatible process entry for asyncio-based subprocess management."""
+
     proc: asyncio.subprocess.Process
     output_task: asyncio.Task[None] | None
     alive: bool
@@ -291,6 +293,7 @@ class AsyncProcessEntry:
     # storm the event bus.
     last_worktree_dirty_at: float = 0.0
     cached_issue_id: str | None = None
+    task_context: RuntimeTaskContext | None = None
 
     @property
     def workspace_id(self) -> str:
@@ -314,6 +317,7 @@ def _sanitize_chat_reply(text: str) -> str:
     # Confidence check: try to parse the first ~10kB as JSON. If it succeeds,
     # this is definitely a JSON dump that doesn't belong in a chat thread.
     import json as _json
+
     sample = stripped[:10000]
     try:
         _json.loads(sample)
@@ -449,7 +453,7 @@ class BaseProcessRuntime:
         owned = False
         for process_key, entry in list(self._processes.items()):
             # Check if this entry belongs to the target task
-            is_match = (process_key == task_id)
+            is_match = process_key == task_id
             if hasattr(entry, "task_id") and entry.task_id == task_id:
                 is_match = True
 
@@ -568,33 +572,60 @@ class BaseProcessRuntime:
     def _get_log_path(self, workspace_id: str) -> str:
         return f"{self._data_dir}/codex_session_{workspace_id}.log"
 
+    async def _load_runtime_task_context(self, task_id: str) -> RuntimeTaskContext:
+        task = await self.codex_store.load_codex_task(task_id)
+        if task is None:
+            return RuntimeTaskContext()
+        return RuntimeTaskContext(
+            execution_process_id=task.last_execution_process_id,
+            trace_id=task.trace_id,
+            span_id=task.span_id,
+            parent_span_id=task.parent_span_id,
+            issue_id=task.issue_id,
+            is_workspace_console=is_workspace_console_task(task),
+        )
+
+    async def _ensure_entry_task_context(
+        self,
+        entry: AsyncProcessEntry,
+        task_id: str | None,
+    ) -> RuntimeTaskContext | None:
+        if entry.task_context is None and task_id is not None:
+            entry.task_context = await self._load_runtime_task_context(task_id)
+        return entry.task_context
+
     async def _emit_message_delta(
         self,
         workspace_id: str,
         task_id: str | None,
         seq: int,
         delta_text: str,
+        *,
+        task_context: RuntimeTaskContext | None = None,
     ) -> None:
         """Resolve the task's current execution_process_id and broadcast a message_delta event.
 
         Skips silently if no event_bus or no resolvable execution_process_id."""
         if self._event_bus is None or not task_id:
             return
-        try:
-            task = await self.codex_store.load_codex_task(task_id)
-        except Exception:
-            task = None
-        execution_process_id = getattr(task, "last_execution_process_id", None) if task else None
+        if task_context is None:
+            try:
+                task_context = await self._load_runtime_task_context(task_id)
+            except Exception:
+                task_context = None
+        execution_process_id = task_context.execution_process_id if task_context else None
         if not execution_process_id:
             return
-        await self._event_bus.append({
-            "type": "message_delta",
-            "execution_process_id": execution_process_id,
-            "task_id": task_id,
-            "session_id": workspace_id,
-            "seq": seq,
-            "delta_text": delta_text,
-        })
+        await self._event_bus.append(
+            {
+                "type": "message_delta",
+                "execution_process_id": execution_process_id,
+                "task_id": task_id,
+                "session_id": workspace_id,
+                "seq": seq,
+                "delta_text": delta_text,
+            }
+        )
 
     async def _append_log(
         self,
@@ -602,19 +633,15 @@ class BaseProcessRuntime:
         stream: str,
         content: str,
         task_id: str | None,
+        *,
+        task_context: RuntimeTaskContext | None = None,
     ) -> None:
-        execution_process_id = None
-        trace_id: str | None = None
-        span_id: str | None = None
-        parent_span_id: str | None = None
-        if task_id:
-            task = await self.codex_store.load_codex_task(task_id)
-            if task:
-                execution_process_id = task.last_execution_process_id
-                trace_id = task.trace_id
-                span_id = task.span_id
-                parent_span_id = task.parent_span_id
-
+        if task_context is None and task_id is not None:
+            task_context = await self._load_runtime_task_context(task_id)
+        execution_process_id = task_context.execution_process_id if task_context else None
+        trace_id = task_context.trace_id if task_context else None
+        span_id = task_context.span_id if task_context else None
+        parent_span_id = task_context.parent_span_id if task_context else None
         created_at = datetime.now()
         event = LogEvent(
             id=f"log-{workspace_id}-{datetime.now().timestamp()}",
@@ -631,20 +658,22 @@ class BaseProcessRuntime:
 
         if self._event_bus is not None:
             await self._event_bus.queue_log_event(event)
-            await self._event_bus.append({
-                "type": "log",
-                "id": event.id,
-                "session_id": workspace_id,
-                "workspace_id": workspace_id,
-                "stream": stream,
-                "content": content,
-                "task_id": task_id,
-                "execution_process_id": execution_process_id,
-                "trace_id": trace_id,
-                "span_id": span_id,
-                "parent_span_id": parent_span_id,
-                "created_at": created_at.isoformat(),
-            })
+            await self._event_bus.append(
+                {
+                    "type": "log",
+                    "id": event.id,
+                    "session_id": workspace_id,
+                    "workspace_id": workspace_id,
+                    "stream": stream,
+                    "content": content,
+                    "task_id": task_id,
+                    "execution_process_id": execution_process_id,
+                    "trace_id": trace_id,
+                    "span_id": span_id,
+                    "parent_span_id": parent_span_id,
+                    "created_at": created_at.isoformat(),
+                }
+            )
         else:
             await self.log_store.append_log_event(event)
 
@@ -745,7 +774,9 @@ class BaseProcessRuntime:
                         "id": message.id,
                         "role": message.role,
                         "content": message.content,
-                        "created_at": message.created_at.isoformat() if message.created_at else None,
+                        "created_at": message.created_at.isoformat()
+                        if message.created_at
+                        else None,
                     }
                     for message in messages
                 ],
@@ -759,6 +790,7 @@ class BaseProcessRuntime:
                     for event in logs
                 ],
             }
+            trace_title = f"{task.role or 'Agent'} · {task.title}"
             request_json, request_preview, request_truncated = _runtime_trace_json_and_preview(
                 request_payload
             )
@@ -766,6 +798,16 @@ class BaseProcessRuntime:
                 response_payload
             )
             trace_key = execution_process_id or task.last_execution_process_id or task.id
+            trace_metadata: dict[str, object] = {
+                "source": "runtime_agent_snapshot",
+                "executor": task.executor,
+                "provider": task.provider,
+                "model": task.model,
+                "message_count": len(messages),
+                "log_count": len(logs),
+                "process_status": process_status,
+                "exit_code": exit_code,
+            }
             result = save_trace(
                 AgentCallTrace(
                     id=f"runtime-trace-{trace_key}",
@@ -776,25 +818,12 @@ class BaseProcessRuntime:
                     task_id=task.id,
                     execution_process_id=execution_process_id,
                     kind="runtime_agent",
-                    title=f"{task.role or 'Agent'} · {task.title}",
+                    title=trace_title,
                     request_json=request_json,
                     response_json=response_json,
                     request_preview=request_preview,
                     response_preview=response_preview,
-                    metadata_json=json.dumps(
-                        {
-                            "source": "runtime_agent_snapshot",
-                            "executor": task.executor,
-                            "provider": task.provider,
-                            "model": task.model,
-                            "message_count": len(messages),
-                            "log_count": len(logs),
-                            "process_status": process_status,
-                            "exit_code": exit_code,
-                        },
-                        ensure_ascii=False,
-                        default=str,
-                    ),
+                    metadata_json=json.dumps(trace_metadata, ensure_ascii=False, default=str),
                     is_truncated=request_truncated or response_truncated,
                     created_at=datetime.now(),
                 )
@@ -814,7 +843,8 @@ class BaseProcessRuntime:
         parsed = self._try_parse_json(line)
         if parsed is None:
             return
-        await self._maybe_persist_usage(task_id, parsed)
+        task_context = await self._ensure_entry_task_context(entry, task_id)
+        await self._maybe_persist_usage(task_id, parsed, task_context=task_context)
 
         if task_id and self.help_orchestrator is not None:
             from app.application.help_event_parser import parse_help_request_event
@@ -867,13 +897,18 @@ class BaseProcessRuntime:
             delta_thinking = string_value(delta.get("thinking"))
             delta_preview = delta_text or delta_thinking
             import logging as _lstream
+
             _lstream.getLogger(__name__).info(
                 "[LLM token] task=%s delta_type=%s chars=%d preview=%s",
-                task_id, dt, len(delta_preview), delta_preview[:100],
+                task_id,
+                dt,
+                len(delta_preview),
+                delta_preview[:100],
             )
             # Feed the stall watchdog: any token (even empty-delta keep-alives)
             # counts as live progress and resets the silence timer.
             from app.application import task_activity
+
             task_activity.touch(task_id)
 
         session_id_val = parsed.get("session_id")
@@ -882,8 +917,7 @@ class BaseProcessRuntime:
             # The per-workspace thread pointer is only for the human console chat.
             # Role/help tasks keep their session on the task alone (per-task
             # identity), so they never pollute the shared pointer.
-            task = await self.codex_store.load_codex_task(task_id) if task_id else None
-            if task is None or is_workspace_console_task(task):
+            if task_context is None or task_context.is_workspace_console:
                 workspace = await self.codex_store.load_codex_workspace(workspace_id)
                 if workspace:
                     if entry.executor == "codex":
@@ -921,7 +955,13 @@ class BaseProcessRuntime:
                                 ensure_ascii=False,
                                 default=str,
                             )
-                            await self._append_log(workspace_id, "thinking", thinking_payload, task_id)
+                            await self._append_log(
+                                workspace_id,
+                                "thinking",
+                                thinking_payload,
+                                task_id,
+                                task_context=task_context,
+                            )
                             entry.last_activity_kind = "reasoning"
                     elif item_type == "tool_use":
                         tool_use_id = string_value(item.get("id") or item.get("tool_use_id"))
@@ -940,29 +980,47 @@ class BaseProcessRuntime:
                             ensure_ascii=False,
                             default=str,
                         )
-                        await self._append_log(workspace_id, "tool_use", payload, task_id)
+                        await self._append_log(
+                            workspace_id,
+                            "tool_use",
+                            payload,
+                            task_id,
+                            task_context=task_context,
+                        )
                         entry.last_activity_kind = "tool"
                         await self._maybe_emit_worktree_dirty(
-                            workspace_id, task_id, entry, tool_name_val,
+                            workspace_id,
+                            task_id,
+                            entry,
+                            tool_name_val,
+                            task_context=task_context,
                         )
                 if display_parts:
                     new_display = "".join(display_parts).strip()
                     if new_display and new_display != entry.last_emitted_assistant_text:
                         last = entry.last_emitted_assistant_text
                         if new_display.startswith(last):
-                            message_delta = new_display[len(last):]
+                            message_delta = new_display[len(last) :]
                         else:
                             message_delta = new_display
                         if message_delta:
                             entry.delta_seq += 1
                             entry.last_emitted_assistant_text = new_display
                             await self._emit_message_delta(
-                                workspace_id, task_id, entry.delta_seq, message_delta
+                                workspace_id,
+                                task_id,
+                                entry.delta_seq,
+                                message_delta,
+                                task_context=task_context,
                             )
                             import logging as _ldelta
+
                             _ldelta.getLogger(__name__).info(
                                 "[LLM stream] task=%s seq=%d chars=%d\n%s",
-                                task_id, entry.delta_seq, len(message_delta), message_delta,
+                                task_id,
+                                entry.delta_seq,
+                                len(message_delta),
+                                message_delta,
                             )
                 if text_parts:
                     entry.result_text = "".join(text_parts).strip()
@@ -1009,7 +1067,13 @@ class BaseProcessRuntime:
                         ensure_ascii=False,
                         default=str,
                     )
-                    await self._append_log(workspace_id, "tool_result", payload, task_id)
+                    await self._append_log(
+                        workspace_id,
+                        "tool_result",
+                        payload,
+                        task_id,
+                        task_context=task_context,
+                    )
             return
 
         if msg_type == "tool_use":
@@ -1017,7 +1081,13 @@ class BaseProcessRuntime:
             tool_use_id_val = string_value(parsed.get("tool_use_id") or parsed.get("id"))
             tool_input = parsed.get("input") or {}
             input_preview = str(tool_input)[:80]
-            logger.info("[tool_use] task=%s tool=%s id=%s input=%s", task_id, tool_name_val, tool_use_id_val[:8], input_preview)
+            logger.info(
+                "[tool_use] task=%s tool=%s id=%s input=%s",
+                task_id,
+                tool_name_val,
+                tool_use_id_val[:8],
+                input_preview,
+            )
             payload = json.dumps(
                 {
                     "kind": "tool_use",
@@ -1028,28 +1098,48 @@ class BaseProcessRuntime:
                 ensure_ascii=False,
                 default=str,
             )
-            await self._append_log(workspace_id, "tool_use", payload, task_id)
+            await self._append_log(
+                workspace_id,
+                "tool_use",
+                payload,
+                task_id,
+                task_context=task_context,
+            )
             entry.last_activity_kind = "tool"
             await self._maybe_emit_worktree_dirty(
-                workspace_id, task_id, entry, tool_name_val,
+                workspace_id,
+                task_id,
+                entry,
+                tool_name_val,
+                task_context=task_context,
             )
             return
 
         if msg_type == "tool_result":
             tool_result_id = string_value(parsed.get("tool_use_id") or parsed.get("id"))
             is_error = bool(parsed.get("is_error"))
-            logger.info("[tool_result] task=%s id=%s error=%s", task_id, tool_result_id[:8], is_error)
+            logger.info(
+                "[tool_result] task=%s id=%s error=%s", task_id, tool_result_id[:8], is_error
+            )
             payload = json.dumps(
                 {
                     "kind": "tool_result",
                     "tool_use_id": tool_result_id,
-                    "output": parsed.get("result") if isinstance(parsed.get("result"), str) else parsed.get("output", ""),
+                    "output": parsed.get("result")
+                    if isinstance(parsed.get("result"), str)
+                    else parsed.get("output", ""),
                     "is_error": is_error,
                 },
                 ensure_ascii=False,
                 default=str,
             )
-            await self._append_log(workspace_id, "tool_result", payload, task_id)
+            await self._append_log(
+                workspace_id,
+                "tool_result",
+                payload,
+                task_id,
+                task_context=task_context,
+            )
             return
 
         if msg_type == "result":
@@ -1087,7 +1177,13 @@ class BaseProcessRuntime:
                     entry.result_text = value.strip()
                     entry.produced_real_turn = True
 
-    async def _maybe_persist_usage(self, task_id: str | None, parsed: object) -> None:
+    async def _maybe_persist_usage(
+        self,
+        task_id: str | None,
+        parsed: object,
+        *,
+        task_context: RuntimeTaskContext | None = None,
+    ) -> None:
         if not task_id or not hasattr(self.codex_store, "update_execution_process_usage"):
             return
         usage = extract_usage(parsed)
@@ -1110,8 +1206,9 @@ class BaseProcessRuntime:
                 cache_read_tokens=cache_read_tokens,
             )
         try:
-            task = await self.codex_store.load_codex_task(task_id)
-            execution_process_id = getattr(task, "last_execution_process_id", None) if task else None
+            if task_context is None:
+                task_context = await self._load_runtime_task_context(task_id)
+            execution_process_id = task_context.execution_process_id
             if execution_process_id:
                 await self.codex_store.update_execution_process_usage(
                     execution_process_id,
@@ -1121,7 +1218,9 @@ class BaseProcessRuntime:
                     total_cost_usd=total_cost_usd,
                 )
         except Exception:
-            logger.debug("execution process usage update failed: task_id=%s", task_id, exc_info=True)
+            logger.debug(
+                "execution process usage update failed: task_id=%s", task_id, exc_info=True
+            )
 
     async def _mark_task_done(self, task_id: str, entry: AsyncProcessEntry) -> None:
         if entry.help_requested:
@@ -1129,18 +1228,20 @@ class BaseProcessRuntime:
         task = await self.codex_store.load_codex_task(task_id)
         if task:
             execution_process_id = task.last_execution_process_id
-
             # Branch on EP kind: chat runs must NOT mutate task.result and must
             # NOT trigger artifact persistence. The assistant reply is captured
             # in the message log only.
             is_chat = await self._is_chat_execution_process(execution_process_id)
 
             task.status = "done"
-            if not is_chat and entry.result_text and not is_unusable_result_text(entry.result_text):
+            if (
+                not is_chat and entry.result_text and not is_unusable_result_text(entry.result_text)
+            ):
                 task.result = entry.result_text
             task.updated_at = datetime.now()
 
             import logging as _logging
+
             _logger = _logging.getLogger(__name__)
 
             if not is_chat and callable(self.refresh_task_result):
@@ -1252,7 +1353,9 @@ class BaseProcessRuntime:
                 result=task.result,
                 execution_process_id=execution_process_id,
             )
-        await self._complete_help_child_if_needed(task, child_status="failed", child_result=task.result)
+        await self._complete_help_child_if_needed(
+            task, child_status="failed", child_result=task.result
+        )
 
     async def _persist_assistant_message(
         self,
@@ -1269,7 +1372,9 @@ class BaseProcessRuntime:
         if not text:
             return
 
-        existing = await self._list_task_messages(task_id, execution_process_id=execution_process_id)
+        existing = await self._list_task_messages(
+            task_id, execution_process_id=execution_process_id
+        )
         if existing and existing[-1].role == "assistant" and existing[-1].content == text:
             return
 
@@ -1284,18 +1389,22 @@ class BaseProcessRuntime:
         await self.codex_store.save_codex_task_message(message)
 
         if self._event_bus is not None:
-            await self._event_bus.append({
-                "type": "message_created",
-                "execution_process_id": execution_process_id,
-                "message": {
-                    "id": message.id,
-                    "task_id": message.task_id,
-                    "execution_process_id": message.execution_process_id,
-                    "role": message.role,
-                    "content": message.content,
-                    "created_at": message.created_at.isoformat() if message.created_at else None,
+            await self._event_bus.append(
+                {
+                    "type": "message_created",
+                    "execution_process_id": execution_process_id,
+                    "message": {
+                        "id": message.id,
+                        "task_id": message.task_id,
+                        "execution_process_id": message.execution_process_id,
+                        "role": message.role,
+                        "content": message.content,
+                        "created_at": message.created_at.isoformat()
+                        if message.created_at
+                        else None,
+                    },
                 }
-            })
+            )
 
     async def _persist_reader_metadata(
         self,
@@ -1355,6 +1464,7 @@ class BaseProcessRuntime:
             return
 
         import logging as _log2
+
         _logger = _log2.getLogger(__name__)
 
         execution_process_id = task.last_execution_process_id
@@ -1372,7 +1482,9 @@ class BaseProcessRuntime:
             task.status = "failed"
         elif entry.result_text or exit_code == 0:
             task.status = "done"
-            if entry.result_text and not is_unusable_result_text(entry.result_text) and not is_chat:
+            if (
+                entry.result_text and not is_unusable_result_text(entry.result_text) and not is_chat
+            ):
                 task.result = entry.result_text
             task.updated_at = datetime.now()
 
@@ -1438,7 +1550,9 @@ class BaseProcessRuntime:
             process_status=process_status,
             exit_code=final_exit_code,
         )
-        await self._complete_help_child_if_needed(task, child_status=task.status, child_result=task.result)
+        await self._complete_help_child_if_needed(
+            task, child_status=task.status, child_result=task.result
+        )
 
     async def _complete_help_child_if_needed(
         self,
@@ -1604,14 +1718,23 @@ class BaseProcessRuntime:
         except asyncio.CancelledError:
             pass
         except Exception:
-            logger.debug("reader loop task failure marking failed: task_id=%s", task_id, exc_info=True)
+            logger.debug(
+                "reader loop task failure marking failed: task_id=%s", task_id, exc_info=True
+            )
 
     # Tool names that mutate the worktree. Matched case-insensitively. Keep
     # tight — we don't want every `Bash` to retrigger diff fetches.
-    _WORKTREE_WRITE_TOOLS = frozenset({
-        "apply_patch", "edit", "write", "multiedit", "notebookedit",
-        "applypatch", "str_replace_editor",
-    })
+    _WORKTREE_WRITE_TOOLS = frozenset(
+        {
+            "apply_patch",
+            "edit",
+            "write",
+            "multiedit",
+            "notebookedit",
+            "applypatch",
+            "str_replace_editor",
+        }
+    )
 
     async def _maybe_emit_worktree_dirty(
         self,
@@ -1619,6 +1742,8 @@ class BaseProcessRuntime:
         task_id: str | None,
         entry: AsyncProcessEntry,
         tool_name: str,
+        *,
+        task_context: RuntimeTaskContext | None = None,
     ) -> None:
         """Throttled emit of worktree_dirty so the diff/git panels refetch
         while engineer is writing. 5s window between emits per process."""
@@ -1627,28 +1752,34 @@ class BaseProcessRuntime:
         if tool_name.lower() not in self._WORKTREE_WRITE_TOOLS:
             return
         import time as _time
+
         now = _time.monotonic()
         if now - entry.last_worktree_dirty_at < 5.0:
             return
         entry.last_worktree_dirty_at = now
         # Cache issue_id off the task to avoid hitting the store every emit.
         if entry.cached_issue_id is None:
-            try:
-                task = await self.codex_store.load_codex_task(task_id)
-                entry.cached_issue_id = getattr(task, "issue_id", None)
-            except Exception:
-                entry.cached_issue_id = None
+            if task_context is not None:
+                entry.cached_issue_id = task_context.issue_id
+            else:
+                try:
+                    task = await self.codex_store.load_codex_task(task_id)
+                    entry.cached_issue_id = task.issue_id if task is not None else None
+                except Exception:
+                    entry.cached_issue_id = None
         if not entry.cached_issue_id:
             return
         with suppress(Exception):
-            await self._event_bus.append({
-                "type": "worktree_dirty",
-                "issue_id": entry.cached_issue_id,
-                "session_id": workspace_id,
-                "task_id": task_id,
-                "tool_name": tool_name,
-                "created_at": datetime.now().isoformat(),
-            })
+            await self._event_bus.append(
+                {
+                    "type": "worktree_dirty",
+                    "issue_id": entry.cached_issue_id,
+                    "session_id": workspace_id,
+                    "task_id": task_id,
+                    "tool_name": tool_name,
+                    "created_at": datetime.now().isoformat(),
+                }
+            )
 
     async def _heartbeat_loop(
         self,
@@ -1659,6 +1790,7 @@ class BaseProcessRuntime:
         """Periodic heartbeat so AgentLiveTimeline can render a live phase + elapsed
         counter even when stdout is quiet. Emits via event_bus → raw_log_stream_manager."""
         import time as _time
+
         interval = 5.0
         while entry.alive:
             try:
@@ -1670,26 +1802,30 @@ class BaseProcessRuntime:
             if self._event_bus is None or not task_id:
                 continue
             try:
-                task = await self.codex_store.load_codex_task(task_id)
+                task_context = await self._ensure_entry_task_context(entry, task_id)
             except Exception:
-                task = None
-            execution_process_id = getattr(task, "last_execution_process_id", None) if task else None
+                task_context = None
+            execution_process_id = (
+                task_context.execution_process_id if task_context is not None else None
+            )
             if not execution_process_id:
                 continue
             now = _time.monotonic()
             last = entry.last_event_at or now
             elapsed_ms = max(0, int((now - last) * 1000))
             with suppress(Exception):
-                await self._event_bus.append({
-                    "type": "heartbeat",
-                    "execution_process_id": execution_process_id,
-                    "task_id": task_id,
-                    "session_id": workspace_id,
-                    "phase": entry.last_activity_kind or "idle",
-                    "last_event_at": entry.last_event_at,
-                    "elapsed_since_last_ms": elapsed_ms,
-                    "created_at": datetime.now().isoformat(),
-                })
+                await self._event_bus.append(
+                    {
+                        "type": "heartbeat",
+                        "execution_process_id": execution_process_id,
+                        "task_id": task_id,
+                        "session_id": workspace_id,
+                        "phase": entry.last_activity_kind or "idle",
+                        "last_event_at": entry.last_event_at,
+                        "elapsed_since_last_ms": elapsed_ms,
+                        "created_at": datetime.now().isoformat(),
+                    }
+                )
 
     async def _reader_loop(
         self,
@@ -1699,10 +1835,13 @@ class BaseProcessRuntime:
     ) -> None:
         """Async reader loop using await stdout.readline()."""
         import time as _time
+
         idle_timeout = timeouts.process_idle_timeout_s()
         max_timeout = timeouts.process_max_timeout_s()
         entry.last_event_at = _time.monotonic()
-        watchdog_task = asyncio.create_task(self._watchdog(workspace_id, entry, task_id, max_timeout))
+        watchdog_task = asyncio.create_task(
+            self._watchdog(workspace_id, entry, task_id, max_timeout)
+        )
         heartbeat_task = asyncio.create_task(self._heartbeat_loop(workspace_id, entry, task_id))
         stdout = entry.proc.stdout
 
@@ -1729,30 +1868,45 @@ class BaseProcessRuntime:
 
                 entry.last_event_at = _time.monotonic()
                 decoded = line.decode("utf-8", errors="replace")
-                await self._append_log(workspace_id, "stdout", decoded, task_id)
+                task_context = await self._ensure_entry_task_context(entry, task_id)
+                await self._append_log(
+                    workspace_id,
+                    "stdout",
+                    decoded,
+                    task_id,
+                    task_context=task_context,
+                )
                 await self._capture_on_reader(workspace_id, decoded, entry, task_id)
 
                 parsed = self._try_parse_json(decoded)
                 if parsed and parsed.get("type") in ("turn.completed", "result"):
-                    for waiter in list(entry.pending_waiters):
-                        waiter.set()
-                    entry.pending_waiters.clear()
                     if task_id:
-                        if parsed.get("type") == "result" and (parsed.get("is_error") or entry.had_error):
+                        if parsed.get("type") == "result" and (
+                            parsed.get("is_error") or entry.had_error
+                        ):
                             # Hard aborts (aborted_streaming, error_during_execution) mean
                             # the stream was cut off mid-way — partial result_text is not a
                             # valid artifact, so always fail. For softer is_error (tool call
                             # failed but model finished), attempt to persist if content exists.
-                            _is_hard_abort = (
-                                parsed.get("subtype") == "error_during_execution"
-                                or parsed.get("terminal_reason") in {"aborted_streaming", "error", "interrupted"}
-                            )
+                            _is_hard_abort = parsed.get(
+                                "subtype"
+                            ) == "error_during_execution" or parsed.get("terminal_reason") in {
+                                "aborted_streaming",
+                                "error",
+                                "interrupted",
+                            }
                             if entry.result_text and not _is_hard_abort:
                                 await self._mark_task_done(task_id, entry)
                             else:
                                 await self._mark_task_failed(task_id, entry)
                         else:
                             await self._mark_task_done(task_id, entry)
+                    # A synchronous caller may consume task.result immediately
+                    # after this waiter fires. Release it only after the terminal
+                    # task/result persistence above has completed.
+                    for waiter in list(entry.pending_waiters):
+                        waiter.set()
+                    entry.pending_waiters.clear()
         except Exception:
             logger.debug("reader loop finalization failed: task_id=%s", task_id, exc_info=True)
         finally:
@@ -1772,21 +1926,28 @@ class BaseProcessRuntime:
                 if stderr_reader is not None:
                     stderr = await asyncio.wait_for(stderr_reader.read(), timeout=1)
                     if stderr:
+                        task_context = await self._ensure_entry_task_context(entry, task_id)
                         await self._append_log(
                             workspace_id,
                             "stderr",
                             stderr.decode("utf-8", errors="replace"),
                             task_id,
+                            task_context=task_context,
                         )
             except Exception:
                 logger.debug("reader loop stderr drain failed: task_id=%s", task_id, exc_info=True)
 
-            for waiter in entry.pending_waiters:
-                waiter.set()
-            entry.pending_waiters.clear()
-
-            await self._persist_reader_metadata(workspace_id, task_id, entry)
-            await self._finalize_task_on_reader_exit(task_id, entry)
+            try:
+                await self._persist_reader_metadata(workspace_id, task_id, entry)
+            finally:
+                try:
+                    await self._finalize_task_on_reader_exit(task_id, entry)
+                finally:
+                    # EOF/error paths do not have a terminal frame. They must
+                    # finalize persisted task state before waking wait=True callers.
+                    for waiter in entry.pending_waiters:
+                        waiter.set()
+                    entry.pending_waiters.clear()
 
     async def _cleanup_entry(
         self,
@@ -1811,9 +1972,11 @@ class BaseProcessRuntime:
                         with suppress(Exception):
                             entry.proc.kill()
         except Exception:
-            logger.debug("process tree cleanup failed: workspace_id=%s", workspace_id, exc_info=True)
+            logger.debug(
+                "process tree cleanup failed: workspace_id=%s", workspace_id, exc_info=True
+            )
 
-        if hasattr(entry, 'output_task') and entry.output_task and not entry.output_task.done():
+        if hasattr(entry, "output_task") and entry.output_task and not entry.output_task.done():
             entry.output_task.cancel()
             with suppress(asyncio.CancelledError, Exception):
                 await asyncio.wait_for(asyncio.shield(entry.output_task), timeout=1)

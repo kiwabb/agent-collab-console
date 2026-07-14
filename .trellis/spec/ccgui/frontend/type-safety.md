@@ -261,6 +261,10 @@ setBudget((prev) => (prev && next.spent_usd < prev.spent_usd ? prev : next));
   in `frontend/src/lib/utils.tsx`.
 - Prototype SSE helper:
   `frontend/src/features/prototype/prototypeStreamEvents.ts`.
+- Prototype boundary readers:
+  `readPrototypePlanSnapshot(event)`,
+  `readPrototypeGenerationSnapshot(event)`, and
+  `readPrototypeStreamHeartbeat(event)`.
 - Execution-process WebSocket frame helper:
   `frontend/src/hooks/executionProcessStreamFrames.ts`.
 - Global/workspace execution-process stream frame helper:
@@ -289,6 +293,28 @@ setBudget((prev) => (prev && next.spent_usd < prev.spent_usd ? prev : next));
 - Feature-specific payload shapes that include domain types, such as
   regenerate-all `failed` prototype items, need a type guard that validates
   required fields before returning the domain type.
+- Prototype plan/run snapshots are exact nested contracts, not shallow
+  envelopes. Validate allowed keys plus every plan item, evidence record,
+  generation item, timestamp, counter, and resource identity before returning
+  a domain type. Extra or missing nested fields reject the whole snapshot.
+- Prototype evidence requires a known `kind`, known `confidence`, nullable
+  diagnostic, valid line range, bounded path/content/ID, and plan-item
+  `evidence_ids` that are unique and reference evidence in the same item.
+- Generation item lifecycle is one cross-field matrix:
+  - `pending / queued`: no error, version, start, or completion;
+  - `generating / starting|streaming|persisting`: start required, no error,
+    version, or completion;
+  - `done / completed`: positive version plus start/completion, no error;
+  - `failed / failed` and `interrupted / interrupted`: non-empty error and
+    completion, no version; start may be null;
+  - `skipped / skipped`: completion required, no error/version; start may be
+    null.
+  Every persisted item requires `last_event_at`.
+- Snapshot counters must equal counts derived from the validated items:
+  `processed = done + failed + interrupted + skipped`,
+  `succeeded = completed = done`, `failed = failed + interrupted`, and
+  `processed + running + pending = total`. Terminal runs cannot retain
+  pending/generating items.
 - Keep generated/transport constants and typed URL builders in
   `frontend/src/lib/api/<domain>.ts`; keep SSE event-shape narrowing next to
   the consuming feature unless a second feature imports it.
@@ -305,20 +331,33 @@ setBudget((prev) => (prev && next.spent_usd < prev.spent_usd ? prev : next));
   `null` / `undefined`; the handler drops the frame.
 - Unknown literal union members on feature-specific SSE frames, or malformed
   regenerate-all `failed` items -> the corresponding guard returns `null`.
+- Prototype snapshot with extra nested fields, an invalid evidence reference,
+  status/phase/timestamp contradiction, inconsistent counter, or wrong
+  plan/run/project identity -> return `null`; React state is unchanged.
+- Malformed prototype heartbeat or a heartbeat for another resource -> reject
+  it; the recovery hook surfaces the connection issue instead of marking the
+  stream healthy.
 - Terminal `all_done` malformed -> close the one-shot stream and mark progress
   done when that matches the previous lifecycle behavior.
 
 #### 5. Good/Base/Bad Cases
 
-- Good: `const data = parseSseRecord(ev); const count = data ? readSseNumber(data, "count") : null;`.
+- Good: `const next = readPrototypeGenerationSnapshot(ev); if (next?.id === runId) onSnapshot(next);`.
+- Base: `const data = parseSseRecord(ev); const count = data ? readSseNumber(data, "count") : null;`.
 - Base: feature-local helper validates a domain-specific payload before a
   component updates state.
 - Bad: `const data = JSON.parse((ev as MessageEvent).data) as { count: number };`.
+- Bad: validating only `status` and casting the nested `items` array to
+  `PrototypeGenerationRunItem[]`.
 
 #### 6. Tests Required
 
 - Add or update node tests for the payload helper, including malformed JSON,
   wrong primitive types, literal-union rejection, and aggregate summaries.
+- Prototype snapshot tests cover exact-key rejection, evidence/reference
+  integrity, every valid item lifecycle row, every cross-field contradiction,
+  derived counter equality, terminal pending-work rejection, resource
+  identity, and heartbeat parsing.
 - Add or update node tests for WebSocket frame parsers, including control
   frames, malformed message frames, deltas, heartbeats, and log/message rows.
 - Add or update node tests for global/workspace stream parsers, including
@@ -660,7 +699,7 @@ then drives exhaustive switches in the consumer.
 
 ### 1. Scope / Trigger
 
-- Trigger: changing `ProjectScriptTaskResponse`, `startProjectScriptTask`, or the Projects page Operations Engineer startup-script button.
+- Trigger: changing `ProjectScriptTaskResponse`, `startProjectScriptTask`, or the Startup Config Operations Engineer action.
 
 ### 2. Signatures
 
@@ -683,14 +722,14 @@ then drives exhaustive switches in the consumer.
 
 ### 5. Good/Base/Bad Cases
 
-- Good: Projects page receives `{ task_id, status: "running", title, reused: true }` and displays the already-running toast.
-- Base: Fresh task response has `reused: false` and emits running status separately over websocket.
+- Good: Startup Config receives `{ task_id, status: "running", title, reused: true }`, tracks the exact task, and displays already-running feedback.
+- Base: Fresh task response has `reused: false` and is polled by task id.
 - Bad: `reused?: boolean` lets tests and components forget the reused branch.
 
 ### 6. Tests Required
 
 - Source/API compatibility test: `ProjectScriptTaskResponse.reused` remains required.
-- Projects source test: both `scriptSuggestionSuccess` and `scriptSuggestionAlreadyRunning` copy paths are wired.
+- Startup Config source test: the reused and fresh-task feedback paths are both wired.
 
 ### 7. Wrong vs Correct
 
@@ -708,4 +747,111 @@ Correct:
 export interface ProjectScriptTaskResponse {
   reused: boolean;
 }
+```
+
+---
+
+## Scenario: Project Run Service and Startup Refusal Typing
+
+### 1. Scope / Trigger
+
+- Trigger: changing `ProjectRunStatus`, `ProjectRunStartReason`,
+  `startProjectRun`, or a UI that distinguishes managed processes from local
+  service reachability.
+
+### 2. Signatures
+
+- API client: `startProjectRun(projectId) -> Promise<StartProjectRunResult>`.
+- Success: `ProjectRunStatus`.
+- Refusal: `{ error: ProjectRunStartReason; pattern?; errors?; message? }`.
+- Status service field:
+  `{ state, url, http_status, checked_at, error }`.
+- Service states:
+  `reachable | unreachable | not_configured | invalid_url | unknown`.
+- Reasons:
+  `no_run_command | already_running | service_already_reachable | refused | env_incomplete`.
+
+### 3. Contracts
+
+- HTTP 200 returns `ProjectRunStatus`.
+- `ProjectRunStatus.service` is required. Its nullable fields remain present so
+  every caller handles the same response shape.
+- `running` is the managed-process flag; `service.state` is reachability
+  evidence. They must not be collapsed into one boolean.
+- HTTP 409 unwraps FastAPI's `{ detail: ... }` envelope.
+- `service_already_reachable` may include the canonical `url` and responding
+  `http_status`.
+- `env_incomplete` may include `errors: ProjectRunEnvError[]` with `name`, `reason`, and `description` plus a user-facing `message`.
+- Optional response fields are conditionally added; callers do not write explicit `undefined` under `exactOptionalPropertyTypes`.
+
+### 4. Validation & Error Matrix
+
+- `already_running` -> refresh live run status and show informational feedback.
+- `service_already_reachable` -> refresh service status and show informational
+  feedback; do not synthesize `running=true`.
+- `no_run_command` -> show the configuration recovery path.
+- `refused` -> show the safety-policy refusal and optional matched pattern.
+- `env_incomplete` -> keep the project stopped, refresh environment variables, and surface missing names.
+- `service.state=invalid_url | unknown` -> render unknown/unsupported, not
+  unreachable.
+- `service.state=not_configured` -> keep compatibility with process-only run
+  behavior.
+- Other non-200/non-409 responses -> throw through `handleResponse`.
+
+### 5. Good/Base/Bad Cases
+
+- Good: `{ running: false, service: { state: "reachable", ... } }` renders an
+  external service without granting Stop ownership.
+- Good: the Startup Config page disables start for known missing/unsaved variables and still handles a backend `env_incomplete` race.
+- Base: a ready project starts and returns its live status.
+- Base: no access URL returns a required service object with
+  `state="not_configured"` and nullable evidence fields.
+- Bad: typing every 409 as only `{ reason, pattern }`, which silently drops structured environment errors.
+- Bad: making `service` optional and scattering `status.service?.state ?? ...`
+  fallbacks through consumers.
+
+### 6. Tests Required
+
+- Type/source contract: `ProjectRunStatus.service` is required and
+  `ProjectRunStartReason` includes `env_incomplete` and
+  `service_already_reachable`.
+- Pure state test: missing or unsaved environment variables make `canStart=false`.
+- Pure state test: managed ownership and each service state produce the intended
+  presentation and action availability.
+- Component/source test: the `env_incomplete` branch refreshes variables and shows recovery feedback.
+- API test: the new 409 reason preserves canonical `url` and `http_status`.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+type ProjectRunStartReason = "no_run_command" | "already_running" | "refused";
+interface ProjectRunStatus {
+  running: boolean;
+  service?: { state: string };
+}
+```
+
+Correct:
+
+```ts
+type ProjectRunServiceState =
+  | "reachable"
+  | "unreachable"
+  | "not_configured"
+  | "invalid_url"
+  | "unknown";
+
+interface ProjectRunStatus {
+  running: boolean;
+  service: ProjectRunServiceStatus;
+}
+
+type ProjectRunStartReason =
+  | "no_run_command"
+  | "already_running"
+  | "service_already_reachable"
+  | "refused"
+  | "env_incomplete";
 ```

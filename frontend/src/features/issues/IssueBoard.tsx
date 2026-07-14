@@ -616,7 +616,10 @@ export function IssueBoard({
         </div>
       </DndContext>
 
-      <Dialog open={showImportDialog && !!onImport} onOpenChange={(open) => !open && setShowImportDialog(false)}>
+      <Dialog
+        open={showImportDialog && !!onImport}
+        onOpenChange={(open) => !open && setShowImportDialog(false)}
+      >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{t("issue.import.title")}</DialogTitle>
@@ -662,8 +665,7 @@ export function IssueBoard({
                 const format = (
                   document.querySelector('input[name="importFormat"]:checked') as HTMLInputElement
                 )?.value as "csv" | "json";
-                const data = (document.getElementById("importData") as HTMLTextAreaElement)
-                  ?.value;
+                const data = (document.getElementById("importData") as HTMLTextAreaElement)?.value;
                 if (data && format && onImport) {
                   onImport(data, format);
                   setShowImportDialog(false);

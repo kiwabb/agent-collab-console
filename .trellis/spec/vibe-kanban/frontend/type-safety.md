@@ -261,6 +261,10 @@ setBudget((prev) => (prev && next.spent_usd < prev.spent_usd ? prev : next));
   in `frontend/src/lib/utils.tsx`.
 - Prototype SSE helper:
   `frontend/src/features/prototype/prototypeStreamEvents.ts`.
+- Prototype boundary readers:
+  `readPrototypePlanSnapshot(event)`,
+  `readPrototypeGenerationSnapshot(event)`, and
+  `readPrototypeStreamHeartbeat(event)`.
 - Execution-process WebSocket frame helper:
   `frontend/src/hooks/executionProcessStreamFrames.ts`.
 - Global/workspace execution-process stream frame helper:
@@ -289,6 +293,28 @@ setBudget((prev) => (prev && next.spent_usd < prev.spent_usd ? prev : next));
 - Feature-specific payload shapes that include domain types, such as
   regenerate-all `failed` prototype items, need a type guard that validates
   required fields before returning the domain type.
+- Prototype plan/run snapshots are exact nested contracts, not shallow
+  envelopes. Validate allowed keys plus every plan item, evidence record,
+  generation item, timestamp, counter, and resource identity before returning
+  a domain type. Extra or missing nested fields reject the whole snapshot.
+- Prototype evidence requires a known `kind`, known `confidence`, nullable
+  diagnostic, valid line range, bounded path/content/ID, and plan-item
+  `evidence_ids` that are unique and reference evidence in the same item.
+- Generation item lifecycle is one cross-field matrix:
+  - `pending / queued`: no error, version, start, or completion;
+  - `generating / starting|streaming|persisting`: start required, no error,
+    version, or completion;
+  - `done / completed`: positive version plus start/completion, no error;
+  - `failed / failed` and `interrupted / interrupted`: non-empty error and
+    completion, no version; start may be null;
+  - `skipped / skipped`: completion required, no error/version; start may be
+    null.
+  Every persisted item requires `last_event_at`.
+- Snapshot counters must equal counts derived from the validated items:
+  `processed = done + failed + interrupted + skipped`,
+  `succeeded = completed = done`, `failed = failed + interrupted`, and
+  `processed + running + pending = total`. Terminal runs cannot retain
+  pending/generating items.
 - Keep generated/transport constants and typed URL builders in
   `frontend/src/lib/api/<domain>.ts`; keep SSE event-shape narrowing next to
   the consuming feature unless a second feature imports it.
@@ -305,20 +331,33 @@ setBudget((prev) => (prev && next.spent_usd < prev.spent_usd ? prev : next));
   `null` / `undefined`; the handler drops the frame.
 - Unknown literal union members on feature-specific SSE frames, or malformed
   regenerate-all `failed` items -> the corresponding guard returns `null`.
+- Prototype snapshot with extra nested fields, an invalid evidence reference,
+  status/phase/timestamp contradiction, inconsistent counter, or wrong
+  plan/run/project identity -> return `null`; React state is unchanged.
+- Malformed prototype heartbeat or a heartbeat for another resource -> reject
+  it; the recovery hook surfaces the connection issue instead of marking the
+  stream healthy.
 - Terminal `all_done` malformed -> close the one-shot stream and mark progress
   done when that matches the previous lifecycle behavior.
 
 #### 5. Good/Base/Bad Cases
 
-- Good: `const data = parseSseRecord(ev); const count = data ? readSseNumber(data, "count") : null;`.
+- Good: `const next = readPrototypeGenerationSnapshot(ev); if (next?.id === runId) onSnapshot(next);`.
+- Base: `const data = parseSseRecord(ev); const count = data ? readSseNumber(data, "count") : null;`.
 - Base: feature-local helper validates a domain-specific payload before a
   component updates state.
 - Bad: `const data = JSON.parse((ev as MessageEvent).data) as { count: number };`.
+- Bad: validating only `status` and casting the nested `items` array to
+  `PrototypeGenerationRunItem[]`.
 
 #### 6. Tests Required
 
 - Add or update node tests for the payload helper, including malformed JSON,
   wrong primitive types, literal-union rejection, and aggregate summaries.
+- Prototype snapshot tests cover exact-key rejection, evidence/reference
+  integrity, every valid item lifecycle row, every cross-field contradiction,
+  derived counter equality, terminal pending-work rejection, resource
+  identity, and heartbeat parsing.
 - Add or update node tests for WebSocket frame parsers, including control
   frames, malformed message frames, deltas, heartbeats, and log/message rows.
 - Add or update node tests for global/workspace stream parsers, including

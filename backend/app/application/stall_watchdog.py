@@ -32,6 +32,7 @@ from app.application import task_activity, timeouts  # noqa: E402
 from app.application.task_statuses import (  # noqa: E402
     is_task_active_status,
     is_task_failure_status,
+    is_task_success_status,
 )
 from app.domain.models import CodexTask  # noqa: E402
 
@@ -225,7 +226,11 @@ async def _recover_nudge_result(
         # Promote so refresh_task_result extracts + persists from the nudge EP.
         task.status = "done"
         await refresh_task_result(task)
-        recovered = bool(task.result) and not is_unusable_result_text(task.result)
+        recovered = (
+            is_task_success_status(task.status)
+            and bool(task.result)
+            and not is_unusable_result_text(task.result)
+        )
         if recovered:
             logger.info("watchdog: recovered nudge result for task %s — marked done", task_id)
             await store.save_codex_task(task)

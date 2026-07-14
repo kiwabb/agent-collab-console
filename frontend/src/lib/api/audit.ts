@@ -180,9 +180,7 @@ export async function getAuditLogChains(
   if (params.cursor) search.set("cursor", params.cursor);
   if (params.limit != null) search.set("limit", String(params.limit));
   const qs = search.toString();
-  return apiRequest<AuditLogChainPage>(
-    `${API_BASE}/codex/audit-log/chains${qs ? `?${qs}` : ""}`,
-  );
+  return apiRequest<AuditLogChainPage>(`${API_BASE}/codex/audit-log/chains${qs ? `?${qs}` : ""}`);
 }
 
 export async function getAgentTimeline(
@@ -209,9 +207,7 @@ export async function getAgentTimeline(
   if (params.cursor) search.set("cursor", params.cursor);
   if (params.limit != null) search.set("limit", String(params.limit));
   const qs = search.toString();
-  return apiRequest<AgentTimelinePage>(
-    `${API_BASE}/codex/agent-timeline${qs ? `?${qs}` : ""}`,
-  );
+  return apiRequest<AgentTimelinePage>(`${API_BASE}/codex/agent-timeline${qs ? `?${qs}` : ""}`);
 }
 
 export async function getAuditTrace(auditId: string): Promise<AuditTraceDetail> {

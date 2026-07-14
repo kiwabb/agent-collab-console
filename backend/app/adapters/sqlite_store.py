@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
+from app.adapters.structured_prototype_store import STRUCTURED_PROTOTYPE_SCHEMA_SQL
 from app.domain.models import (
     AgentCallTrace,
     AgentRun,
@@ -944,6 +945,7 @@ class SQLiteStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_call_traces_trace_id ON agent_call_traces(trace_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_call_traces_task_id ON agent_call_traces(task_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_call_traces_execution_process_id ON agent_call_traces(execution_process_id)")
+            conn.executescript(STRUCTURED_PROTOTYPE_SCHEMA_SQL)
             conn.commit()
         except sqlite3.Error as e:
             logger.error("Database initialization error: %s", e)

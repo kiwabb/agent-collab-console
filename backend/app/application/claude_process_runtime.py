@@ -17,6 +17,7 @@ from app.application.process_runtime_common import (
     RuntimeLogStore,
     is_workspace_console_task,
 )
+from app.application.task_statuses import is_task_terminal_status
 
 
 class ClaudeProcessRuntime(BaseProcessRuntime):
@@ -125,13 +126,40 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             )
 
         if wait and evt:
+            timeout_s = timeouts.process_max_timeout_s()
             try:
-                await asyncio.wait_for(evt.wait(), timeout=600)
+                await asyncio.wait_for(evt.wait(), timeout=timeout_s)
             except asyncio.TimeoutError:  # noqa: UP041
+                await self._abort_wait_timeout(
+                    process_key,
+                    entry,
+                    task_id=task_id,
+                    timeout_s=timeout_s,
+                )
                 return "timeout"
             return "done"
 
         return "responding"
+
+    async def _abort_wait_timeout(
+        self,
+        process_key: str,
+        entry: AsyncProcessEntry,
+        *,
+        task_id: str | None,
+        timeout_s: float,
+    ) -> None:
+        """Terminate and persist failure before a synchronous wait returns."""
+        self._processes.pop(process_key, None)
+        entry.had_error = True
+        entry.timeout_reason = "turn_timeout"
+        entry.result_text = f"Claude runtime exceeded maximum wait of {timeout_s:g} seconds"
+        await self._cleanup_entry(process_key, entry)
+        if task_id is None:
+            return
+        task = await self.codex_store.load_codex_task(task_id)
+        if task is not None and not is_task_terminal_status(task.status):
+            await self._mark_task_failed(task_id, entry)
 
     def _owns_entry(self, entry: AsyncProcessEntry) -> bool:
         return getattr(entry, "executor", None) == "claude"

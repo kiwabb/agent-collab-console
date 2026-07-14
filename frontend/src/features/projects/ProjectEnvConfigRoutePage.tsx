@@ -8,7 +8,7 @@ import { useI18n } from "@/providers/I18nProvider";
 import { useToast } from "@/components/ui/toast";
 import { ProjectShell } from "@/features/projects/ProjectShell";
 
-import { ProjectEnvConfigPage } from "./ProjectEnvConfigPage";
+import { ProjectStartupConfigPage } from "./ProjectStartupConfigPage";
 
 /**
  * Route-level shell for `/projects/:id/env`. Loads the project record for
@@ -38,7 +38,13 @@ export function ProjectEnvConfigRoutePage({ projectId }: { projectId: string }) 
 
   return (
     <ProjectShell projectId={projectId} project={project}>
-      <ProjectEnvConfigPage projectId={projectId} />
+      {project ? (
+        <ProjectStartupConfigPage projectId={projectId} initialProject={project} />
+      ) : (
+        <div className="flex min-h-[280px] items-center justify-center text-sm text-text-muted">
+          {t("startupConfig.loading")}
+        </div>
+      )}
     </ProjectShell>
   );
 }

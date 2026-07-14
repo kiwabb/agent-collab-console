@@ -10,8 +10,8 @@ from fastapi.responses import JSONResponse
 
 from app.application.external_prototype_agent_service import MCP_PATH
 from app.application.local_auth import (
-    authorize_external_capability_transport,
     authorize_http_request,
+    authorize_loopback_request,
     validate_local_auth_startup,
 )
 
@@ -27,6 +27,24 @@ from app.interfaces.api import router as api_router
 from app.interfaces.codex_ws import router as codex_ws_router
 from app.interfaces.external_prototype_agent_api import router as external_prototype_agent_router
 from app.interfaces.sse import router as sse_router
+from app.interfaces.structured_prototype_ai_api import (
+    configure_structured_prototype_ai,
+)
+from app.interfaces.structured_prototype_ai_api import (
+    router as structured_prototype_ai_router,
+)
+from app.interfaces.structured_prototype_api import (
+    configure_structured_prototype_service,
+)
+from app.interfaces.structured_prototype_api import (
+    router as structured_prototype_router,
+)
+from app.interfaces.structured_prototype_generation_api import (
+    configure_structured_prototype_generation,
+)
+from app.interfaces.structured_prototype_generation_api import (
+    router as structured_prototype_generation_router,
+)
 from app.interfaces.ws_events import router as ws_events_router
 
 # Capture startup time once at module load — used by /api/codex/version
@@ -61,6 +79,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from app.bootstrap import async_store
 
         if async_store is not None:
+            interrupted_plans = await async_store.interrupt_active_prototype_plans()
+            if interrupted_plans:
+                logger.info(
+                    "Marked %d interrupted prototype analysis plan(s) on boot",
+                    interrupted_plans,
+                )
+            interrupted_generation = await async_store.interrupt_active_prototype_generation_runs()
+            if interrupted_generation:
+                logger.info("Marked %d interrupted prototype generation run(s) on boot", interrupted_generation)
             recovered = 0
             for proc in await async_store.list_execution_processes():
                 if str(proc.status).lower() != "running":
@@ -111,6 +138,46 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 )
     except Exception as exc:
         logger.warning("Conductor orphan recovery failed: %s", exc)
+
+    from app.application.structured_prototype_service import StructuredPrototypeServiceError
+    from app.bootstrap import structured_prototype_service
+
+    if structured_prototype_service is not None:
+        try:
+            interrupted_publications = (
+                await structured_prototype_service.recover_interrupted_publications()
+            )
+        except StructuredPrototypeServiceError as exc:
+            logger.error(
+                "Structured prototype publication recovery failed: code=%s",
+                exc.code,
+            )
+            raise
+        if interrupted_publications:
+            logger.info(
+                "Recovered %d interrupted structured prototype publication(s)",
+                interrupted_publications,
+            )
+    from app.bootstrap import structured_prototype_ai_service
+
+    if structured_prototype_ai_service is not None:
+        interrupted_ai_runs = await structured_prototype_ai_service.recover_interrupted_runs()
+        if interrupted_ai_runs:
+            logger.info(
+                "Recovered %d interrupted structured prototype AI run(s)",
+                interrupted_ai_runs,
+            )
+    from app.bootstrap import structured_prototype_generation_service
+
+    if structured_prototype_generation_service is not None:
+        interrupted_generation_jobs = (
+            await structured_prototype_generation_service.recover_interrupted_jobs()
+        )
+        if interrupted_generation_jobs:
+            logger.info(
+                "Recovered %d interrupted structured prototype generation job(s)",
+                interrupted_generation_jobs,
+            )
     # Recover specialist parents stuck in waiting_for_specialist with terminal/missing children.
     try:
         from app.application.conductor_recovery import recover_stuck_specialist_parents
@@ -243,6 +310,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await audit_logger.shutdown()
     except Exception:
         logger.debug("audit logger shutdown failed", exc_info=True)
+    try:
+        from app.bootstrap import structured_prototype_store
+
+        if structured_prototype_store is not None:
+            await structured_prototype_store.close()
+    except Exception:
+        logger.warning("structured prototype store shutdown failed", exc_info=True)
     # Close async store connection to avoid "threads can only be started once" on restart
     try:
         from app.bootstrap import async_store
@@ -261,6 +335,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Agent Collaboration Console", lifespan=lifespan)
 
+from app.bootstrap import (
+    structured_prototype_ai_mcp_service,
+    structured_prototype_ai_service,
+    structured_prototype_generation_mcp_service,
+    structured_prototype_generation_service,
+    structured_prototype_service,
+)
+
+configure_structured_prototype_service(structured_prototype_service)
+configure_structured_prototype_ai(
+    structured_prototype_ai_service,
+    structured_prototype_ai_mcp_service,
+)
+configure_structured_prototype_generation(
+    structured_prototype_generation_service,
+    structured_prototype_generation_mcp_service,
+)
+
 # Initialize app.state.started_at as early as possible so it is available even
 # when the app is instantiated directly (e.g., in TestClient session fixtures
 # that do not explicitly enter the lifespan context).
@@ -273,7 +365,65 @@ async def enforce_local_control_boundary(
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
     if request.url.path == MCP_PATH:
-        failure = authorize_external_capability_transport(request)
+        failure = authorize_loopback_request(request)
+    elif request.url.path == "/api/internal/prototype-planning-mcp":
+        failure = authorize_loopback_request(request)
+        if failure is None:
+            from app.bootstrap import prototype_planning_mcp_service
+
+            if prototype_planning_mcp_service is not None and prototype_planning_mcp_service.has_session_token(
+                request.headers.get("X-Prototype-Planning-Token")
+            ):
+                return await call_next(request)
+        return JSONResponse(
+            status_code=failure.status_code if failure is not None else 401,
+            content={"detail": failure.reason if failure is not None else "invalid_mcp_token"},
+        )
+    elif request.url.path == "/api/internal/structured-prototype-ai-mcp":
+        failure = authorize_loopback_request(request)
+        if failure is None:
+            from app.bootstrap import structured_prototype_ai_mcp_service
+
+            if (
+                structured_prototype_ai_mcp_service is not None
+                and structured_prototype_ai_mcp_service.has_session_token(
+                    request.headers.get("X-Prototype-Ai-Token")
+                )
+            ):
+                return await call_next(request)
+        return JSONResponse(
+            status_code=failure.status_code if failure is not None else 401,
+            content={"detail": failure.reason if failure is not None else "invalid_mcp_token"},
+        )
+    elif request.url.path == "/api/internal/structured-prototype-generation-mcp":
+        failure = authorize_loopback_request(request)
+        if failure is None:
+            from app.bootstrap import structured_prototype_generation_mcp_service
+
+            if (
+                structured_prototype_generation_mcp_service is not None
+                and structured_prototype_generation_mcp_service.has_session_token(
+                    request.headers.get("X-Prototype-Generation-Token")
+                )
+            ):
+                return await call_next(request)
+        return JSONResponse(
+            status_code=failure.status_code if failure is not None else 401,
+            content={"detail": failure.reason if failure is not None else "invalid_mcp_token"},
+        )
+    elif request.url.path == "/api/internal/project-startup-mcp":
+        failure = authorize_loopback_request(request)
+        if failure is None:
+            from app.bootstrap import project_startup_mcp_service
+
+            if project_startup_mcp_service is not None and project_startup_mcp_service.has_session_token(
+                request.headers.get("X-Project-Startup-Token")
+            ):
+                return await call_next(request)
+        return JSONResponse(
+            status_code=failure.status_code if failure is not None else 401,
+            content={"detail": failure.reason if failure is not None else "invalid_mcp_token"},
+        )
     else:
         failure = authorize_http_request(request)
     if failure is not None:
@@ -302,3 +452,6 @@ app.include_router(codex_ws_router, prefix="/api")  # Add prefix here
 app.include_router(ws_events_router, prefix="/api")
 app.include_router(sse_router)
 app.include_router(external_prototype_agent_router)
+app.include_router(structured_prototype_router)
+app.include_router(structured_prototype_ai_router)
+app.include_router(structured_prototype_generation_router)

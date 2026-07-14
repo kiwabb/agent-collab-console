@@ -29,6 +29,15 @@ from app.application.github_pr_followup import (
     sweep_project_github_prs,
 )
 from app.application.llm_runner import llm_api_url
+from app.application.local_service_probe import (
+    LocalServiceStatus,
+    ProjectRunStatusPayload,
+    add_service_status,
+    probe_local_service,
+    resolve_project_access_url,
+    unknown_local_service_status,
+)
+from app.application.mcp_registry import McpManagementService
 from app.application.process_runtime_common import is_agent_message_item_type
 from app.application.product_manager_service import (
     ProductManagerArtifactError,
@@ -75,8 +84,11 @@ from app.bootstrap import (
     get_codex_process_manager,
     get_help_orchestrator,
     git_service,
+    mcp_registry,
     orchestration_service,
     project_service,
+    project_startup_config_service,
+    project_startup_mcp_service,
     session_service,
     worktree_manager,
 )
@@ -101,6 +113,7 @@ from app.domain.models import (
     Project,
     ProjectConductorState,
     ProjectEnvVar,
+    ProjectStartupService,
     RuntimeCatalog,
     RuntimeExecutorConfig,
     SelfImprovementApplicationEvent,
@@ -135,6 +148,8 @@ logger = logging.getLogger(__name__)
 
 
 class CodexApiStore(Protocol):
+    async def append_log_event(self, event: LogEvent) -> None: ...
+
     async def list_audit_logs(
         self,
         *,
@@ -242,6 +257,9 @@ class CodexApiStore(Protocol):
     async def load_project_env_var(
         self, project_id: str, name: str
     ) -> "ProjectEnvVar | None": ...
+    async def list_project_startup_services(
+        self, project_id: str
+    ) -> list[ProjectStartupService]: ...
     async def save_project_env_var(
         self,
         project_id: str,
@@ -2655,7 +2673,10 @@ async def _delete_task_cascade(task_id: str, *, delete_workspace: bool = True) -
 
 task_runner: CodexTaskRunner | None = None
 product_manager_service = ProductManagerService()
-role_workflow_service = RoleWorkflowService(codex_store=cast(RoleWorkflowStore | None, codex_store))
+role_workflow_service = RoleWorkflowService(
+    codex_store=cast(RoleWorkflowStore | None, codex_store),
+    project_startup_mcp_service=project_startup_mcp_service,
+)
 
 
 def _get_task_runner() -> CodexTaskRunner:
@@ -3285,14 +3306,211 @@ async def _reconcile_project_env_file(project: Project, store: CodexApiStore) ->
     )
 
 
-@router.post("/projects/{project_id}/run/start")
-async def start_project_run(project_id: str) -> object:
+async def _project_service_status(
+    project: Project,
+    store: CodexApiStore | None,
+) -> LocalServiceStatus:
+    if store is None:
+        return unknown_local_service_status("store_unavailable")
+    access_url = await resolve_project_access_url(
+        store,
+        project.id,
+        project.run_command,
+    )
+    return await probe_local_service(access_url)
+
+
+async def _project_run_status_payload(
+    project: Project,
+    store: CodexApiStore | None,
+) -> ProjectRunStatusPayload:
+    service = await _project_service_status(project, store)
+    return add_service_status(project_run_manager.status(project.id), service)
+
+
+async def _load_startup_service(project_id: str, service_id: str) -> tuple[Project, ProjectStartupService]:
     project = await _load_project_for_run(project_id)
     store = _require_codex_store()
+    services = await store.list_project_startup_services(project_id)
+    for service in services:
+        if service.service_id == service_id:
+            return project, service
+    raise HTTPException(status_code=404, detail="startup_service_not_found")
+
+
+async def _startup_service_status(
+    project: Project, service: ProjectStartupService
+) -> ProjectRunStatusPayload:
+    local_service = await probe_local_service(service.access_url)
+    return add_service_status(
+        project_run_manager.status(project.id, service_id=service.service_id),
+        local_service,
+    )
+
+
+def _startup_service_order(services: list[ProjectStartupService]) -> list[ProjectStartupService]:
+    by_id = {service.service_id: service for service in services}
+    ordered: list[ProjectStartupService] = []
+    visited: set[str] = set()
+
+    def visit(service: ProjectStartupService) -> None:
+        if service.service_id in visited:
+            return
+        for dependency_id in service.depends_on:
+            dependency = by_id.get(dependency_id)
+            if dependency is None:
+                raise HTTPException(status_code=409, detail="startup_dependency_missing")
+            visit(dependency)
+        visited.add(service.service_id)
+        ordered.append(service)
+
+    for service in services:
+        visit(service)
+    return ordered
+
+
+@router.get("/projects/{project_id}/startup-config")
+async def get_project_startup_config(project_id: str) -> object:
+    project = await _load_project_for_run(project_id)
+    if project_startup_config_service is None:
+        raise HTTPException(status_code=503, detail="project_startup_config_unavailable")
+    return await project_startup_config_service.get_config(project)
+
+
+@router.get("/projects/{project_id}/services/{service_id}/run/status")
+async def get_project_service_run_status(project_id: str, service_id: str) -> object:
+    project, service = await _load_startup_service(project_id, service_id)
+    return await _startup_service_status(project, service)
+
+
+@router.get("/projects/{project_id}/services/{service_id}/run/logs")
+async def get_project_service_run_logs(
+    project_id: str, service_id: str, after: int = 0
+) -> object:
+    project, service = await _load_startup_service(project_id, service_id)
+    return project_run_manager.get_logs(
+        project.id, after=after, service_id=service.service_id
+    )
+
+
+@router.post("/projects/{project_id}/services/{service_id}/run/start")
+async def start_project_service_run(project_id: str, service_id: str) -> object:
+    project, service = await _load_startup_service(project_id, service_id)
+    store = _require_codex_store()
+    await _reconcile_project_env_file(project, store)
+    local_service = await probe_local_service(service.access_url)
+    current = project_run_manager.status(project.id, service_id=service.service_id)
+    if local_service["state"] == "reachable" and not current["running"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "service_already_reachable",
+                "url": local_service["url"],
+                "http_status": local_service["http_status"],
+            },
+        )
+    try:
+        started = await project_run_manager.start(
+            project.id,
+            service.run_command,
+            str((Path(project.repo_path) / service.working_directory).resolve()),
+            service_id=service.service_id,
+        )
+    except ProjectRunError as exc:
+        detail: dict[str, object] = {"reason": exc.reason}
+        if exc.pattern:
+            detail["pattern"] = exc.pattern
+        raise HTTPException(status_code=409, detail=detail) from exc
+    return add_service_status(started, await probe_local_service(service.access_url))
+
+
+@router.post("/projects/{project_id}/services/{service_id}/run/stop")
+async def stop_project_service_run(project_id: str, service_id: str) -> object:
+    project, service = await _load_startup_service(project_id, service_id)
+    stopped = await project_run_manager.stop(project.id, service_id=service.service_id)
+    return add_service_status(stopped, await probe_local_service(service.access_url))
+
+
+@router.post("/projects/{project_id}/run/start-all")
+async def start_all_project_services(project_id: str) -> object:
+    project = await _load_project_for_run(project_id)
+    store = _require_codex_store()
+    services = _startup_service_order(await store.list_project_startup_services(project_id))
+    if not services:
+        raise HTTPException(status_code=409, detail={"reason": "no_run_command"})
+    await _reconcile_project_env_file(project, store)
+    for service in services:
+        local_service = await probe_local_service(service.access_url)
+        managed = project_run_manager.status(project.id, service_id=service.service_id)
+        if local_service["state"] == "reachable" and not managed["running"]:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason": "service_already_reachable",
+                    "service_id": service.service_id,
+                    "url": local_service["url"],
+                    "http_status": local_service["http_status"],
+                },
+            )
+    results: list[dict[str, object]] = []
+    for service in services:
+        try:
+            status = await project_run_manager.start(
+                project.id,
+                service.run_command,
+                str((Path(project.repo_path) / service.working_directory).resolve()),
+                service_id=service.service_id,
+            )
+        except ProjectRunError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason": exc.reason,
+                    "service_id": service.service_id,
+                    "started": results,
+                    **({"pattern": exc.pattern} if exc.pattern else {}),
+                },
+            ) from exc
+        results.append({"service_id": service.service_id, "status": status})
+    return {"services": results}
+
+
+@router.post("/projects/{project_id}/run/stop-all")
+async def stop_all_project_services(project_id: str) -> object:
+    project = await _load_project_for_run(project_id)
+    services = _startup_service_order(
+        await _require_codex_store().list_project_startup_services(project_id)
+    )
+    results: list[dict[str, object]] = []
+    for service in reversed(services):
+        status = await project_run_manager.stop(project.id, service_id=service.service_id)
+        results.append({"service_id": service.service_id, "status": status})
+    return {"services": results}
+
+
+@router.post("/projects/{project_id}/run/start")
+async def start_project_run(project_id: str) -> ProjectRunStatusPayload:
+    project = await _load_project_for_run(project_id)
+    store = _require_codex_store()
+    service = await _project_service_status(project, store)
+    if service["state"] == "reachable" and not project_run_manager.status(project.id)["running"]:
+        await store.append_project_audit(
+            project_id=project.id,
+            issue_id=None,
+            event="run_refused:service_already_reachable",
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "service_already_reachable",
+                "url": service["url"],
+                "http_status": service["http_status"],
+            },
+        )
     await _reconcile_project_env_file(project, store)
 
     try:
-        return await project_run_manager.start(
+        started = await project_run_manager.start(
             project.id,
             project.run_command or "",
             project.repo_path,
@@ -3308,18 +3526,23 @@ async def start_project_run(project_id: str) -> object:
         if exc.pattern:
             detail["pattern"] = exc.pattern
         raise HTTPException(status_code=409, detail=detail) from exc
+    return add_service_status(
+        started,
+        await _project_service_status(project, store),
+    )
 
 
 @router.post("/projects/{project_id}/run/stop")
-async def stop_project_run(project_id: str) -> object:
-    await _load_project_for_run(project_id)
-    return await project_run_manager.stop(project_id)
+async def stop_project_run(project_id: str) -> ProjectRunStatusPayload:
+    project = await _load_project_for_run(project_id)
+    stopped = await project_run_manager.stop(project_id)
+    return add_service_status(stopped, await _project_service_status(project, codex_store))
 
 
 @router.get("/projects/{project_id}/run/status")
-async def get_project_run_status(project_id: str) -> object:
-    await _load_project_for_run(project_id)
-    return project_run_manager.status(project_id)
+async def get_project_run_status(project_id: str) -> ProjectRunStatusPayload:
+    project = await _load_project_for_run(project_id)
+    return await _project_run_status_payload(project, codex_store)
 
 
 @router.get("/projects/{project_id}/run/logs")
@@ -3920,6 +4143,12 @@ async def start_project_script_task(project_id: str, request: ScriptTaskRequest)
                 existing_task.last_execution_process_id or reused_execution_process_id
             )
         active_process = await _active_execution_process_known(row_id, reused_execution_process_id)
+        if (
+            active_process is not False
+            and project_startup_mcp_service is not None
+            and not project_startup_mcp_service.has_task_session(row_id)
+        ):
+            active_process = False
         if active_process is False:
             if existing_task is not None:
                 await _mark_stale_script_task_failed(existing_task, reused_execution_process_id)
@@ -3982,12 +4211,10 @@ async def start_project_script_task(project_id: str, request: ScriptTaskRequest)
         )
 
     resolved_executor, resolved_provider, resolved_model, _, _ = await _resolve_runtime_config(
-        request.executor or "codex",
+        "claude",
         request.provider,
         request.model,
     )
-    from app.domain.models import CodexTask
-
     task_id = str(uuid4())
     workspace_id = await _ensure_project_script_workspace()
     existing_setup_script = (
@@ -4045,8 +4272,25 @@ async def start_project_script_task(project_id: str, request: ScriptTaskRequest)
             "task_kind": "project_script_suggestion",
         }
     )
+    mcp_session = None
+    command_args_override: list[str] | None = None
+    if project_startup_mcp_service is None:
+        task.status = "failed"
+        task.result = "project startup MCP is unavailable"
+        task.updated_at = datetime.now()
+        await store.save_codex_task(task)
+        raise HTTPException(status_code=503, detail=task.result)
+    mcp_session = project_startup_mcp_service.open_session(project=project, task_id=task.id)
+    command_args_override = [
+        "--mcp-config",
+        mcp_session.claude_config(timeouts.project_startup_mcp_endpoint()),
+        "--strict-mcp-config",
+    ]
     try:
-        exec_process = await _get_task_runner().start_task_run(task)
+        exec_process = await _get_task_runner().start_task_run(
+            task,
+            command_args_override=command_args_override,
+        )
         task.status = "running"
         task.last_execution_process_id = exec_process.id
         task.updated_at = datetime.now()
@@ -4066,6 +4310,7 @@ async def start_project_script_task(project_id: str, request: ScriptTaskRequest)
             reused=False,
         )
     except ValueError as exc:
+        project_startup_mcp_service.close_task_session(task.id)
         task.status = "failed"
         task.result = str(exc)
         task.updated_at = datetime.now()
@@ -4075,6 +4320,7 @@ async def start_project_script_task(project_id: str, request: ScriptTaskRequest)
         )
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
+        project_startup_mcp_service.close_task_session(task.id)
         task.status = "failed"
         task.result = str(exc)
         task.updated_at = datetime.now()
@@ -6226,6 +6472,14 @@ async def get_execution_process_logs(process_id: str) -> object:
 
 
 # --- Runtime Catalog APIs ---
+
+
+@router.get("/mcp/catalog")
+async def get_mcp_catalog() -> object:
+    """Return the framework-owned MCP inventory and recent invocation summaries."""
+    service = McpManagementService(mcp_registry, _require_codex_store())
+    return await service.catalog()
+
 
 def _get_runtime_catalog_service() -> RuntimeCatalogService:
     """Get or create the runtime catalog service."""

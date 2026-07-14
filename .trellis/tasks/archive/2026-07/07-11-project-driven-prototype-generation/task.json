@@ -1,0 +1,32 @@
+{
+  "id": "project-driven-prototype-generation",
+  "name": "project-driven-prototype-generation",
+  "title": "重构项目驱动的批量原型生成",
+  "description": "以静态项目证据和可审阅计划替代旧 code-scan，为 VideoNote 主应用批量生成可追踪的 restore 原型基线。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": "ccgui",
+  "priority": "P2",
+  "creator": "jackmouse",
+  "assignee": "jackmouse",
+  "createdAt": "2026-07-11",
+  "completedAt": "2026-07-11",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-11-prototype-evidence-foundation",
+    "07-11-prototype-planning-backend",
+    "07-11-prototype-plan-review-ui",
+    "07-11-prototype-generation-runner",
+    "07-11-prototype-integration-hardening"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

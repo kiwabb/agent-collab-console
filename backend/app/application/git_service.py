@@ -152,9 +152,7 @@ class GitService:
         """
         from app.application import audit
 
-        audit.record_git_command(
-            args, cwd, exit_code, stdout, stderr, started, error=error
-        )
+        audit.record_git_command(args, cwd, exit_code, stdout, stderr, started, error=error)
 
     # --- Repo validation ---
 
@@ -706,6 +704,67 @@ class GitService:
         _validate_path(worktree_path)
         result = await self._run(["rev-parse", "HEAD"], cwd=worktree_path)
         return result.stdout.strip()
+
+    async def working_tree_snapshot_revision(self, repo_path: str | Path) -> str:
+        """Create a detached revision for the current tracked working tree.
+
+        ``git stash create`` writes a commit object without updating refs, the
+        index, or the working tree. It therefore gives an isolated worktree the
+        exact staged + unstaged tracked source visible to evidence scanning
+        without stashing or committing the user's changes.
+        """
+        _validate_path(repo_path)
+        result = await self._run(
+            ["stash", "create", "prototype generation source snapshot"],
+            cwd=repo_path,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise GitError(
+                "could not snapshot project working tree: "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        revision = result.stdout.strip()
+        return revision or await self.head_commit(repo_path)
+
+    async def repository_prefix(self, repo_path: str | Path) -> str:
+        """Return the project path relative to the containing Git worktree root."""
+        _validate_path(repo_path)
+        result = await self._run(["rev-parse", "--show-prefix"], cwd=repo_path)
+        prefix = result.stdout.strip().rstrip("/")
+        relative = Path(prefix)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise GitError("git returned an unsafe repository prefix")
+        return relative.as_posix() if prefix else ""
+
+    async def initialize_snapshot_repository(self, repo_path: str | Path) -> str:
+        """Create a standalone baseline repository for an isolated nested project."""
+        _validate_path(repo_path)
+        await self._run(["init", "-b", "prototype-snapshot"], cwd=repo_path)
+        await self._run(["add", "--all", "--", "."], cwd=repo_path)
+        await self._run(
+            [
+                "-c",
+                "user.name=Agent Collab",
+                "-c",
+                "user.email=agent-collab@localhost",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "prototype source snapshot",
+            ],
+            cwd=repo_path,
+        )
+        return await self.head_commit(repo_path)
+
+    async def list_untracked_files(self, repo_path: str | Path) -> list[str]:
+        """List non-ignored untracked files using NUL-delimited git output."""
+        _validate_path(repo_path)
+        result = await self._run(
+            ["ls-files", "--others", "--exclude-standard", "-z", "--", "."],
+            cwd=repo_path,
+        )
+        return [path for path in result.stdout.split("\0") if path]
 
     async def status_porcelain(self, worktree_path: str | Path) -> str:
         """Return `git status --porcelain` output (empty string == clean tree)."""

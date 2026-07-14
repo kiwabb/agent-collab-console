@@ -145,6 +145,41 @@ The supported deployment boundary is one trusted user, one machine, loopback net
 
 Project launch commands are parsed into an allowlisted executable argv plus a repository-scoped cwd. Shell pipelines, redirects, command substitution, interpreter inline code, and cwd escape are rejected before process creation. Child processes receive a minimal environment; console/model/cloud/database credentials are not inherited.
 
+## Project-Driven Prototype Generation
+
+The prototype workspace can analyze a project before generating HTML. Analysis and generation are separate actions: opening or editing a plan never starts paid HTML generation. The first generated version is always a restore baseline; design optimization remains an explicit later iteration so the baseline is preserved in version history.
+
+Supported deterministic discovery:
+
+| Surface | Support |
+| --- | --- |
+| Next.js App Router / Pages Router | Supported |
+| Vite/React with React Router JSX routes | Supported |
+| React page directories without routes | Partial, low confidence |
+| Browser extensions, Vue, and unknown frameworks | Reported as unsupported; not silently ignored |
+
+Static evidence includes bounded route, page, layout, navigation, style, design-token, and UI-text source. Runtime DOM, screenshots, authentication, and dynamic route fixture generation are not collected automatically.
+
+Page generation uses the built-in `prototype_ui_engineer` role. It runs through the existing Claude Code executor and inherits the active endpoint, credential, and model from Runtime Catalog, including a MiniMax-backed Claude configuration. Each page gets an ephemeral full-project worktree. The task prompt contains only the page title, current target routes, locale, and artifact protocol; Claude locates router entries and follows component, layout, navigation, style, token, and asset imports itself. Scanned source paths, hashes, evidence, project context, restore briefs, and other project routes stay server-side as integrity guards and are never injected into the generation prompt.
+
+The engineer may write only `.agent-collab/prototype-staging/<run-item-id>/index.html`. Its final response is a small checksum manifest rather than the HTML itself, so complete pages are not constrained by one assistant-message token ceiling. The artifact is accepted only after path, symlink, UTF-8, size, complete-document, external-URL, checksum, and source-edit validation. An accepted version is written before database completion to `<project>/prototypes/<prototype-id>/<version-id>/index.html`; preview reads that project file and treats a missing, escaped, or mismatched file as an explicit integrity failure.
+
+Analysis and generation snapshots are persisted and streamed as strict versioned contracts. The review page reconnects through SSE and falls back to bounded REST polling when the stream is unavailable. Generation progress uses `processed / total`; processed includes successful, failed, interrupted, and skipped items. A terminal run with 8 successful and 5 failed pages therefore displays `13/13`, while success and failure remain separate counters.
+
+Operational limits and rollback:
+
+- `PROTOTYPE_GENERATION_ENABLED=false` hides the project-generation entry and rejects new analysis/generation with `503`. Existing plans, prototypes, versions, manual creation, iteration, preview, and regenerate-all remain readable and usable.
+- Candidate count, estimated cost, and shared generation concurrency are fail-closed gates. An unavailable or rejected gate does not start model work.
+- Plans and generation runs are persisted. Backend restart marks in-flight analysis/generation interrupted so the UI can reanalyze or retry.
+- Project-driven generation never falls back to a model request that cannot read the repository. If the Claude UI engineer is unavailable, the request fails before a run or prototype is frozen. Manual one-off HTML streaming remains a separate capability.
+
+Manual real-model acceptance is intentionally explicit:
+
+1. Configure and enable the Claude executor in Runtime Catalog. Select the intended MiniMax provider/model there, then open a trusted test project.
+2. Create a zero-input plan and confirm the candidate list/evidence before generating.
+3. Generate a small selected subset first; verify task/process correlation, staging cleanup, the restore baseline, progress reconnect, version history, and failure retry.
+4. Trigger a full paid batch only after reviewing the estimated count and budget. Automated tests use fake runtimes and never perform this step.
+
 ## Important Environment Variables
 
 | Variable | Default | Purpose |
@@ -161,6 +196,15 @@ Project launch commands are parsed into an allowlisted executable argv plus a re
 | `QA_EXECUTE_COMMANDS` | follows `REAL_CLI` | Enables narrow argv-based QA checks; disabled/no evidence stays `unverified` |
 | `BACKEND_API_BASE` | `http://127.0.0.1:9000` | Next.js server-side rewrite target; compose uses `http://backend:9000` |
 | `NEXT_PUBLIC_WS_BASE` | derived from the browser host | Optional explicit WebSocket base override |
+| `PROTOTYPE_GENERATION_ENABLED` | `true` | Enables project analysis and batch prototype generation; set `false` for rollback |
+| `PROTOTYPE_PLANNING_TIMEOUT_S` | `120` | Timeout for repository-scale prototype planning; independent from the shorter workflow Auto-plan timeout |
+| `PROTOTYPE_PLANNING_MAX_TOKENS` | `16384` | Independent planning response ceiling; max-token batches are recursively split before the plan is accepted |
+| `PROTOTYPE_GENERATION_MAX_CANDIDATES` | `100` | Maximum selected pages allowed in one generation run |
+| `PROTOTYPE_GENERATION_ESTIMATED_USD_PER_PAGE` | `0.25` | Conservative estimated cost used by the generation budget gate |
+| `PROTOTYPE_GENERATION_MAX_ESTIMATED_USD` | `25` | Maximum estimated cost allowed for one run |
+| `PROTOTYPE_GENERATION_GLOBAL_CONCURRENCY` | `2` | Shared model-generation concurrency across all prototype runs |
+| `PROTOTYPE_GENERATION_MAX_TOKENS` | `16384` | Independent token ceiling for manual HTML streaming; project-driven generation always uses the Claude UI engineer artifact workflow |
+| `PROTOTYPE_ARTIFACT_MAX_BYTES` | `1000000` | Maximum accepted size for one staged HTML artifact |
 
 ## Troubleshooting
 

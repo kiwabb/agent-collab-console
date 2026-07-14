@@ -85,6 +85,121 @@ After implementation:
 
 ---
 
+## Structured Model Output and Durable Live Workflows
+
+Model streams and recoverable background work add two boundaries that ordinary
+request/response checks do not cover: **proof of completion** and **durable
+reconciliation**.
+
+### Checklist: Before Repairing Model Output
+
+- [ ] Decide what proves completion: an explicit provider terminal event, a
+  complete single JSON envelope, or a validated staged artifact
+- [ ] Keep large artifacts in files/object storage; keep final model text to a
+  small typed manifest whenever the artifact can exceed one response budget
+- [ ] Distinguish incomplete output from repairable syntax drift before calling
+  a tolerant parser; repair must never invent missing terminal structure
+- [ ] Run the strict domain schema, reference-integrity checks, and locale/content
+  rules after any boundary repair
+- [ ] Treat EOF without the required terminal event as failure, even when the
+  accumulated text looks complete
+- [ ] Test token-limit truncation, open strings/containers, prose/fences,
+  concatenated objects, and provider-specific valid repair cases separately
+
+### Checklist: Before Exposing Recursive Schemas as Agent Tools
+
+- [ ] Run the exact schema through the configured Claude executor and provider;
+  a local JSON Schema or Pydantic unit test does not prove the tool adapter
+  preserves recursive arrays, discriminated unions, or referenced definitions
+- [ ] Inspect the persisted wire input when a model repeats validation errors;
+  distinguish model-authored invalid data from provider/tool-schema coercion
+- [ ] If the adapter cannot preserve a recursive object, transport one complete
+  JSON serialization in a bounded string and parse it once at the MCP boundary
+- [ ] Hash the original tool arguments, retain the raw trajectory, and store the
+  parsed canonical object separately so repair remains observable and replayable
+- [ ] Normalize only allowlisted, lossless boundary drift and record exact field
+  paths; refuse wrappers that discard elements, add fields, or require synthesis
+- [ ] Add a real provider smoke test for context lookup, finalization, terminal
+  process evidence, strict validation, and canonical object-store persistence
+
+**Real-world example**: A recursive structured-prototype page schema passed
+Pydantic and MCP descriptor tests, but one configured Claude provider encoded
+`children` first as `{"item": [...]}` and later as `{"item": ["", ""]}`.
+Unwrapping the first shape could be lossless; the second had already destroyed
+node content and had to fail. Moving only page finalization to a bounded
+`payloadJson` string prevented the tool adapter from interpreting the recursive
+union, while the backend still parsed strict JSON and applied the same schema.
+
+### Checklist: Before Adding Live Recovery
+
+- [ ] Persist the complete user-visible snapshot and lifecycle counters; React
+  state is a cache, not the workflow owner
+- [ ] Put stable resource identity and contract version on snapshots and
+  heartbeats, then reject cross-resource frames before state mutation
+- [ ] Define one status/phase/counter matrix and validate it at the frontend
+  transport boundary instead of reinterpreting status in each component
+- [ ] Detect silence as well as socket errors; an open buffered SSE connection
+  is not evidence of freshness
+- [ ] Bound polling by attempts and elapsed time, reset the budget only after a
+  valid heartbeat/snapshot or explicit user retry, and expose exhaustion
+- [ ] Preserve the last valid snapshot and unsaved draft on transport failures
+- [ ] Test partial terminal runs where failures count as processed, refresh,
+  disconnect, silence, resource mismatch, polling failure, and exhaustion
+
+### Checklist: Before Shipping a Persistence Change
+
+- [ ] Separate SQL defaults from semantic defaults; non-null does not mean valid
+- [ ] Backfill new required values from durable historical data in the same
+  versioned migration
+- [ ] Fail startup when a retryable/governed legacy row cannot be reconstructed;
+  do not silently invent evidence, seeds, ownership, or budget state
+- [ ] Move shared-state idempotence into the store transaction; service-local
+  locks are only an optimization and do not protect multiple instances
+- [ ] Test an old schema with meaningful rows, not only an empty database
+
+**Real-world example**: Project-driven prototype generation initially returned
+HTML and planning JSON through model text, used a service-local lock, and let
+the UI derive progress. Token truncation, tolerant repair, a second SQLite
+connection, legacy empty defaults, and buffered SSE exposed different symptoms
+of the same missing completion/durability contracts. The stable design stages
+HTML as an artifact, proves one complete planning envelope before repair,
+freezes generation in SQLite, migrates semantic values, and reconciles typed
+persisted snapshots through heartbeat plus bounded polling.
+
+## Repository-Backed Agent Autonomy
+
+Before building a prompt for an agent that already has an isolated repository
+worktree:
+
+- [ ] Pass the task identity, target resources, output contract, and safety
+      boundary; let the agent search and follow the real dependency graph.
+- [ ] Keep static scans, source paths, hashes, evidence, and large project
+      context on the server as integrity guards or query tools instead of
+      serializing them into the prompt.
+- [ ] Make the prompt builder accept explicit agent-facing fields rather than a
+      whole internal request object, so guard data cannot leak back in later.
+- [ ] Fail closed when the repository-capable runtime is unavailable; do not
+      fall back to a model path that cannot inspect the repository.
+- [ ] Add negative prompt assertions for source paths, hashes, frozen briefs,
+      unrelated routes, and arbitrary inspection-call limits.
+- [ ] Capture the actual runtime wire input, not only the stored task prompt;
+      managed prompt builders, project memory, team notes, and transport framing
+      can otherwise inject context after the prompt unit test passes.
+- [ ] Validate the final file and source tree, never the agent's Write/Edit/Bash
+      sequence. Tool logs are an implementation trace, not artifact evidence.
+- [ ] Persist the complete Agent trajectory: raw stream frames, thinking, tool
+      inputs/outputs, commands, assistant messages, results/HTML, status, and
+      audit traces. Preserve raw frames even when task identity is unresolved.
+- [ ] Keep observability and artifact authority separate. Logs may contain the
+      complete HTML but must never be replayed, reconstructed, or accepted as
+      evidence that the staged artifact succeeded.
+
+The executable prototype contract is in
+`.trellis/spec/vibe-kanban/backend/database-guidelines.md`, under
+"Project-Evidence Prototype Plans and Generation Runs".
+
+---
+
 ## Cross-Platform Template Consistency
 
 In Trellis, command templates (e.g., `record-session.md`) exist in **multiple platforms** with identical or near-identical content. This is a cross-layer boundary.
