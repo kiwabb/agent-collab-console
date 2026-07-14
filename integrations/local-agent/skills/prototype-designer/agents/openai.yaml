@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prototype Designer"
+  short_description: "Design structured prototypes through a reviewed MCP workflow"
+  default_prompt: "Use $prototype-designer to inspect this prototype and propose a reviewable design change."

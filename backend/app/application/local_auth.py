@@ -162,6 +162,17 @@ def authorize_http_request(connection: HTTPConnection) -> LocalAuthFailure | Non
     return None
 
 
+def authorize_external_capability_transport(
+    connection: HTTPConnection,
+) -> LocalAuthFailure | None:
+    """Validate the local transport; the endpoint validates its own bearer capability."""
+    try:
+        config = load_local_auth_config()
+    except LocalAuthConfigError:
+        return LocalAuthFailure(status_code=503, reason="local_auth_unavailable")
+    return _boundary_failure(connection, config, require_origin=False)
+
+
 def authorize_websocket(connection: HTTPConnection) -> LocalAuthFailure | None:
     try:
         config = load_local_auth_config()

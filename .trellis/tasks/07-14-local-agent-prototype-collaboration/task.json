@@ -1,0 +1,33 @@
+{
+  "id": "local-agent-prototype-collaboration",
+  "name": "local-agent-prototype-collaboration",
+  "title": "brainstorm: local agent prototype collaboration via Skill and MCP",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": "ccgui",
+  "priority": "P2",
+  "creator": "jackmouse",
+  "assignee": "jackmouse",
+  "createdAt": "2026-07-14",
+  "completedAt": null,
+  "branch": "codex/external-prototype-agent",
+  "base_branch": "main",
+  "worktree_path": "/Users/zhoujiaangyao/zhoujiangyao/AI/jackmouse-ai/agent-collab-console/.worktrees/external-prototype-agent",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "backend/app/application/external_prototype_agent_contracts.py",
+    "backend/app/application/external_prototype_agent_service.py",
+    "backend/app/application/external_prototype_agent_mcp.py",
+    "backend/app/adapters/external_prototype_agent_store.py",
+    "backend/app/interfaces/external_prototype_agent_api.py",
+    "integrations/local-agent/skills/prototype-designer/SKILL.md"
+  ],
+  "notes": "External boundary and Skill package are implemented and verified in the isolated worktree. Keep status in_progress until the in-flight structured prototype core replaces UnavailableStructuredPrototypeCollaborationPort and the branch is reconciled.",
+  "meta": {}
+}

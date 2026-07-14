@@ -1,0 +1,20 @@
+{
+  "manifestVersion": 1,
+  "agentKind": "claude_code",
+  "skill": {
+    "source": "integrations/local-agent/skills/prototype-designer",
+    "target": "~/.claude/skills/prototype-designer",
+    "version": "1.0.0"
+  },
+  "mcp": {
+    "serverId": "prototype-collaboration",
+    "transport": "streamable_http",
+    "scope": "local",
+    "urlPlaceholder": "${PROTOTYPE_MCP_URL}",
+    "authorizationHeaderTemplate": "Bearer ${PROTOTYPE_AGENT_TOKEN}"
+  },
+  "authority": {
+    "allowed": ["prototype:read", "prototype:propose"],
+    "forbidden": ["prototype:apply", "prototype:publish"]
+  }
+}

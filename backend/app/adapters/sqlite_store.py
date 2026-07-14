@@ -2275,7 +2275,7 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
-    def load_audit_log(self, audit_log_id: str) -> "AuditLog" | None:
+    def load_audit_log(self, audit_log_id: str) -> "AuditLog | None":
         from app.domain.models import AuditLog
 
         self._ensure_db()

@@ -8,7 +8,12 @@ from datetime import UTC, datetime
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
-from app.application.local_auth import authorize_http_request, validate_local_auth_startup
+from app.application.external_prototype_agent_service import MCP_PATH
+from app.application.local_auth import (
+    authorize_external_capability_transport,
+    authorize_http_request,
+    validate_local_auth_startup,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 from app.interfaces.api import router as api_router
 from app.interfaces.codex_ws import router as codex_ws_router
+from app.interfaces.external_prototype_agent_api import router as external_prototype_agent_router
 from app.interfaces.sse import router as sse_router
 from app.interfaces.ws_events import router as ws_events_router
 
@@ -244,6 +250,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await async_store.close()
     except Exception:
         logger.debug("async store shutdown failed", exc_info=True)
+    try:
+        from app.bootstrap import external_prototype_agent_store
+
+        if external_prototype_agent_store is not None:
+            await external_prototype_agent_store.close()
+    except Exception:
+        logger.debug("external prototype Agent store shutdown failed", exc_info=True)
 
 
 app = FastAPI(title="Agent Collaboration Console", lifespan=lifespan)
@@ -259,7 +272,10 @@ async def enforce_local_control_boundary(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
-    failure = authorize_http_request(request)
+    if request.url.path == MCP_PATH:
+        failure = authorize_external_capability_transport(request)
+    else:
+        failure = authorize_http_request(request)
     if failure is not None:
         return JSONResponse(
             status_code=failure.status_code,
@@ -285,3 +301,4 @@ app.include_router(api_router)
 app.include_router(codex_ws_router, prefix="/api")  # Add prefix here
 app.include_router(ws_events_router, prefix="/api")
 app.include_router(sse_router)
+app.include_router(external_prototype_agent_router)

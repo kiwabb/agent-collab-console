@@ -1,0 +1,19 @@
+{
+  "manifestVersion": 1,
+  "agentKind": "codex",
+  "skill": {
+    "source": "integrations/local-agent/skills/prototype-designer",
+    "target": "${CODEX_HOME:-$HOME/.codex}/skills/prototype-designer",
+    "version": "1.0.0"
+  },
+  "mcp": {
+    "serverId": "prototype-collaboration",
+    "transport": "streamable_http",
+    "urlPlaceholder": "${PROTOTYPE_MCP_URL}",
+    "bearerTokenEnvironmentVariable": "PROTOTYPE_AGENT_TOKEN"
+  },
+  "authority": {
+    "allowed": ["prototype:read", "prototype:propose"],
+    "forbidden": ["prototype:apply", "prototype:publish"]
+  }
+}

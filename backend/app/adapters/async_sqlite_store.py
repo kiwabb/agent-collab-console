@@ -3341,7 +3341,7 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
-    async def load_audit_log(self, audit_log_id: str) -> "AuditLog" | None:
+    async def load_audit_log(self, audit_log_id: str) -> "AuditLog | None":
         from app.domain.models import AuditLog
 
         await self._ensure_db()

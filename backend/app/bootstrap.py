@@ -18,6 +18,7 @@ from app.adapters.claude_cli_adapter import ClaudeCliAdapter
 from app.adapters.codex_cli_adapter import CodexCliAdapter
 from app.adapters.sqlite_store import SQLiteStore
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
+from app.adapters.external_prototype_agent_store import AsyncExternalPrototypeAgentStore
 from app.application.codex_task_runner import CodexTaskRunner
 from app.application.help_orchestrator import HelpOrchestrator, HelpTaskRunner
 from app.application.role_workflow_service import RoleWorkflowService, RoleWorkflowStore
@@ -28,6 +29,10 @@ from app.application.runtime_catalog_service import RuntimeCatalogService
 from app.application.skill_service import SkillService
 from app.application import timeouts
 from app.application.worktree_manager import WorktreeManager
+from app.application.external_prototype_agent_service import (
+    ExternalPrototypeAgentService,
+    UnavailableStructuredPrototypeCollaborationPort,
+)
 from app.domain.models import CodexSession, CodexTask, LogEvent
 
 logger = logging.getLogger(__name__)
@@ -115,6 +120,17 @@ else:
 use_sqlite = timeouts.use_sqlite()
 store = SQLiteStore(db_path) if use_sqlite else None
 async_store = AsyncSQLiteStore(db_path) if use_sqlite else None
+external_prototype_agent_store = (
+    AsyncExternalPrototypeAgentStore(db_path) if use_sqlite else None
+)
+external_prototype_agent_service = (
+    ExternalPrototypeAgentService(
+        store=external_prototype_agent_store,
+        collaboration=UnavailableStructuredPrototypeCollaborationPort(),
+    )
+    if external_prototype_agent_store is not None
+    else None
+)
 
 # Initialize event bus with store for DB writes
 # Phase 1: Use async store for EventBus when running in full async mode (CODEX_LAUNCH_ENABLED=true)
