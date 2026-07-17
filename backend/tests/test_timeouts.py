@@ -23,6 +23,9 @@ def test_default_values_match_shipped_ladder(monkeypatch):
         "CLAUDE_CMD",
         "CODEX_CMD",
         "CODEX_DATA_DIR",
+        "STRUCTURED_PROTOTYPE_PAGE_GENERATION_CONCURRENCY",
+        "PROTOTYPE_SNAP_WORKER_ATTEST_TIMEOUT_S",
+        "PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S",
     ):
         monkeypatch.delenv(key, raising=False)
     # These are the shipped defaults. subagent_idle was raised 600→1200 so the
@@ -51,6 +54,9 @@ def test_default_values_match_shipped_ladder(monkeypatch):
     assert timeouts.anthropic_api_key_configured() is False
     assert timeouts.process_idle_timeout_s() == 180
     assert timeouts.process_max_timeout_s() == 1800
+    assert timeouts.prototype_ui_engineer_process_max_timeout_s() == 3600
+    assert timeouts.prototype_snap_worker_attest_timeout_s() == 5.0
+    assert timeouts.prototype_snap_worker_attest_many_timeout_s() == 60.0
     assert timeouts.workflow_orchestrator_llm_enabled() is True
     assert timeouts.workflow_orchestrator_executor_id() is None
     assert timeouts.workflow_orchestrator_model() is None
@@ -75,6 +81,7 @@ def test_default_values_match_shipped_ladder(monkeypatch):
     assert timeouts.stall_threshold_s() == 900
     assert timeouts.stall_interval_s() == 30
     assert timeouts.stall_cooldown_s() == 900
+    assert timeouts.structured_prototype_page_generation_concurrency() == 2
     assert timeouts.project_review_interval_s() == 3600.0
     assert timeouts.project_review_limit() == 25
     assert timeouts.self_improvement_proposal_interval_s() == 3600.0
@@ -95,6 +102,17 @@ def test_conductor_max_dispatches_per_role_knob(monkeypatch):
 
     monkeypatch.setenv("CONDUCTOR_MAX_DISPATCHES_PER_ROLE", "not-an-int")
     assert timeouts.conductor_max_dispatches_per_role() == 4
+
+
+def test_structured_prototype_page_generation_concurrency_knob(monkeypatch):
+    monkeypatch.setenv("STRUCTURED_PROTOTYPE_PAGE_GENERATION_CONCURRENCY", "3")
+    assert timeouts.structured_prototype_page_generation_concurrency() == 3
+
+    monkeypatch.setenv("STRUCTURED_PROTOTYPE_PAGE_GENERATION_CONCURRENCY", "0")
+    assert timeouts.structured_prototype_page_generation_concurrency() == 1
+
+    monkeypatch.setenv("STRUCTURED_PROTOTYPE_PAGE_GENERATION_CONCURRENCY", "not-an-int")
+    assert timeouts.structured_prototype_page_generation_concurrency() == 2
 
 
 def test_conductor_max_relaunches_knob(monkeypatch):
@@ -134,13 +152,49 @@ def test_stall_watchdog_enabled_knob(monkeypatch):
 def test_process_runtime_timeout_knobs(monkeypatch):
     monkeypatch.setenv("PROCESS_IDLE_TIMEOUT", "42")
     monkeypatch.setenv("PROCESS_MAX_TIMEOUT", "900")
+    monkeypatch.setenv("PROTOTYPE_UI_ENGINEER_PROCESS_MAX_TIMEOUT", "2700")
     assert timeouts.process_idle_timeout_s() == 42
     assert timeouts.process_max_timeout_s() == 900
+    assert timeouts.prototype_ui_engineer_process_max_timeout_s() == 2700
 
     monkeypatch.setenv("PROCESS_IDLE_TIMEOUT", "garbage")
     monkeypatch.setenv("PROCESS_MAX_TIMEOUT", "garbage")
+    monkeypatch.setenv("PROTOTYPE_UI_ENGINEER_PROCESS_MAX_TIMEOUT", "garbage")
     assert timeouts.process_idle_timeout_s() == timeouts.DEFAULT_PROCESS_IDLE_TIMEOUT_S
     assert timeouts.process_max_timeout_s() == timeouts.DEFAULT_PROCESS_MAX_TIMEOUT_S
+    assert (
+        timeouts.prototype_ui_engineer_process_max_timeout_s()
+        == timeouts.DEFAULT_PROTOTYPE_UI_ENGINEER_PROCESS_MAX_TIMEOUT_S
+    )
+
+
+def test_prototype_snap_worker_timeout_knobs(monkeypatch):
+    monkeypatch.setenv("PROTOTYPE_SNAP_WORKER_ATTEST_TIMEOUT_S", "2.5")
+    monkeypatch.setenv("PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S", "45.5")
+    assert timeouts.prototype_snap_worker_attest_timeout_s() == 2.5
+    assert timeouts.prototype_snap_worker_attest_many_timeout_s() == 45.5
+
+    monkeypatch.setenv("PROTOTYPE_SNAP_WORKER_ATTEST_TIMEOUT_S", "0")
+    monkeypatch.setenv("PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S", "-1")
+    assert (
+        timeouts.prototype_snap_worker_attest_timeout_s()
+        == timeouts.DEFAULT_PROTOTYPE_SNAP_WORKER_ATTEST_TIMEOUT_S
+    )
+    assert (
+        timeouts.prototype_snap_worker_attest_many_timeout_s()
+        == timeouts.DEFAULT_PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S
+    )
+
+    monkeypatch.setenv("PROTOTYPE_SNAP_WORKER_ATTEST_TIMEOUT_S", "garbage")
+    monkeypatch.setenv("PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S", "garbage")
+    assert (
+        timeouts.prototype_snap_worker_attest_timeout_s()
+        == timeouts.DEFAULT_PROTOTYPE_SNAP_WORKER_ATTEST_TIMEOUT_S
+    )
+    assert (
+        timeouts.prototype_snap_worker_attest_many_timeout_s()
+        == timeouts.DEFAULT_PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S
+    )
 
 
 def test_codex_app_server_knobs(monkeypatch):

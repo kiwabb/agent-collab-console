@@ -34,6 +34,8 @@ from app.application.audit.categories import (
 from app.application.audit.recorders import (
     CONDUCTOR_TURN_CATEGORY,
     EVENT_SKIP_TYPES,
+    McpCallFailureEvidence,
+    McpValidationIssueEvidence,
     record_autoplan,
     record_cli_spawn,
     record_command_execs,
@@ -58,6 +60,8 @@ __all__ = [
     "CONDUCTOR_TURN_CATEGORY",
     "EVENT_SKIP_TYPES",
     "AuditLogger",
+    "McpCallFailureEvidence",
+    "McpValidationIssueEvidence",
     "_serialize_payload",
     "audit_logger",
     "default_sink",

@@ -106,8 +106,11 @@ async def test_claude_process_disables_python_bytecode_by_default(monkeypatch, t
         updated_at=now,
     )
     captured_env: dict[str, str] = {}
+    captured_args: tuple[object, ...] = ()
 
     async def fake_create_subprocess_exec(*args, **kwargs):
+        nonlocal captured_args
+        captured_args = args
         captured_env.update(kwargs["env"])
         return _FakeProcess()
 
@@ -132,6 +135,82 @@ async def test_claude_process_disables_python_bytecode_by_default(monkeypatch, t
     )
 
     assert captured_env["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert "--permission-mode=bypassPermissions" in captured_args
+    assert "--permission-mode=dontAsk" not in captured_args
+
+
+@pytest.mark.asyncio
+async def test_claude_process_applies_restricted_prototype_permission_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    now = datetime.now()
+    workspace = CodexSession(
+        id="prototype-workspace",
+        title="Prototype workspace",
+        cwd=str(tmp_path),
+        created_at=now,
+        last_active_at=now,
+    )
+    task = CodexTask(
+        id="prototype-task",
+        session_id=workspace.id,
+        project_id="project-1",
+        title="Generate page",
+        prompt="generate",
+        role="prototype_ui_engineer",
+        executor="claude",
+        workspace_path=str(tmp_path),
+        git_worktree_path=str(tmp_path),
+        status="pending",
+        created_at=now,
+        updated_at=now,
+    )
+    captured_args: tuple[object, ...] = ()
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        nonlocal captured_args
+        del kwargs
+        captured_args = args
+        return _FakeProcess()
+
+    async def fake_reader_loop(*args, **kwargs):
+        del args, kwargs
+
+    monkeypatch.setattr(
+        "app.application.claude_process_runtime.asyncio.create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(ClaudeProcessRuntime, "_reader_loop", fake_reader_loop)
+
+    runtime = ClaudeProcessRuntime(codex_store=_Store(workspace, task), log_store=_LogStore())
+    restricted_args = [
+        "--bare",
+        "--setting-sources",
+        "",
+        "--tools",
+        "Read,Glob,Grep",
+        "--mcp-config",
+        '{"mcpServers":{}}',
+        "--strict-mcp-config",
+    ]
+
+    await runtime._spawn_process_async(
+        workspace_id=workspace.id,
+        resume_session_id=None,
+        resume_message_id=None,
+        task_id=task.id,
+        waiter=None,
+        cwd=str(tmp_path),
+        env_overrides={"ANTHROPIC_API_KEY": "test-only"},
+        command_args=restricted_args,
+    )
+
+    assert captured_args.count("--permission-mode=dontAsk") == 1
+    assert "--permission-mode=bypassPermissions" not in captured_args
+    assert "project,local" not in captured_args
+    for arg in restricted_args:
+        assert arg in captured_args
 
 
 @pytest.mark.asyncio

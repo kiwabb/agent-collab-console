@@ -1,5 +1,8 @@
-import type { RuntimeDefinition, RuntimeValue } from "../runtime/types";
-import type { NewStructuredPrototypeDocument, StructuredPrototypeLayoutItem } from "./types";
+import type { RuntimeDefinition, RuntimeValue } from "../../src/features/prototype/runtime/types";
+import type {
+  NewStructuredPrototypeDocument,
+  StructuredPrototypeLayoutItem,
+} from "../../src/features/prototype/structured/types";
 
 export const STRUCTURED_PROCUREMENT_IDS = {
   pages: {
@@ -101,6 +104,7 @@ function runtimeDefinition(): RuntimeDefinition {
         key: "selected-request",
         valueType: "entityRef",
         nullable: true,
+        entitySchemaId: ids.schema.request,
         defaultValue: { type: "null" },
       },
     ],
@@ -294,10 +298,25 @@ export function createProcurementPrototypeDocument(): NewStructuredPrototypeDocu
     schemaVersion: 1,
     title: "Orion 采购协同",
     locale: "zh-CN",
-    settings: { defaultViewport: "desktop", theme: "light" },
+    settings: {
+      defaultViewport: "desktop",
+      theme: "light",
+      shell: {
+        kind: "sidebar",
+        title: "Orion 采购协同",
+        navigationWidth: 220,
+        expandedMinWidth: 768,
+        accentColorTokenKey: "primary",
+        navigationBackgroundColorTokenKey: "navigation-background",
+        contentBackgroundColorTokenKey: "content-background",
+        surfaceColorTokenKey: "surface",
+      },
+    },
     tokens: {
       colors: [
         { key: "primary", value: "#126b5f" },
+        { key: "navigation-background", value: "#173d38" },
+        { key: "content-background", value: "#f4f7f6" },
         { key: "surface", value: "#ffffff" },
       ],
       spacing: [{ key: "panel-gap", value: "16px" }],
@@ -330,9 +349,9 @@ export function createProcurementPrototypeDocument(): NewStructuredPrototypeDocu
               ...common(ids.nodes.requestTable, "采购申请表格"),
               type: "Table",
               columns: [
-                { key: "title", label: "申请事项" },
-                { key: "amount", label: "金额" },
-                { key: "status", label: "状态" },
+                { key: "title", label: "申请事项", fieldId: ids.schema.title },
+                { key: "amount", label: "金额", fieldId: ids.schema.amount },
+                { key: "status", label: "状态", fieldId: ids.schema.status },
               ],
               rows: [],
               density: "comfortable",
@@ -371,6 +390,8 @@ export function createProcurementPrototypeDocument(): NewStructuredPrototypeDocu
                   inputType: "text",
                   required: true,
                   disabled: false,
+                  formDefinitionId: ids.form.create,
+                  formFieldId: ids.form.title,
                 },
                 {
                   ...common(ids.nodes.amountInput, "采购金额输入框"),
@@ -381,6 +402,8 @@ export function createProcurementPrototypeDocument(): NewStructuredPrototypeDocu
                   inputType: "number",
                   required: true,
                   disabled: false,
+                  formDefinitionId: ids.form.create,
+                  formFieldId: ids.form.amount,
                 },
                 {
                   ...common(ids.nodes.submitRequest, "提交采购申请按钮"),

@@ -25,7 +25,7 @@ import type {
   RuntimeViewProperty,
 } from "./types";
 
-export const RUNTIME_CORE_VERSION = "0.1.0-spike";
+export const RUNTIME_CORE_VERSION = "0.2.0-spike";
 export const XSTATE_KERNEL_VERSION = "5.32.4";
 
 const RUNTIME_ENTITY_NAMESPACE = "1af0c23d-70d2-5fd5-aad8-3f1eafbb10a1";
@@ -110,6 +110,10 @@ function valueMatchesType(
   return value.type === expected;
 }
 
+function entityRefMatchesSchema(value: RuntimeValue, entitySchemaId: string | null): boolean {
+  return value.type !== "entityRef" || value.schemaId === entitySchemaId;
+}
+
 function valueExpressionUsesEventEntityRef(expression: RuntimeValueExpression): boolean {
   switch (expression.kind) {
     case "eventEntityRef":
@@ -146,6 +150,10 @@ export function validateRuntimeDefinition(definition: RuntimeDefinition): string
     ...assertUniqueIds(definition.entitySchemas, "entitySchemas"),
     ...assertUniqueIds(definition.forms, "forms"),
     ...assertUniqueIds(definition.viewBindings, "viewBindings"),
+    ...assertUniqueValues(
+      definition.viewBindings.map((binding) => `${binding.nodeId}:${binding.target}`),
+      "view binding node targets",
+    ),
     ...assertUniqueIds(definition.rules, "rules"),
     ...assertUniqueIds(definition.scenarios, "scenarios"),
   ];
@@ -154,8 +162,21 @@ export function validateRuntimeDefinition(definition: RuntimeDefinition): string
   const schemaIds = new Set(definition.entitySchemas.map((schema) => schema.id));
 
   for (const variable of definition.variables) {
+    if (variable.valueType === "entityRef") {
+      if (variable.entitySchemaId === null) {
+        errors.push(`variable ${variable.id} entityRef type requires an entity schema`);
+      } else if (!schemaIds.has(variable.entitySchemaId)) {
+        errors.push(
+          `variable ${variable.id} references unknown entity schema ${variable.entitySchemaId}`,
+        );
+      }
+    } else if (variable.entitySchemaId !== null) {
+      errors.push(`variable ${variable.id} non-entityRef type cannot declare an entity schema`);
+    }
     if (!valueMatchesType(variable.defaultValue, variable.valueType, variable.nullable)) {
       errors.push(`variable ${variable.id} default value does not match ${variable.valueType}`);
+    } else if (!entityRefMatchesSchema(variable.defaultValue, variable.entitySchemaId)) {
+      errors.push(`variable ${variable.id} default entity schema does not match its definition`);
     }
   }
   for (const scenario of definition.scenarios) {
@@ -183,6 +204,10 @@ export function validateRuntimeDefinition(definition: RuntimeDefinition): string
         errors.push(
           `scenario ${scenario.id} variable ${value.variableId} does not match ${variable.valueType}`,
         );
+      } else if (!entityRefMatchesSchema(value.value, variable.entitySchemaId)) {
+        errors.push(
+          `scenario ${scenario.id} variable ${value.variableId} entity schema does not match its definition`,
+        );
       }
     }
     for (const fixture of scenario.entityFixtures) {
@@ -194,6 +219,23 @@ export function validateRuntimeDefinition(definition: RuntimeDefinition): string
   for (const rule of definition.rules) {
     if (rule.effects.length === 0) {
       errors.push(`rule ${rule.id} has no effects`);
+    }
+    for (const effect of [...rule.effects, ...rule.guardFalseEffects]) {
+      if (effect.kind !== "createEntity") {
+        continue;
+      }
+      const resultVariable = definition.variables.find(
+        (variable) => variable.id === effect.resultVariableId,
+      );
+      if (
+        resultVariable === undefined ||
+        resultVariable.valueType !== "entityRef" ||
+        resultVariable.entitySchemaId !== effect.schemaId
+      ) {
+        errors.push(
+          `rule ${rule.id} create-entity result variable does not match schema ${effect.schemaId}`,
+        );
+      }
     }
   }
   for (const binding of definition.viewBindings) {
@@ -279,6 +321,10 @@ export function validateRuntimeState(
       errors.push(`runtime state contains unknown variable ${entry.variableId}`);
     } else if (!valueMatchesType(entry.value, variable.valueType, variable.nullable)) {
       errors.push(`runtime variable ${entry.variableId} does not match ${variable.valueType}`);
+    } else if (!entityRefMatchesSchema(entry.value, variable.entitySchemaId)) {
+      errors.push(
+        `runtime variable ${entry.variableId} entity schema does not match its definition`,
+      );
     }
   }
 
@@ -657,10 +703,28 @@ function evaluatePredicate(
 }
 
 function replaceVariableValue(
+  definition: RuntimeDefinition,
   state: PrototypeRuntimeState,
   variableId: string,
   value: RuntimeValue,
 ): PrototypeRuntimeState {
+  const variable = requireItem(
+    definition.variables.find((candidate) => candidate.id === variableId),
+    "runtime_variable_definition_missing",
+    `Unknown variable definition ${variableId}`,
+  );
+  if (!valueMatchesType(value, variable.valueType, variable.nullable)) {
+    throw new RuntimeCoreError(
+      "runtime_variable_type_mismatch",
+      `Variable ${variableId} requires ${variable.valueType}`,
+    );
+  }
+  if (!entityRefMatchesSchema(value, variable.entitySchemaId)) {
+    throw new RuntimeCoreError(
+      "runtime_variable_entity_schema_mismatch",
+      `Variable ${variableId} requires entity schema ${variable.entitySchemaId}`,
+    );
+  }
   let replaced = false;
   const variableValues = state.variableValues.map((entry) => {
     if (entry.variableId !== variableId) {
@@ -719,6 +783,7 @@ function applyEffect(
     case "setVariable":
       return {
         state: replaceVariableValue(
+          definition,
           state,
           effect.variableId,
           evaluateValueExpression(state, effect.value, event),
@@ -764,7 +829,7 @@ function applyEffect(
         entities: [...set.entities, { id: entityId, schemaId: effect.schemaId, fields }],
       });
       return {
-        state: replaceVariableValue(withEntity, effect.resultVariableId, {
+        state: replaceVariableValue(definition, withEntity, effect.resultVariableId, {
           type: "entityRef",
           schemaId: effect.schemaId,
           entityId,

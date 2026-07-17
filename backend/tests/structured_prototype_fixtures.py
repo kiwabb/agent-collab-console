@@ -47,7 +47,20 @@ def procurement_document_payload() -> dict[str, object]:
         "id": fixture_id("document"),
         "title": "采购申请原型",
         "locale": "zh-CN",
-        "settings": {"defaultViewport": "desktop", "theme": "light"},
+        "settings": {
+            "defaultViewport": "desktop",
+            "theme": "light",
+            "shell": {
+                "kind": "sidebar",
+                "title": "采购申请原型",
+                "accentColorTokenKey": "primary",
+                "navigationBackgroundColorTokenKey": "surface",
+                "contentBackgroundColorTokenKey": "surface",
+                "surfaceColorTokenKey": "surface",
+                "navigationWidth": 240,
+                "expandedMinWidth": 1024,
+            },
+        },
         "tokens": {
             "colors": [
                 {"key": "primary", "value": "#2563eb"},
@@ -123,6 +136,8 @@ def procurement_document_payload() -> dict[str, object]:
                                     "inputType": "text",
                                     "required": True,
                                     "disabled": False,
+                                    "formDefinitionId": form_create,
+                                    "formFieldId": fixture_id("form-field-title"),
                                 },
                                 {
                                     **_common("button-submit", "提交按钮"),

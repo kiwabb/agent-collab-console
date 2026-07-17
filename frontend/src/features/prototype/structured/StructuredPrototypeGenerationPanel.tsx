@@ -9,22 +9,26 @@ import {
   Play,
   RefreshCw,
   Sparkles,
+  Trash2,
 } from "lucide-react";
 
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 
 import {
   canStartStructuredPrototypeGeneration,
   isStructuredPrototypeGenerationActive,
+  structuredPrototypeGenerationBlueprintScope,
   structuredPrototypeGenerationPercent,
+  structuredPrototypeGenerationSourceExclusion,
 } from "./structuredPrototypeGenerationState";
 import type { StructuredPrototypeDraft } from "./types";
 import { useStructuredPrototypeGeneration } from "./useStructuredPrototypeGeneration";
 
 interface Props {
   projectId: string;
-  onAccepted: (draft: StructuredPrototypeDraft) => Promise<void>;
+  onAccepted: (draft: StructuredPrototypeDraft) => Promise<boolean>;
 }
 
 function shortIdentity(value: string | null): string {
@@ -36,12 +40,43 @@ export function StructuredPrototypeGenerationPanel({ projectId, onAccepted }: Pr
   const { t } = useI18n();
   const generation = useStructuredPrototypeGeneration({ projectId, onAccepted });
   const [brief, setBrief] = useState("");
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const job = generation.job;
   const active = job ? isStructuredPrototypeGenerationActive(job.status) : false;
   const canStart = canStartStructuredPrototypeGeneration(job);
+  const blueprintScope = job?.blueprint
+    ? structuredPrototypeGenerationBlueprintScope(job.blueprint).map((group) => ({
+        ...group,
+        label: t(`prototype.structured.generation.blueprint.${group.key}`),
+      }))
+    : [];
+  const sourceExclusion = structuredPrototypeGenerationSourceExclusion(job);
+  let sourceExclusionLabel = "-";
+  if (sourceExclusion.kind === "clean") {
+    sourceExclusionLabel = t("prototype.structured.generation.evidence.clean");
+    if (sourceExclusion.sensitive > 0) {
+      sourceExclusionLabel += `, ${sourceExclusion.sensitive} ${t("prototype.structured.generation.evidence.sensitive")}`;
+    }
+  } else if (sourceExclusion.kind === "dirty") {
+    sourceExclusionLabel = `${sourceExclusion.tracked} ${t("prototype.structured.generation.evidence.tracked")}, ${sourceExclusion.untracked} ${t("prototype.structured.generation.evidence.untracked")}`;
+    if (sourceExclusion.sensitive > 0) {
+      sourceExclusionLabel += `, ${sourceExclusion.sensitive} ${t("prototype.structured.generation.evidence.sensitive")}`;
+    }
+  }
+
+  const confirmDelete = async () => {
+    setDeleteError(null);
+    const deleted = await generation.deleteAll();
+    if (deleted) {
+      setDeleteDialogOpen(false);
+      return;
+    }
+    setDeleteError(t("prototype.structured.deleteFailed"));
+  };
 
   return (
-    <section className="enterprise-panel overflow-hidden rounded-xl bg-surface/90">
+    <section className="min-h-full overflow-hidden bg-surface/90">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border-subtle px-5 py-4 sm:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-brand-bg text-brand ring-1 ring-brand-ring">
@@ -54,24 +89,41 @@ export function StructuredPrototypeGenerationPanel({ projectId, onAccepted }: Pr
             <p className="mt-1 text-xs text-text-muted">Claude UI Engineer</p>
           </div>
         </div>
-        {job && (
-          <span
-            className={cn(
-              "inline-flex min-h-8 items-center gap-2 rounded-full px-3 text-xs font-semibold",
-              job.status === "ready" || job.status === "accepted"
-                ? "bg-done-bg text-status-done ring-1 ring-done-ring"
-                : ["failed", "interrupted", "cancelled"].includes(job.status)
-                  ? "bg-failed-bg text-status-failed ring-1 ring-failed-ring"
-                  : job.status === "awaiting_confirmation"
-                    ? "bg-warning-bg text-status-awaiting ring-1 ring-status-awaiting/20"
-                    : "bg-tool-bg text-status-tool ring-1 ring-tool-ring",
+        {(job || generation.error) && (
+          <div className="flex items-center gap-2">
+            {job && (
+              <span
+                className={cn(
+                  "inline-flex min-h-8 items-center gap-2 rounded-full px-3 text-xs font-semibold",
+                  job.status === "ready" || job.status === "accepted"
+                    ? "bg-done-bg text-status-done ring-1 ring-done-ring"
+                    : ["failed", "interrupted", "cancelled"].includes(job.status)
+                      ? "bg-failed-bg text-status-failed ring-1 ring-failed-ring"
+                      : job.status === "awaiting_confirmation"
+                        ? "bg-warning-bg text-status-awaiting ring-1 ring-status-awaiting/20"
+                        : "bg-tool-bg text-status-tool ring-1 ring-tool-ring",
+                )}
+              >
+                {active && (
+                  <LoaderCircle size={13} className="motion-essential animate-spin" aria-hidden />
+                )}
+                {t(`prototype.structured.generation.status.${job.status}`)}
+              </span>
             )}
-          >
-            {active && (
-              <LoaderCircle size={13} className="motion-essential animate-spin" aria-hidden />
-            )}
-            {t(`prototype.structured.generation.status.${job.status}`)}
-          </span>
+            <button
+              type="button"
+              className="grid size-9 cursor-pointer place-items-center rounded-md border border-error/35 bg-surface-raised text-error hover:bg-error/10 disabled:cursor-not-allowed disabled:opacity-45"
+              onClick={() => {
+                setDeleteError(null);
+                setDeleteDialogOpen(true);
+              }}
+              disabled={generation.mutating || active}
+              aria-label={t("prototype.structured.delete")}
+              title={t("prototype.structured.delete")}
+            >
+              <Trash2 size={15} aria-hidden />
+            </button>
+          </div>
         )}
       </header>
 
@@ -118,6 +170,29 @@ export function StructuredPrototypeGenerationPanel({ projectId, onAccepted }: Pr
                 <dt>{t("prototype.structured.generation.evidence.operation")}</dt>
                 <dd className="mt-1 break-all font-mono text-[11px] text-text-secondary">
                   {job.operationId}
+                </dd>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <dt>{t("prototype.structured.generation.evidence.source")}</dt>
+                  <dd className="mt-1 font-mono text-[11px] text-text-secondary">
+                    {job.sourcePolicy ?? "-"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t("prototype.structured.generation.evidence.revision")}</dt>
+                  <dd
+                    className="mt-1 font-mono text-[11px] text-text-secondary"
+                    title={job.worktreeBaseCommit ?? undefined}
+                  >
+                    {shortIdentity(job.worktreeBaseCommit)}
+                  </dd>
+                </div>
+              </div>
+              <div>
+                <dt>{t("prototype.structured.generation.evidence.excluded")}</dt>
+                <dd className="mt-1 text-[11px] leading-5 text-text-secondary">
+                  {sourceExclusionLabel}
                 </dd>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -171,18 +246,47 @@ export function StructuredPrototypeGenerationPanel({ projectId, onAccepted }: Pr
                   <p className="mt-2 text-sm leading-6 text-text-secondary">
                     {job.blueprint.productIntent}
                   </p>
-                  <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                    {job.blueprint.pages.map((page) => (
-                      <article
-                        key={page.pageKey}
-                        className="rounded-lg border border-border-subtle bg-surface/70 p-3"
-                      >
-                        <div className="text-xs font-semibold text-foreground">{page.title}</div>
-                        <div className="mt-1 font-mono text-[11px] text-brand">{page.route}</div>
-                        <p className="mt-2 text-xs leading-5 text-text-muted">{page.purpose}</p>
-                      </article>
-                    ))}
+                  <div className="mt-4 border-y border-border-subtle">
+                    <div className="flex items-center justify-between px-1 py-2 text-[11px] font-semibold uppercase text-text-muted">
+                      <span>{t("prototype.structured.generation.blueprint.pages")}</span>
+                      <span className="font-mono">{job.blueprint.pages.length}</span>
+                    </div>
+                    <ol className="divide-y divide-border-subtle">
+                      {job.blueprint.pages.map((page) => (
+                        <li
+                          key={page.pageKey}
+                          className="grid gap-1 px-1 py-3 sm:grid-cols-[180px_1fr]"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-semibold text-foreground">
+                              {page.title}
+                            </div>
+                            <div className="mt-1 font-mono text-[11px] text-brand">
+                              {page.route}
+                            </div>
+                          </div>
+                          <p className="text-xs leading-5 text-text-muted">{page.purpose}</p>
+                        </li>
+                      ))}
+                    </ol>
                   </div>
+                  {blueprintScope.length > 0 && (
+                    <dl className="mt-4 divide-y divide-border-subtle border-y border-border-subtle">
+                      {blueprintScope.map((group) => (
+                        <div
+                          key={group.key}
+                          className="grid gap-1 px-1 py-3 sm:grid-cols-[110px_1fr]"
+                        >
+                          <dt className="text-xs font-semibold text-text-secondary">
+                            {group.label}
+                          </dt>
+                          <dd className="break-words font-mono text-[11px] leading-5 text-text-muted">
+                            {group.values.join("; ")}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
                   {job.canConfirm && (
                     <button
                       type="button"
@@ -254,7 +358,7 @@ export function StructuredPrototypeGenerationPanel({ projectId, onAccepted }: Pr
                     src={job.previewPath}
                     title={t("prototype.structured.generation.preview")}
                     className="h-[460px] w-full bg-white"
-                    sandbox="allow-scripts"
+                    sandbox="allow-scripts allow-same-origin"
                   />
                 </section>
               )}
@@ -304,6 +408,26 @@ export function StructuredPrototypeGenerationPanel({ projectId, onAccepted }: Pr
           )}
         </div>
       </div>
+      <ConfirmDialog
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          setDeleteDialogOpen(open);
+          if (!open) setDeleteError(null);
+        }}
+        title={t("prototype.structured.deleteTitle")}
+        description={
+          deleteError
+            ? `${t("prototype.structured.deleteDescription")} ${deleteError}`
+            : t("prototype.structured.deleteDescription")
+        }
+        confirmText={t("prototype.structured.deleteConfirm")}
+        cancelText={t("prototype.structured.deleteCancel")}
+        onConfirm={() => void confirmDelete()}
+        isLoading={generation.mutating}
+        loadingMotionPhase="tool"
+        loadingDensity="prototype-delete"
+        variant="destructive"
+      />
     </section>
   );
 }

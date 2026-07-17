@@ -3,6 +3,7 @@ from __future__ import annotations  # noqa: I001
 import asyncio
 import shutil
 import subprocess
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -11,6 +12,10 @@ import pytest
 from app.application.git_service import GitService
 from app.application.worktree_manager import AgentMergeSpec, WorktreeError, WorktreeManager
 from app.domain.models import CodexIssue, CodexTask, Project
+from app.domain.structured_prototype_generation import (
+    PrototypeGenerationCommittedHeadCapture,
+    PrototypeGenerationSourceSnapshot,
+)
 
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git binary not available")
@@ -18,6 +23,37 @@ pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git binary 
 
 def _git(*args: str, cwd: Path) -> None:
     subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True)
+
+
+def _git_output(*args: str, cwd: Path) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _source_snapshot(
+    capture: PrototypeGenerationCommittedHeadCapture,
+) -> PrototypeGenerationSourceSnapshot:
+    return PrototypeGenerationSourceSnapshot(
+        source_policy="committed_head_v1",
+        source_snapshot_object_hash="sha256:" + "1" * 64,
+        source_fingerprint="sha256:" + "2" * 64,
+        source_snapshot_ref=capture.snapshot_ref,
+        repository_object_format=capture.repository_object_format,
+        worktree_base_commit=capture.worktree_base_commit,
+        repository_project_prefix=capture.repository_project_prefix,
+        repository_tree_object_id=capture.repository_tree_object_id,
+        source_file_exclusion_policy=capture.source_file_exclusion_policy,
+        working_tree_dirty=capture.working_tree_dirty,
+        excluded_tracked_change_count=capture.excluded_tracked_change_count,
+        excluded_untracked_count=capture.excluded_untracked_count,
+        excluded_sensitive_file_count=capture.excluded_sensitive_file_count,
+        excluded_status_hash=capture.excluded_status_hash,
+    )
 
 
 @pytest.fixture
@@ -190,6 +226,291 @@ async def test_prototype_worktree_with_no_source_paths_ignores_dirty_and_untrack
         assert not (worktree / "examples").exists()
     finally:
         await manager.cleanup_prototype_ui_engineer_worktree(project, "requirements-only-generation")
+
+
+@pytest.mark.asyncio
+async def test_prototype_worktree_does_not_merge_framework_hooks_into_project_settings(
+    project: Project,
+    manager: WorktreeManager,
+) -> None:
+    repo = Path(project.repo_path)
+    claude_dir = repo / ".claude"
+    claude_dir.mkdir()
+    project_settings = '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[]}]}}\n'
+    (claude_dir / "settings.json").write_text(project_settings, encoding="utf-8")
+    (repo / "CLAUDE.md").write_text("Untrusted project instructions.\n", encoding="utf-8")
+    (repo / ".mcp.json").write_text('{"mcpServers":{"untrusted":{}}}\n', encoding="utf-8")
+    _git("add", ".claude/settings.json", "CLAUDE.md", ".mcp.json", cwd=repo)
+    _git("commit", "-m", "add untrusted claude config fixture", cwd=repo)
+
+    _, path, _ = await manager.prepare_prototype_ui_engineer_worktree(
+        project,
+        "prototype-untrusted-settings",
+    )
+    try:
+        worktree = Path(path)
+        assert (worktree / ".claude/settings.json").read_text(encoding="utf-8") == project_settings
+        assert not (worktree / ".claude/hooks/limit_read.py").exists()
+    finally:
+        await manager.cleanup_prototype_ui_engineer_worktree(
+            project,
+            "prototype-untrusted-settings",
+        )
+
+
+@pytest.mark.asyncio
+async def test_committed_generation_snapshot_excludes_dirty_files_and_survives_item_cleanup(
+    project: Project,
+    manager: WorktreeManager,
+) -> None:
+    repo = Path(project.repo_path)
+    (repo / ".env").write_text("TRACKED_SECRET=must-not-copy\n", encoding="utf-8")
+    _git("add", ".env", cwd=repo)
+    _git("commit", "-m", "tracked dotenv fixture", cwd=repo)
+    frozen_head = _git_output("rev-parse", "HEAD", cwd=repo)
+    (repo / "README.md").write_text("dirty tracked source\n", encoding="utf-8")
+    (repo / ".env.local").write_text("LOCAL_SECRET=must-not-copy\n", encoding="utf-8")
+    (repo / "untracked.ts").write_text("export const dirty = true;\n", encoding="utf-8")
+    capture = await manager.git.capture_committed_head_snapshot(
+        project.repo_path,
+        "11111111-1111-1111-1111-111111111111",
+    )
+
+    assert capture.worktree_base_commit == frozen_head
+    assert capture.working_tree_dirty is True
+    assert capture.excluded_tracked_change_count == 1
+    assert capture.excluded_untracked_count == 2
+    assert capture.source_file_exclusion_policy == "dotenv_checkout_filter_v1"
+    assert capture.excluded_sensitive_file_count == 1
+
+    _git("add", "README.md", cwd=repo)
+    _git("commit", "-m", "advance head", cwd=repo)
+    assert _git_output("rev-parse", "HEAD", cwd=repo) != frozen_head
+
+    branch, path, base_revision = await manager.prepare_prototype_ui_engineer_worktree(
+        project,
+        "committed-generation-item",
+        source_snapshot=_source_snapshot(capture),
+    )
+    worktree = Path(path)
+    try:
+        assert base_revision == frozen_head
+        assert _git_output("rev-parse", "HEAD", cwd=worktree) == frozen_head
+        assert (worktree / "README.md").read_text(encoding="utf-8") == "hello"
+        assert not (worktree / ".env").exists()
+        assert not (worktree / ".env.local").exists()
+        assert not (worktree / "untracked.ts").exists()
+    finally:
+        await manager.cleanup_prototype_ui_engineer_worktree(
+            project,
+            "committed-generation-item",
+        )
+
+    assert _git_output("rev-parse", "--verify", capture.snapshot_ref, cwd=repo) == frozen_head
+    assert _git_output("branch", "--list", branch, cwd=repo) == ""
+
+
+@pytest.mark.asyncio
+async def test_committed_generation_snapshot_uses_nested_project_tree(tmp_path: Path) -> None:
+    repo = tmp_path / "monorepo"
+    nested = repo / "examples" / "admin-demo"
+    nested.mkdir(parents=True)
+    _git("init", "-b", "main", cwd=repo)
+    _git("config", "user.email", "test@example.com", cwd=repo)
+    _git("config", "user.name", "Test", cwd=repo)
+    (repo / "root.txt").write_text("root\n", encoding="utf-8")
+    (repo / ".env").write_text("ROOT_SECRET=filtered\n", encoding="utf-8")
+    (repo / ".env.example").write_text("ROOT_EXAMPLE=kept\n", encoding="utf-8")
+    sibling = repo / "examples" / "sibling"
+    sibling.mkdir(parents=True)
+    (sibling / ".env.local").write_text("SIBLING_SECRET=filtered\n", encoding="utf-8")
+    (sibling / "shared.txt").write_text("committed sibling\n", encoding="utf-8")
+    (nested / "page.txt").write_text("committed page\n", encoding="utf-8")
+    (nested / ".env.production").write_text("PROJECT_SECRET=filtered\n", encoding="utf-8")
+    _git("add", ".", cwd=repo)
+    _git("commit", "-m", "monorepo", cwd=repo)
+    (repo / "root.txt").write_text("dirty root\n", encoding="utf-8")
+    (sibling / "shared.txt").write_text("dirty sibling\n", encoding="utf-8")
+    (repo / "root-untracked.txt").write_text("root untracked\n", encoding="utf-8")
+    (sibling / "sibling-untracked.txt").write_text("sibling untracked\n", encoding="utf-8")
+    (nested / "project-untracked.txt").write_text("project untracked\n", encoding="utf-8")
+    project = Project(id="nested", name="admin-demo", repo_path=str(nested))
+    manager = WorktreeManager(GitService())
+
+    capture = await manager.git.capture_committed_head_snapshot(
+        project.repo_path,
+        "22222222-2222-2222-2222-222222222222",
+    )
+    root_capture = await manager.git.capture_committed_head_snapshot(
+        repo,
+        "33333333-3333-3333-3333-333333333333",
+    )
+    assert capture.repository_project_prefix == "examples/admin-demo"
+    assert capture.working_tree_dirty is True
+    assert capture.excluded_tracked_change_count == 2
+    assert capture.excluded_untracked_count == 3
+    assert capture.excluded_tracked_change_count == root_capture.excluded_tracked_change_count
+    assert capture.excluded_untracked_count == root_capture.excluded_untracked_count
+    assert capture.excluded_status_hash == root_capture.excluded_status_hash
+    assert capture.excluded_sensitive_file_count == 3
+    assert await manager.git.generation_excluded_checkout_paths(
+        project.repo_path,
+        commit=capture.worktree_base_commit,
+        project_prefix=capture.repository_project_prefix,
+        exclusion_policy=capture.source_file_exclusion_policy,
+    ) == (
+        ".env",
+        "examples/admin-demo/.env.production",
+        "examples/sibling/.env.local",
+    )
+    assert capture.repository_tree_object_id == _git_output(
+        "rev-parse",
+        "HEAD:examples/admin-demo",
+        cwd=repo,
+    )
+
+    _, path, base_revision = await manager.prepare_prototype_ui_engineer_worktree(
+        project,
+        "nested-committed-generation-item",
+        source_snapshot=_source_snapshot(capture),
+    )
+    try:
+        isolated = Path(path)
+        checkout_root = isolated.parents[1]
+        assert isolated.name == "admin-demo"
+        assert base_revision == capture.worktree_base_commit
+        assert (isolated / "page.txt").read_text(encoding="utf-8") == "committed page\n"
+        assert not (isolated / "root.txt").exists()
+        assert not (isolated / ".env.production").exists()
+        assert not (isolated / "project-untracked.txt").exists()
+        assert not (checkout_root / ".env").exists()
+        assert not (checkout_root / "examples/sibling/.env.local").exists()
+        assert not (checkout_root / "root-untracked.txt").exists()
+        assert not (checkout_root / "examples/sibling/sibling-untracked.txt").exists()
+        assert (checkout_root / ".env.example").read_text(encoding="utf-8") == (
+            "ROOT_EXAMPLE=kept\n"
+        )
+        assert (isolated / "../../root.txt").resolve().read_text(encoding="utf-8") == "root\n"
+    finally:
+        await manager.cleanup_prototype_ui_engineer_worktree(
+            project,
+            "nested-committed-generation-item",
+        )
+
+
+@pytest.mark.asyncio
+async def test_committed_generation_snapshot_integrity_failures_block_worktree_creation(
+    project: Project,
+    manager: WorktreeManager,
+) -> None:
+    repo = Path(project.repo_path)
+    capture = await manager.git.capture_committed_head_snapshot(
+        project.repo_path,
+        "33333333-3333-3333-3333-333333333333",
+    )
+    snapshot = _source_snapshot(capture)
+
+    with pytest.raises(WorktreeError, match="project tree changed"):
+        await manager.prepare_prototype_ui_engineer_worktree(
+            project,
+            "tree-mismatch-item",
+            source_snapshot=replace(snapshot, repository_tree_object_id="0" * 40),
+        )
+
+    _git("update-ref", "-d", capture.snapshot_ref, cwd=repo)
+    with pytest.raises(WorktreeError, match="snapshot ref is missing or changed"):
+        await manager.prepare_prototype_ui_engineer_worktree(
+            project,
+            "missing-ref-item",
+            source_snapshot=snapshot,
+        )
+
+    (repo / "second.txt").write_text("second\n", encoding="utf-8")
+    _git("add", "second.txt", cwd=repo)
+    _git("commit", "-m", "second", cwd=repo)
+    _git("update-ref", capture.snapshot_ref, "HEAD", cwd=repo)
+    with pytest.raises(WorktreeError, match="snapshot ref is missing or changed"):
+        await manager.prepare_prototype_ui_engineer_worktree(
+            project,
+            "retargeted-ref-item",
+            source_snapshot=snapshot,
+        )
+
+
+@pytest.mark.asyncio
+async def test_startup_cleanup_removes_only_managed_prototype_resources(
+    project: Project,
+    manager: WorktreeManager,
+    tmp_path: Path,
+) -> None:
+    repo = Path(project.repo_path)
+    item_branch, item_path, _ = await manager.prepare_prototype_ui_engineer_worktree(
+        project,
+        "stale-generation-item",
+    )
+    (Path(item_path) / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+
+    managed_parent = repo.parent / f"{project.name}-worktrees"
+    filesystem_key = "a" * 20
+    filesystem_only = managed_parent / f"prototype-{filesystem_key}"
+    filesystem_only.mkdir(parents=True)
+    (filesystem_only / "partial.txt").write_text("partial\n", encoding="utf-8")
+    _git("branch", f"prototype/{filesystem_key}", cwd=repo)
+    branch_only_key = "b" * 20
+    _git("branch", f"prototype/{branch_only_key}", cwd=repo)
+
+    unrelated_path = tmp_path / "unrelated-worktree"
+    _git(
+        "worktree",
+        "add",
+        "-b",
+        "unrelated/keep",
+        str(unrelated_path),
+        "main",
+        cwd=repo,
+    )
+    owned_job_id = "44444444-4444-4444-4444-444444444444"
+    orphan_job_id = "55555555-5555-5555-5555-555555555555"
+    owned_capture = await manager.git.capture_committed_head_snapshot(
+        project.repo_path,
+        owned_job_id,
+    )
+    orphan_capture = await manager.git.capture_committed_head_snapshot(
+        project.repo_path,
+        orphan_job_id,
+    )
+    primary_before = (
+        _git_output("rev-parse", "HEAD", cwd=repo),
+        _git_output("rev-parse", "HEAD^{tree}", cwd=repo),
+        _git_output("status", "--porcelain", cwd=repo),
+    )
+
+    await manager.cleanup_stale_prototype_generation_resources(
+        project,
+        owned_snapshot_job_ids=frozenset({owned_job_id}),
+    )
+
+    assert not Path(item_path).exists()
+    assert not filesystem_only.exists()
+    assert _git_output("branch", "--list", item_branch, cwd=repo) == ""
+    assert _git_output("branch", "--list", f"prototype/{filesystem_key}", cwd=repo) == ""
+    assert _git_output("branch", "--list", f"prototype/{branch_only_key}", cwd=repo) == ""
+    assert unrelated_path.is_dir()
+    assert _git_output("branch", "--list", "unrelated/keep", cwd=repo) != ""
+    assert _git_output("rev-parse", "--verify", owned_capture.snapshot_ref, cwd=repo) == (
+        owned_capture.worktree_base_commit
+    )
+    assert subprocess.run(
+        ["git", "rev-parse", "--verify", orphan_capture.snapshot_ref],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    ).returncode != 0
+    assert (
+        _git_output("rev-parse", "HEAD", cwd=repo),
+        _git_output("rev-parse", "HEAD^{tree}", cwd=repo),
+        _git_output("status", "--porcelain", cwd=repo),
+    ) == primary_before
 
 
 @pytest.mark.asyncio

@@ -29,6 +29,10 @@ from app.adapters.prototype_runtime_worker import (
     PrototypeRuntimeWorker,
     PrototypeRuntimeWorkerError,
 )
+from app.adapters.prototype_snap_worker import (
+    PrototypeSnapWorker,
+    PrototypeSnapWorkerError,
+)
 from app.adapters.structured_prototype_store import AsyncStructuredPrototypeStore
 from app.application.codex_task_runner import CodexTaskRunner
 from app.application.help_orchestrator import HelpOrchestrator, HelpTaskRunner
@@ -172,6 +176,21 @@ structured_prototype_artifact_store = (
     PrototypeRenderArtifactStore(structured_prototype_data_root) if use_sqlite else None
 )
 try:
+    structured_prototype_snap_worker = (
+        PrototypeSnapWorker(
+            attest_timeout_s=timeouts.prototype_snap_worker_attest_timeout_s(),
+            attest_many_timeout_s=timeouts.prototype_snap_worker_attest_many_timeout_s(),
+        )
+        if use_sqlite
+        else None
+    )
+except PrototypeSnapWorkerError as exc:
+    logger.warning(
+        "prototype snap worker unavailable: code=%s",
+        exc.code,
+    )
+    structured_prototype_snap_worker = None
+try:
     structured_prototype_runtime_worker = PrototypeRuntimeWorker() if use_sqlite else None
 except PrototypeRuntimeWorkerError as exc:
     logger.warning(
@@ -191,6 +210,7 @@ structured_prototype_service = (
     StructuredPrototypeService(
         store=structured_prototype_store,
         object_store=structured_prototype_object_store,
+        snap_attester=structured_prototype_snap_worker,
         runtime_worker=structured_prototype_runtime_worker,
         renderer_worker=structured_prototype_renderer_worker,
         artifact_store=structured_prototype_artifact_store,
@@ -671,6 +691,8 @@ if async_store is not None:
                 runtime_worker=structured_prototype_runtime_worker,
                 renderer=structured_prototype_renderer_worker,
                 artifact_store=structured_prototype_artifact_store,
+                source_control=git_service,
+                resource_cleaner=worktree_manager,
             )
 
 if (

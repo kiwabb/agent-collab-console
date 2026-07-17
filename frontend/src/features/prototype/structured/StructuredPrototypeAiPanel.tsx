@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Bot,
   Check,
@@ -22,10 +22,13 @@ interface Props {
   projectId: string;
   draft: StructuredPrototypeDraft;
   pageId: string;
-  selectedNodeId: string | null;
+  selectedNodeIds: readonly string[];
   viewport: "desktop" | "tablet" | "mobile";
   disabled: boolean;
-  onDraftApplied: (draft: StructuredPrototypeDraft) => Promise<void>;
+  onApplyStart: () => number | null;
+  onDraftApplied: (draft: StructuredPrototypeDraft, sessionId: number) => Promise<boolean>;
+  onApplyEnd: (sessionId: number) => void;
+  onMutatingChange: (mutating: boolean) => void;
 }
 
 function shortHash(value: string | null): string {
@@ -37,10 +40,13 @@ export function StructuredPrototypeAiPanel({
   projectId,
   draft,
   pageId,
-  selectedNodeId,
+  selectedNodeIds,
   viewport,
   disabled,
+  onApplyStart,
   onDraftApplied,
+  onApplyEnd,
+  onMutatingChange,
 }: Props) {
   const { t } = useI18n();
   const [content, setContent] = useState("");
@@ -48,10 +54,15 @@ export function StructuredPrototypeAiPanel({
     projectId,
     draft,
     pageId,
-    selectedNodeId,
+    selectedNodeIds,
     viewport,
+    onApplyStart,
     onDraftApplied,
+    onApplyEnd,
   });
+  useEffect(() => {
+    onMutatingChange(ai.mutating);
+  }, [ai.mutating, onMutatingChange]);
   const run = ai.snapshot?.latestRun ?? null;
   const active =
     run &&

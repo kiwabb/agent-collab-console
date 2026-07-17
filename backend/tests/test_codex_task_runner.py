@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import cast
 
 import pytest
 
-from app.application.codex_task_runner import CodexTaskRunner, TaskRunnerStore
+from app.application.codex_task_runner import (
+    CodexTaskExecutionTerminalEvidence,
+    CodexTaskRunner,
+    CodexTaskTerminalOutcomeError,
+    CodexTaskWireInputEvidence,
+    TaskRunnerStore,
+)
 from app.application.role_workflow_service import RoleWorkflowService
 from app.domain.models import (
     CodexIssue,
@@ -109,6 +117,9 @@ class _RunStore:
 
     async def load_codex_task(self, task_id: str) -> CodexTask | None:
         return self.task if self.task.id == task_id else None
+
+    async def load_execution_process(self, process_id: str) -> ExecutionProcess | None:
+        return self.processes.get(process_id)
 
     async def update_execution_process_status(
         self,
@@ -241,6 +252,229 @@ async def test_start_task_run_can_explicitly_wait_for_real_runtime(monkeypatch) 
     assert store.task.status == "done"
 
 
+@pytest.mark.asyncio
+async def test_generation_callbacks_capture_framed_wire_and_persisted_terminal_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = CodexTask(
+        id="task-instrumented",
+        session_id="workspace-1",
+        project_id="project-1",
+        title="Generate artifact",
+        prompt="Submit the staged artifact.\n",
+        role="prototype_ui_engineer",
+        executor="claude",
+        status="pending",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    store = _RunStore(task)
+    manager = _RealManager()
+
+    async def refresh(_: CodexTask) -> object:
+        process = next(iter(store.processes.values()))
+        process.input_tokens = 13
+        process.output_tokens = 8
+        process.cache_read_tokens = 5
+        process.total_cost_usd = 0.25
+        return None
+
+    runner = CodexTaskRunner(
+        codex_store=cast(TaskRunnerStore, store),
+        event_bus=_RunEventBus(),
+        process_manager_factory=lambda: manager,
+        mock_manager_cls=_UnrelatedMockManager,
+        refresh_task_result=refresh,
+    )
+
+    async def resolve_config(
+        _: CodexTask,
+        run_executor: str | None = None,
+        run_provider: str | None = None,
+        run_model: str | None = None,
+    ) -> tuple[str, str | None, str | None, dict[str, str] | None, list[str] | None, str]:
+        del run_executor, run_provider, run_model
+        return "claude", "anthropic", "claude-sonnet", None, None, "claude"
+
+    monkeypatch.setattr(runner, "_resolve_effective_config", resolve_config)
+    order: list[str] = []
+    wire_evidence: list[CodexTaskWireInputEvidence] = []
+    terminal_evidence: list[CodexTaskExecutionTerminalEvidence] = []
+
+    async def started(_: CodexTask, __: ExecutionProcess) -> None:
+        order.append("started")
+
+    async def wire_ready(evidence: CodexTaskWireInputEvidence) -> None:
+        assert manager.input_text is None
+        order.append("wire")
+        wire_evidence.append(evidence)
+
+    async def terminal(evidence: CodexTaskExecutionTerminalEvidence) -> None:
+        assert manager.input_text == task.prompt
+        order.append("terminal")
+        terminal_evidence.append(evidence)
+
+    process = await runner.start_task_run(
+        task,
+        wait_for_completion=True,
+        execution_started_callback=started,
+        wire_input_ready_callback=wire_ready,
+        execution_terminal_callback=terminal,
+    )
+
+    expected_wire = (
+        json.dumps(
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": task.prompt.rstrip("\n")}],
+                },
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode()
+    assert order == ["started", "wire", "terminal"]
+    assert wire_evidence[0].wire_input_hash == (
+        "sha256:" + hashlib.sha256(expected_wire).hexdigest()
+    )
+    assert wire_evidence[0].wire_input_size == len(expected_wire)
+    assert wire_evidence[0].framing == "claude-stream-json/user-message/v1"
+    assert wire_evidence[0].runtime_config_hash.startswith("sha256:")
+    assert terminal_evidence[0].process.id == process.id
+    assert terminal_evidence[0].process.status == "Completed"
+    assert terminal_evidence[0].process.exit_code == 0
+    assert terminal_evidence[0].process.input_tokens == 13
+    assert terminal_evidence[0].process.output_tokens == 8
+    assert terminal_evidence[0].process.cache_read_tokens == 5
+    assert terminal_evidence[0].process.total_cost_usd == 0.25
+
+
+@pytest.mark.asyncio
+async def test_wire_callback_failure_prevents_runtime_input_and_emits_failed_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = CodexTask(
+        id="task-wire-failure",
+        session_id="workspace-1",
+        title="Generate artifact",
+        prompt="Submit the staged artifact",
+        role="prototype_ui_engineer",
+        executor="claude",
+        status="pending",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    store = _RunStore(task)
+    manager = _RealManager()
+
+    async def refresh(_: CodexTask) -> object:
+        return None
+
+    runner = CodexTaskRunner(
+        codex_store=cast(TaskRunnerStore, store),
+        event_bus=_RunEventBus(),
+        process_manager_factory=lambda: manager,
+        mock_manager_cls=_UnrelatedMockManager,
+        refresh_task_result=refresh,
+    )
+
+    async def resolve_config(
+        _: CodexTask,
+        run_executor: str | None = None,
+        run_provider: str | None = None,
+        run_model: str | None = None,
+    ) -> tuple[str, str | None, str | None, dict[str, str] | None, list[str] | None, str]:
+        del run_executor, run_provider, run_model
+        return "claude", None, "claude-sonnet", None, None, "claude"
+
+    monkeypatch.setattr(runner, "_resolve_effective_config", resolve_config)
+    terminal_evidence: list[CodexTaskExecutionTerminalEvidence] = []
+
+    async def reject_wire(_: CodexTaskWireInputEvidence) -> None:
+        raise RuntimeError("operation store unavailable")
+
+    async def terminal(evidence: CodexTaskExecutionTerminalEvidence) -> None:
+        terminal_evidence.append(evidence)
+
+    with pytest.raises(RuntimeError, match="operation store unavailable"):
+        await runner.start_task_run(
+            task,
+            wait_for_completion=True,
+            wire_input_ready_callback=reject_wire,
+            execution_terminal_callback=terminal,
+        )
+
+    assert manager.input_text is None
+    assert store.task.status == "failed"
+    assert len(terminal_evidence) == 1
+    assert terminal_evidence[0].process.status == "Failed"
+    assert terminal_evidence[0].process.exit_code == -1
+
+
+@pytest.mark.asyncio
+async def test_terminal_outcome_refusal_rewrites_completed_process_to_persisted_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = CodexTask(
+        id="task-terminal-outcome-refusal",
+        session_id="workspace-1",
+        title="Generate artifact",
+        prompt="Submit the staged artifact",
+        role="prototype_ui_engineer",
+        executor="claude",
+        status="pending",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    store = _RunStore(task)
+    manager = _RealManager()
+
+    async def refresh(_: CodexTask) -> object:
+        return None
+
+    runner = CodexTaskRunner(
+        codex_store=cast(TaskRunnerStore, store),
+        event_bus=_RunEventBus(),
+        process_manager_factory=lambda: manager,
+        mock_manager_cls=_UnrelatedMockManager,
+        refresh_task_result=refresh,
+    )
+
+    async def resolve_config(
+        _: CodexTask,
+        run_executor: str | None = None,
+        run_provider: str | None = None,
+        run_model: str | None = None,
+    ) -> tuple[str, str | None, str | None, dict[str, str] | None, list[str] | None, str]:
+        del run_executor, run_provider, run_model
+        return "claude", None, "claude-sonnet", None, None, "claude"
+
+    monkeypatch.setattr(runner, "_resolve_effective_config", resolve_config)
+    terminal_statuses: list[str] = []
+
+    async def terminal(evidence: CodexTaskExecutionTerminalEvidence) -> None:
+        terminal_statuses.append(evidence.process.status)
+        if evidence.process.status == "Completed":
+            raise CodexTaskTerminalOutcomeError("MCP submission was not durably accepted")
+
+    with pytest.raises(CodexTaskTerminalOutcomeError, match="not durably accepted"):
+        await runner.start_task_run(
+            task,
+            wait_for_completion=True,
+            execution_terminal_callback=terminal,
+        )
+
+    assert terminal_statuses == ["Completed", "Failed"]
+    persisted = next(iter(store.processes.values()))
+    assert persisted.status == "Failed"
+    assert persisted.exit_code == -1
+    assert store.task.status == "failed"
+    assert store.task.result == "MCP submission was not durably accepted"
+
+
 class _ContextRunStore(_RunStore):
     def __init__(self, task: CodexTask, workspace: CodexSession, project: Project) -> None:
         super().__init__(task)
@@ -271,8 +505,7 @@ async def test_start_task_run_sends_ui_engineer_prompt_verbatim_without_team_not
         encoding="utf-8",
     )
     prompt = (
-        "Edit the structured prototype through its MCP boundary.\n"
-        "Submit exactly one typed outcome."
+        "Edit the structured prototype through its MCP boundary.\nSubmit exactly one typed outcome."
     )
     task = CodexTask(
         id="prototype-task-wire-prompt",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -90,3 +91,18 @@ def test_artifact_store_rejects_unregistered_paths(tmp_path: Path) -> None:
         store.read_file(descriptor, "../console.db")
 
     assert error.value.code == "render_artifact_path_invalid"
+
+
+def test_artifact_store_rejects_descriptor_with_wrong_file_count(tmp_path: Path) -> None:
+    store = PrototypeRenderArtifactStore(tmp_path / "managed-data")
+    descriptor = store.write_bundle(
+        project_id="project-1",
+        document_id="document-1",
+        artifact_id="artifact-1",
+        result=_render_result(),
+    )
+
+    with pytest.raises(PrototypeRenderArtifactStoreError) as error:
+        store.read_file(replace(descriptor, file_count=3), "index.html")
+
+    assert error.value.code == "render_artifact_identity_conflict"

@@ -48,7 +48,7 @@ export function StructuredPrototypeRoutePage({ projectId }: Props) {
         { label: t("project.nav.prototypes"), href: `/projects/${projectId}/prototypes` },
       ]}
     >
-      <ProjectShell projectId={projectId} project={project}>
+      <ProjectShell projectId={projectId} project={project} layout="workspace">
         {loadError && (
           <div
             className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-failed-ring bg-failed-bg px-4 py-3 text-sm text-status-failed"

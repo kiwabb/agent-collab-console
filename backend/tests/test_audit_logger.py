@@ -11,6 +11,7 @@ from typing import cast
 import pytest
 
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
+from app.application import audit
 from app.application.audit_logger import (
     AUDIT_CATEGORIES,
     AuditLogger,
@@ -174,6 +175,83 @@ async def test_list_filters_by_category_and_issue(audit_store):
 
 
 @pytest.mark.asyncio
+async def test_mcp_failure_evidence_is_bounded_redacted_and_durable(audit_store):
+    logger = _new_logger(audit_store)
+    sensitive_value = "capability-secret-987654321"
+    issues = (
+        *tuple(
+            audit.McpValidationIssueEvidence(
+                path=f"root/{sensitive_value}/{index}",
+                issue_type="missing",
+            )
+            for index in range(25)
+        ),
+        audit.McpValidationIssueEvidence(
+            path="root." + "x" * 300,
+            issue_type="missing",
+        ),
+        audit.McpValidationIssueEvidence(
+            path=sensitive_value,
+            issue_type="extra_forbidden",
+        ),
+        audit.McpValidationIssueEvidence(path="$", issue_type="value_error"),
+        audit.McpValidationIssueEvidence(
+            path="contractVersion",
+            issue_type="missing",
+        ),
+        *tuple(
+            audit.McpValidationIssueEvidence(
+                path=f"root.children.{index}",
+                issue_type="string_type",
+            )
+            for index in range(25)
+        ),
+    )
+
+    audit.record_mcp_call(
+        server_id="structured-prototype-generation",
+        tool_id="finalize_prototype_page",
+        scope_id="item-1",
+        task_id="task-1",
+        started=0.0,
+        is_error=True,
+        failure_evidence=audit.McpCallFailureEvidence(
+            code="schema_invalid",
+            issues=issues,
+        ),
+        sink=logger,
+    )
+    await logger.drain()
+
+    rows = await audit_store.list_audit_logs(limit=10)
+    assert len(rows) == 1
+    row = rows[0]
+    payload = json.loads(row.payload_json)
+    assert payload["failure"]["code"] == "schema_invalid"
+    assert payload["failure"]["issues"][0] == {
+        "path": "__extra__",
+        "type": "extra_forbidden",
+    }
+    assert payload["failure"]["issues"][1] == {"path": "$", "type": "value_error"}
+    assert payload["failure"]["issues"][2] == {
+        "path": "contractVersion",
+        "type": "missing",
+    }
+    assert payload["failure"]["issues"][-1] == {
+        "path": "root.children.16",
+        "type": "string_type",
+    }
+    assert len(payload["failure"]["issues"]) == 20
+    assert row.error == "MCP tool returned an error"
+    persisted = row.payload_json + (row.error or "")
+    assert sensitive_value not in persisted
+    assert "arguments" not in persisted
+    assert "payloadJson" not in persisted
+
+    await logger.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_bounded_queue_drops_when_full_without_raising():
     """PR2 backpressure: a full bounded queue drops (drop-newest) + counts,
     never raises. The worker is intentionally not started so the queue fills."""
@@ -244,6 +322,87 @@ def test_cli_spawn_audit_redacts_prompt(monkeypatch):
     assert payload["model"] == "claude-x"
     assert payload["pid"] == 4242
     assert captured[0][1]["task_id"] == "task-1"
+
+
+def test_cli_spawn_audit_redacts_generated_prototype_mcp_tokens(monkeypatch):
+    from app.application import audit_logger as audit_mod
+    from app.application.claude_process_runtime import ClaudeProcessRuntime
+    from app.application.structured_prototype_ai_mcp import PrototypeAiMcpService
+    from app.application.structured_prototype_generation_mcp import (
+        StructuredPrototypeGenerationMcpService,
+    )
+
+    generation_service = StructuredPrototypeGenerationMcpService()
+    generation_session = generation_service.open_session(
+        project_id="project-1",
+        job_id="job-1",
+        run_id="run-1",
+        item_id="item-1",
+        task_id="generation-task-1",
+        task_kind="generation_page",
+        context_object_hash="sha256:" + "a" * 64,
+    )
+    ai_service = PrototypeAiMcpService()
+    ai_session = ai_service.open_session(
+        project_id="project-1",
+        edit_run_id="edit-run-1",
+        task_id="ai-task-1",
+    )
+    endpoint = "http://127.0.0.1:8000/api/internal/prototype-mcp"
+    cases = (
+        (
+            "structured-prototype-generation",
+            generation_session.token,
+            generation_session.claude_config(endpoint),
+            "X-Prototype-Generation-Token",
+        ),
+        (
+            "structured-prototype-ai",
+            ai_session.token,
+            ai_session.claude_config(endpoint),
+            "X-Prototype-Ai-Token",
+        ),
+    )
+
+    captured = []
+    monkeypatch.setattr(
+        audit_mod.audit_logger,
+        "record",
+        lambda category, **kw: captured.append((category, kw)),
+    )
+
+    for _, _, mcp_config, _ in cases:
+        ClaudeProcessRuntime._audit_cli_spawn(
+            cmd=[
+                "claude",
+                "-p",
+                "--mcp-config",
+                mcp_config,
+                "--strict-mcp-config",
+            ],
+            cwd="/tmp/ws",
+            task_id="task-1",
+            workspace_id="ws-1",
+            provider="anthropic",
+            model="claude-x",
+            resume_session_id=None,
+            pid=4242,
+        )
+
+    assert len(captured) == len(cases)
+    for captured_row, (server_id, token, _, header_name) in zip(captured, cases, strict=True):
+        category, row = captured_row
+        assert category == "cli_spawn"
+        payload = row["payload"]
+        assert token not in json.dumps(payload, ensure_ascii=False)
+        argv = payload["argv"]
+        assert argv[2] == "--mcp-config"
+        assert argv[4] == "--strict-mcp-config"
+        redacted_config = json.loads(argv[3])
+        server = redacted_config["mcpServers"][server_id]
+        assert server["type"] == "http"
+        assert server["url"] == endpoint
+        assert server["headers"] == {header_name: "[REDACTED]"}
 
 
 def test_qa_command_exec_audit(monkeypatch):

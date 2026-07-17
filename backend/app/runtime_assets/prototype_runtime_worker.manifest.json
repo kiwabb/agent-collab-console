@@ -1,12 +1,12 @@
 {
   "manifestVersion": "prototype-runtime-worker-manifest/v1",
   "protocolVersion": "prototype-runtime-worker/v1",
-  "runtimeCoreVersion": "0.1.0-spike",
-  "runtimeCoreSourceHash": "sha256:a004c5b10a2e55c277debd7f615a0bf2666ba5c20c9ff50182881fedf309d204",
+  "runtimeCoreVersion": "0.2.0-spike",
+  "runtimeCoreSourceHash": "sha256:2ea354a6f2e11b0511fffb3da8ac434cd5ea4d5a70c77546ec5daf2d19f5097a",
   "stateMachineKernelVersion": "5.32.4",
   "bundleFile": "prototype_runtime_worker.mjs",
-  "bundleHash": "sha256:af0b11659d65caa6ee18edeb3ee8ed7c12ff5b36b3c84a00f36ca0cd68c3a6fa",
-  "bundleByteSize": 180729,
+  "bundleHash": "sha256:ab70d8562125b566f08e8abb560abd4696e4db938a0ab2a200452583eb9d1202",
+  "bundleByteSize": 185739,
   "buildTool": "esbuild@0.28.1",
   "target": "node20",
   "sources": [
@@ -17,18 +17,18 @@
     },
     {
       "path": "src/features/prototype/runtime/runtimeCore.ts",
-      "hash": "sha256:a53f49e776fabaa672bdb7bb37664fd9325493e6b85c0bafa58cc5bb243923f5",
-      "byteSize": 43347
+      "hash": "sha256:b45322efa696d9a7764156f0261f1a953d89df3cfbc3bf34172da9b1fe9f873c",
+      "byteSize": 46136
     },
     {
       "path": "src/features/prototype/runtime/runtimeInputCodec.ts",
-      "hash": "sha256:bbc7d24fac2c878456852d9a734087d716be21aedc920fb4b4b28d0867d6529a",
-      "byteSize": 22364
+      "hash": "sha256:3ae3e1714203f02cba674c770e89ea796159a53c0cb4ff5b444d1c9722844e55",
+      "byteSize": 24779
     },
     {
       "path": "src/features/prototype/runtime/runtimeStateCodec.ts",
-      "hash": "sha256:be39de4c6e44ee6768ea835a39f8abe6c9f2cf8d744241e97cb5e2480533c67e",
-      "byteSize": 9719
+      "hash": "sha256:ad67ad8a0a8606324cd18a5447d2cefdcd54522d965f4dd857bd5891f24d7ffd",
+      "byteSize": 11889
     },
     {
       "path": "src/features/prototype/runtime/runtimeWorkerProtocol.ts",
@@ -37,8 +37,8 @@
     },
     {
       "path": "src/features/prototype/runtime/types.ts",
-      "hash": "sha256:8cefc2a12bcf7bf3654cdf3cbedf0efa6ab3a09ed94555d8ebff81c79d533a15",
-      "byteSize": 9470
+      "hash": "sha256:61a97cb02c2fae26c43554d83085afc6b459a70df3bd0c048b57b327bb85c33b",
+      "byteSize": 9817
     },
     {
       "path": "src/lib/utils.tsx",

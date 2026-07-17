@@ -4,15 +4,20 @@ import asyncio
 import hashlib
 import json
 import re
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
 import aiosqlite
 
+from app.adapters.prototype_object_store import canonical_json_bytes
 from app.domain.structured_prototype import (
     PrototypeCheckpointRecord,
     PrototypeCommandAppendResult,
     PrototypeCommandBatchRecord,
+    PrototypeCommandHistory,
+    PrototypeCommandHistoryCheckpoint,
+    PrototypeCommandHistoryError,
     PrototypeDocumentRecord,
     PrototypeDraftRecord,
     PrototypeDraftRecoveryBundle,
@@ -26,9 +31,11 @@ from app.domain.structured_prototype import (
     PrototypeOperationCreateResult,
     PrototypeOperationEvent,
     PrototypeOperationKind,
+    PrototypeOperationObservabilitySnapshot,
     PrototypeOperationStatus,
     PrototypeOperationStep,
     PrototypeOperationStepStatus,
+    PrototypeProjectDeletionCounts,
     PrototypePublicationCompletionResult,
     PrototypePublicationFreezeResult,
     PrototypePublishedRecord,
@@ -40,6 +47,8 @@ from app.domain.structured_prototype import (
     PrototypeRuntimeEventBatchRecord,
     PrototypeRuntimeRecoveryBundle,
     PrototypeRuntimeSessionRecord,
+    PrototypeRuntimeSessionStatus,
+    advance_prototype_command_history,
 )
 from app.domain.structured_prototype_ai import (
     PrototypeAiEditRunRecord,
@@ -50,16 +59,82 @@ from app.domain.structured_prototype_ai import (
 )
 from app.domain.structured_prototype_generation import (
     PrototypeDocumentGenerationAcceptResult,
+    PrototypeDocumentGenerationConfirmResult,
     PrototypeDocumentGenerationCreateResult,
     PrototypeDocumentGenerationItemRecord,
     PrototypeDocumentGenerationJobRecord,
     PrototypeDocumentGenerationRunCreateResult,
     PrototypeDocumentGenerationRunRecord,
     PrototypeDocumentGenerationSnapshot,
+    PrototypeGenerationRestartOperationTarget,
+    PrototypeGenerationRestartRecoveryScope,
+    PrototypeGenerationSourceFileExclusionPolicy,
+    PrototypeGenerationSourcePolicy,
 )
 
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+GIT_OBJECT_ID_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 MAX_REPLAY_TAIL_BATCHES = 200
+STRUCTURED_PROTOTYPE_CHECKPOINT_HISTORY_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("history_snapshot_object_hash", "TEXT"),
+    ("history_snapshot_schema_version", "INTEGER"),
+    ("journal_prefix_hash", "TEXT"),
+)
+STRUCTURED_PROTOTYPE_GENERATION_SNAPSHOT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("source_policy", "TEXT"),
+    ("source_snapshot_object_hash", "TEXT"),
+    ("source_fingerprint", "TEXT"),
+    ("source_snapshot_ref", "TEXT"),
+    ("repository_object_format", "TEXT"),
+    ("worktree_base_commit", "TEXT"),
+    ("repository_project_prefix", "TEXT"),
+    ("repository_tree_object_id", "TEXT"),
+    ("working_tree_dirty", "INTEGER"),
+    ("excluded_tracked_change_count", "INTEGER"),
+    ("excluded_untracked_count", "INTEGER"),
+    ("source_file_exclusion_policy", "TEXT"),
+    ("excluded_sensitive_file_count", "INTEGER"),
+    ("excluded_status_hash", "TEXT"),
+)
+STRUCTURED_PROTOTYPE_RUNTIME_SESSION_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("replaces_session_id", "TEXT"),
+)
+STRUCTURED_PROTOTYPE_RUNTIME_SESSION_REPLACEMENT_INDEX_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prototype_runtime_sessions_replaces_session
+    ON prototype_runtime_sessions(replaces_session_id)
+    WHERE replaces_session_id IS NOT NULL
+"""
+
+
+def _hash_canonical_json(value: object) -> str:
+    return "sha256:" + hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def _initial_journal_prefix_hash(draft_id: str) -> str:
+    return _hash_canonical_json(
+        {
+            "journalPrefixContractVersion": 1,
+            "kind": "initial",
+            "draftId": draft_id,
+        }
+    )
+
+
+def _advance_journal_prefix_hash(previous_hash: str, batch: PrototypeCommandBatchRecord) -> str:
+    return _hash_canonical_json(
+        {
+            "journalPrefixContractVersion": 1,
+            "kind": "batch",
+            "previousPrefixHash": previous_hash,
+            "batchId": batch.id,
+            "baseSequenceNo": batch.base_sequence_no,
+            "resultSequenceNo": batch.result_sequence_no,
+            "envelopeHash": batch.command_batch_hash,
+            "baseDocumentHash": batch.base_document_hash,
+            "resultDocumentHash": batch.result_document_hash,
+        }
+    )
+
 
 STRUCTURED_PROTOTYPE_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS prototype_objects (
@@ -187,10 +262,22 @@ CREATE TABLE IF NOT EXISTS prototype_checkpoints (
     document_schema_version INTEGER NOT NULL CHECK (document_schema_version > 0),
     command_contract_version INTEGER NOT NULL CHECK (command_contract_version > 0),
     document_hash TEXT NOT NULL,
+    history_snapshot_object_hash TEXT,
+    history_snapshot_schema_version INTEGER CHECK (
+        history_snapshot_schema_version IS NULL OR history_snapshot_schema_version > 0
+    ),
+    journal_prefix_hash TEXT,
     created_by_operation_id TEXT NOT NULL,
     created_at TEXT NOT NULL,
     CHECK (document_hash = document_object_hash),
     CHECK ((draft_id IS NULL) <> (revision_id IS NULL)),
+    CHECK (
+        revision_id IS NOT NULL OR (
+            history_snapshot_object_hash IS NOT NULL
+            AND history_snapshot_schema_version IS NOT NULL
+            AND journal_prefix_hash IS NOT NULL
+        )
+    ),
     UNIQUE (draft_id, checkpoint_sequence_no),
     UNIQUE (revision_id),
     FOREIGN KEY (document_id) REFERENCES prototype_documents(id) ON DELETE RESTRICT,
@@ -321,6 +408,20 @@ CREATE TABLE IF NOT EXISTS prototype_document_generation_jobs (
     request_manifest_object_hash TEXT NOT NULL,
     request_hash TEXT NOT NULL,
     context_manifest_object_hash TEXT NOT NULL,
+    source_policy TEXT,
+    source_snapshot_object_hash TEXT,
+    source_fingerprint TEXT,
+    source_snapshot_ref TEXT,
+    repository_object_format TEXT,
+    worktree_base_commit TEXT,
+    repository_project_prefix TEXT,
+    repository_tree_object_id TEXT,
+    working_tree_dirty INTEGER CHECK (working_tree_dirty IN (0, 1)),
+    excluded_tracked_change_count INTEGER CHECK (excluded_tracked_change_count >= 0),
+    excluded_untracked_count INTEGER CHECK (excluded_untracked_count >= 0),
+    source_file_exclusion_policy TEXT,
+    excluded_sensitive_file_count INTEGER CHECK (excluded_sensitive_file_count >= 0),
+    excluded_status_hash TEXT,
     blueprint_object_hash TEXT,
     blueprint_version INTEGER NOT NULL CHECK (blueprint_version >= 0),
     blueprint_hash TEXT,
@@ -374,6 +475,7 @@ CREATE TABLE IF NOT EXISTS prototype_document_generation_run_items (
     kind TEXT NOT NULL CHECK (kind IN ('blueprint', 'foundation', 'page')),
     item_key TEXT NOT NULL,
     page_key TEXT,
+    item_ordinal INTEGER NOT NULL CHECK (item_ordinal >= 0),
     status TEXT NOT NULL CHECK (
         status IN ('pending', 'generating', 'validating', 'done', 'failed', 'interrupted')
     ),
@@ -395,6 +497,7 @@ CREATE TABLE IF NOT EXISTS prototype_document_generation_run_items (
     updated_at TEXT NOT NULL,
     completed_at TEXT,
     UNIQUE (run_id, kind, item_key),
+    UNIQUE (run_id, item_ordinal),
     FOREIGN KEY (job_id) REFERENCES prototype_document_generation_jobs(id) ON DELETE RESTRICT,
     FOREIGN KEY (run_id) REFERENCES prototype_document_generation_runs(id) ON DELETE RESTRICT,
     FOREIGN KEY (operation_id) REFERENCES prototype_operations(id) ON DELETE RESTRICT
@@ -526,6 +629,7 @@ CREATE TABLE IF NOT EXISTS prototype_runtime_sessions (
         allow_simulated_role_switch IN (0, 1)
     ),
     actor_subject_id TEXT,
+    replaces_session_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     completed_at TEXT,
@@ -695,6 +799,26 @@ def _required_sqlite_bool(value: object, field: str) -> bool:
     raise _corrupt(field)
 
 
+def _optional_sqlite_bool(value: object, field: str) -> bool | None:
+    if value is None:
+        return None
+    return _required_sqlite_bool(value, field)
+
+
+def _optional_non_negative_int(value: object, field: str) -> int | None:
+    if value is None:
+        return None
+    return _required_non_negative_int(value, field)
+
+
+def _optional_text(value: object, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise _corrupt(field)
+    return value
+
+
 def _required_hash(value: object, field: str) -> str:
     parsed = _required_str(value, field)
     if SHA256_RE.fullmatch(parsed) is None:
@@ -751,23 +875,49 @@ def _payload_type(value: object) -> PrototypeObjectPayloadType:
         value,
         (
             "prototype_document",
+            "prototype_command_history_checkpoint",
             "generation_request_manifest",
             "generation_context_manifest",
+            "generation_source_snapshot_manifest",
             "generation_blueprint",
             "generation_foundation",
             "generation_page",
             "ai_edit_context_manifest",
             "agent_submission",
+            "generation_evidence_manifest",
             "validation_report",
             "replay_manifest",
             "prototype_runtime_state",
             "runtime_transition_report",
             "runtime_replay_manifest",
+            "runtime_session_reset_manifest",
             "renderer_input_manifest",
             "renderer_output_manifest",
             "visual_preflight_report",
         ),
         "payload_type",
+    )
+
+
+def _generation_source_policy(value: object) -> PrototypeGenerationSourcePolicy | None:
+    if value is None:
+        return None
+    allowed: tuple[PrototypeGenerationSourcePolicy, ...] = ("committed_head_v1",)
+    return _literal(value, allowed, "generation_job.source_policy")
+
+
+def _generation_source_file_exclusion_policy(
+    value: object,
+) -> PrototypeGenerationSourceFileExclusionPolicy | None:
+    if value is None:
+        return None
+    allowed: tuple[PrototypeGenerationSourceFileExclusionPolicy, ...] = (
+        "dotenv_checkout_filter_v1",
+    )
+    return _literal(
+        value,
+        allowed,
+        "generation_job.source_file_exclusion_policy",
     )
 
 
@@ -819,6 +969,11 @@ class AsyncStructuredPrototypeStore:
     _GENERATION_JOB_COLUMNS = """
         id, project_id, client_request_id, status, operation_id,
         request_manifest_object_hash, request_hash, context_manifest_object_hash,
+        source_policy, source_snapshot_object_hash, source_fingerprint,
+        source_snapshot_ref, repository_object_format, worktree_base_commit,
+        repository_project_prefix, repository_tree_object_id, working_tree_dirty,
+        excluded_tracked_change_count, excluded_untracked_count,
+        source_file_exclusion_policy, excluded_sensitive_file_count, excluded_status_hash,
         blueprint_object_hash, blueprint_version, blueprint_hash,
         candidate_object_hash, candidate_document_hash, preview_render_run_id,
         preview_artifact_id, preview_renderer_version, preview_storage_key,
@@ -832,7 +987,7 @@ class AsyncStructuredPrototypeStore:
         updated_at, started_at, completed_at
     """
     _GENERATION_ITEM_COLUMNS = """
-        id, job_id, run_id, kind, item_key, page_key, status, phase,
+        id, job_id, run_id, kind, item_key, page_key, item_ordinal, status, phase,
         attempt, task_kind, operation_id, context_object_hash, submission_id,
         submission_request_hash, submission_normalized_fields_json,
         submission_accepted_at, output_object_hash,
@@ -866,6 +1021,13 @@ class AsyncStructuredPrototypeStore:
 
     @staticmethod
     async def _ensure_schema_columns(conn: aiosqlite.Connection) -> None:
+        async with conn.execute("PRAGMA table_info(prototype_checkpoints)") as cursor:
+            checkpoint_columns = {str(row[1]) for row in await cursor.fetchall()}
+        for name, declaration in STRUCTURED_PROTOTYPE_CHECKPOINT_HISTORY_COLUMNS:
+            if name not in checkpoint_columns:
+                await conn.execute(
+                    f"ALTER TABLE prototype_checkpoints ADD COLUMN {name} {declaration}"
+                )
         async with conn.execute("PRAGMA table_info(prototype_ai_edit_runs)") as cursor:
             columns = {str(row[1]) for row in await cursor.fetchall()}
         for name, declaration in (
@@ -880,6 +1042,12 @@ class AsyncStructuredPrototypeStore:
                 )
         async with conn.execute("PRAGMA table_info(prototype_document_generation_jobs)") as cursor:
             generation_columns = {str(row[1]) for row in await cursor.fetchall()}
+        for name, declaration in STRUCTURED_PROTOTYPE_GENERATION_SNAPSHOT_COLUMNS:
+            if name not in generation_columns:
+                await conn.execute(
+                    "ALTER TABLE prototype_document_generation_jobs "
+                    f"ADD COLUMN {name} {declaration}"
+                )
         for name in (
             "preview_renderer_version",
             "preview_storage_key",
@@ -891,6 +1059,14 @@ class AsyncStructuredPrototypeStore:
                 await conn.execute(
                     f"ALTER TABLE prototype_document_generation_jobs ADD COLUMN {name} TEXT"
                 )
+        async with conn.execute("PRAGMA table_info(prototype_runtime_sessions)") as cursor:
+            runtime_session_columns = {str(row[1]) for row in await cursor.fetchall()}
+        for name, declaration in STRUCTURED_PROTOTYPE_RUNTIME_SESSION_COLUMNS:
+            if name not in runtime_session_columns:
+                await conn.execute(
+                    f"ALTER TABLE prototype_runtime_sessions ADD COLUMN {name} {declaration}"
+                )
+        await conn.execute(STRUCTURED_PROTOTYPE_RUNTIME_SESSION_REPLACEMENT_INDEX_SQL)
         async with conn.execute(
             "PRAGMA table_info(prototype_document_generation_run_items)"
         ) as cursor:
@@ -900,6 +1076,26 @@ class AsyncStructuredPrototypeStore:
                 "ALTER TABLE prototype_document_generation_run_items "
                 "ADD COLUMN submission_normalized_fields_json TEXT NOT NULL DEFAULT '[]'"
             )
+        if "item_ordinal" not in generation_item_columns:
+            await conn.execute(
+                "ALTER TABLE prototype_document_generation_run_items "
+                "ADD COLUMN item_ordinal INTEGER NOT NULL DEFAULT 0"
+            )
+            await conn.execute(
+                """
+                UPDATE prototype_document_generation_run_items AS item
+                SET item_ordinal = (
+                    SELECT COUNT(*)
+                    FROM prototype_document_generation_run_items AS prior
+                    WHERE prior.run_id = item.run_id AND prior.rowid < item.rowid
+                )
+                """
+            )
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "prototype_generation_run_item_ordinal_uq "
+            "ON prototype_document_generation_run_items(run_id, item_ordinal)"
+        )
 
     async def create_operation(
         self,
@@ -937,6 +1133,88 @@ class AsyncStructuredPrototypeStore:
         conn = await self._get_conn()
         row = await self._load_operation_row(conn, operation_id)
         return self._operation_from_row(row) if row is not None else None
+
+    async def load_operation_by_request(
+        self,
+        project_id: str,
+        operation_kind: PrototypeOperationKind,
+        client_request_id: str,
+    ) -> PrototypeOperation | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_operation_by_request_row(
+            conn,
+            project_id,
+            operation_kind,
+            client_request_id,
+        )
+        return self._operation_from_row(row) if row is not None else None
+
+    async def load_operation_observability(
+        self,
+        operation_id: str,
+    ) -> PrototypeOperationObservabilitySnapshot | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN")
+            try:
+                operation_row = await self._load_operation_row(conn, operation_id)
+                if operation_row is None:
+                    await conn.commit()
+                    return None
+                operation = self._operation_from_row(operation_row)
+                async with conn.execute(
+                    """
+                    SELECT
+                        id, operation_id, parent_step_id, step_kind, step_ordinal,
+                        attempt, status, phase, input_manifest_hash, config_manifest_hash,
+                        output_manifest_hash, completion_evidence_kind,
+                        completion_evidence_ref, error_code, started_at, completed_at
+                    FROM prototype_operation_steps
+                    WHERE operation_id = ?
+                    ORDER BY step_ordinal, attempt
+                    """,
+                    (operation_id,),
+                ) as cursor:
+                    step_rows = await cursor.fetchall()
+                async with conn.execute(
+                    """
+                    SELECT
+                        operation_id, event_no, step_id, event_kind, status, phase,
+                        input_hash, output_hash, evidence_hash, error_code, occurred_at
+                    FROM prototype_operation_events
+                    WHERE operation_id = ?
+                    ORDER BY event_no
+                    """,
+                    (operation_id,),
+                ) as cursor:
+                    event_rows = await cursor.fetchall()
+                async with conn.execute(
+                    """
+                    SELECT
+                        id, operation_kind, project_id, resource_kind, resource_id,
+                        client_request_id, correlation_id, parent_operation_id, status,
+                        phase, attempt, request_manifest_hash, config_manifest_hash,
+                        result_manifest_hash, failure_evidence_hash, error_code,
+                        created_at, started_at, completed_at
+                    FROM prototype_operations
+                    WHERE parent_operation_id = ?
+                    ORDER BY created_at, id
+                    """,
+                    (operation_id,),
+                ) as cursor:
+                    child_rows = await cursor.fetchall()
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return PrototypeOperationObservabilitySnapshot(
+            operation=operation,
+            steps=tuple(self._operation_step_from_row(row) for row in step_rows),
+            events=tuple(self._operation_event_from_row(row) for row in event_rows),
+            child_operations=tuple(self._operation_from_row(row) for row in child_rows),
+        )
 
     async def list_operation_events(
         self,
@@ -993,7 +1271,7 @@ class AsyncStructuredPrototypeStore:
         self,
         *,
         job_operation: PrototypeOperation,
-        job_event: PrototypeOperationEvent,
+        job_event: PrototypeOperationEvent | None,
         item_operation: PrototypeOperation,
         item_event: PrototypeOperationEvent,
         job: PrototypeDocumentGenerationJobRecord,
@@ -1002,8 +1280,12 @@ class AsyncStructuredPrototypeStore:
         descriptors_and_references: tuple[
             tuple[PrototypeObjectDescriptor, PrototypeObjectReference], ...
         ],
+        operation_transitions: tuple[
+            tuple[PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent], ...
+        ] = (),
     ) -> PrototypeDocumentGenerationCreateResult:
-        self._validate_new_operation(job_operation, job_event)
+        if job_event is not None:
+            self._validate_new_operation(job_operation, job_event)
         self._validate_new_operation(item_operation, item_event)
         self._validate_generation_job_create(
             job_operation=job_operation,
@@ -1020,6 +1302,29 @@ class AsyncStructuredPrototypeStore:
                     "generation_object_identity_mismatch",
                     "generation job object reference does not match the new job",
                 )
+        source_references = tuple(
+            (descriptor, reference)
+            for descriptor, reference in descriptors_and_references
+            if reference.role == "source-snapshot-manifest"
+        )
+        if (
+            len(source_references) != 1
+            or source_references[0][0].content_hash != job.source_snapshot_object_hash
+            or source_references[0][1].content_hash != job.source_snapshot_object_hash
+            or source_references[0][1].payload_type != "generation_source_snapshot_manifest"
+        ):
+            raise StructuredPrototypeStoreError(
+                "generation_source_snapshot_missing",
+                "new generation job requires one registered source snapshot manifest",
+            )
+        allowed_transition_operation_ids = {job_operation.id, item_operation.id}
+        for operation, step, event in operation_transitions:
+            if operation.id not in allowed_transition_operation_ids:
+                raise StructuredPrototypeStoreError(
+                    "generation_evidence_identity_mismatch",
+                    "generation job transition belongs to an unrelated operation",
+                )
+            self._validate_operation_transition_payload(operation, step, event)
         await self.initialize()
         conn = await self._get_conn()
         async with self._transaction_lock:
@@ -1057,8 +1362,23 @@ class AsyncStructuredPrototypeStore:
                             "generation_job_conflict",
                             "project already has an open structured prototype generation job",
                         )
-                    await self._insert_operation(conn, job_operation)
-                    await self._insert_operation_event(conn, job_event)
+                    if job_event is None:
+                        existing_operation_row = await self._load_operation_row(
+                            conn,
+                            job_operation.id,
+                        )
+                        if existing_operation_row is None:
+                            raise StructuredPrototypeStoreError(
+                                "operation_missing",
+                                "pre-created generation root operation does not exist",
+                            )
+                        self._assert_idempotent_operation(
+                            self._operation_from_row(existing_operation_row),
+                            job_operation,
+                        )
+                    else:
+                        await self._insert_operation(conn, job_operation)
+                        await self._insert_operation_event(conn, job_event)
                     await self._insert_operation(conn, item_operation)
                     await self._insert_operation_event(conn, item_event)
                     for descriptor, reference in descriptors_and_references:
@@ -1067,6 +1387,8 @@ class AsyncStructuredPrototypeStore:
                     await self._insert_generation_job(conn, job)
                     await self._insert_generation_run(conn, run)
                     await self._insert_generation_item(conn, item)
+                    for operation, step, event in operation_transitions:
+                        await self._apply_operation_transition(conn, operation, step, event)
                     result = PrototypeDocumentGenerationCreateResult(
                         snapshot=PrototypeDocumentGenerationSnapshot(
                             job=job,
@@ -1113,11 +1435,137 @@ class AsyncStructuredPrototypeStore:
             return None
         return await self._load_generation_snapshot_tx(conn, str(row[0]))
 
+    async def list_generation_job_ids(self) -> tuple[str, ...]:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with conn.execute(
+            "SELECT id FROM prototype_document_generation_jobs ORDER BY id"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return tuple(_required_str(row[0], "generation_job.id") for row in rows)
+
+    async def bind_generation_item_execution_process(
+        self,
+        *,
+        item_id: str,
+        task_id: str,
+        execution_process_id: str,
+        bound_at: datetime,
+    ) -> PrototypeDocumentGenerationItemRecord:
+        _required_str(item_id, "generation_item.id")
+        _required_str(task_id, "generation_item.task_id")
+        _required_str(execution_process_id, "generation_item.execution_process_id")
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                item_row = await self._load_generation_item_row(conn, item_id)
+                if item_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "generation_item_missing",
+                        "structured prototype generation item does not exist",
+                    )
+                item = self._generation_item_from_row(item_row)
+                if item.status != "generating" or item.task_id != task_id:
+                    raise StructuredPrototypeStoreError(
+                        "generation_execution_identity_mismatch",
+                        "generation execution does not match the active item",
+                    )
+                if item.execution_process_id is not None:
+                    if item.execution_process_id != execution_process_id:
+                        raise StructuredPrototypeStoreError(
+                            "generation_execution_identity_mismatch",
+                            "generation item is already bound to another execution process",
+                        )
+                    await conn.commit()
+                    return item
+
+                operation_row = await self._load_operation_row(conn, item.operation_id)
+                if operation_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "operation_missing",
+                        "generation item operation does not exist",
+                    )
+                operation = self._operation_from_row(operation_row)
+                if (
+                    operation.status != "running"
+                    or operation.resource_kind != "generation_item"
+                    or operation.resource_id != item.id
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_execution_identity_mismatch",
+                        "generation item operation is not actively running",
+                    )
+                async with conn.execute(
+                    """
+                    SELECT
+                        id, operation_id, parent_step_id, step_kind, step_ordinal,
+                        attempt, status, phase, input_manifest_hash, config_manifest_hash,
+                        output_manifest_hash, completion_evidence_kind,
+                        completion_evidence_ref, error_code, started_at, completed_at
+                    FROM prototype_operation_steps
+                    WHERE operation_id = ? AND status = 'running'
+                    ORDER BY step_ordinal DESC, attempt DESC
+                    LIMIT 1
+                    """,
+                    (operation.id,),
+                ) as cursor:
+                    step_row = await cursor.fetchone()
+                if step_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "generation_evidence_missing",
+                        "generation execution has no active operation step",
+                    )
+                step = self._operation_step_from_row(step_row)
+                if step.step_kind != "claude_process_started":
+                    raise StructuredPrototypeStoreError(
+                        "generation_evidence_missing",
+                        "generation execution is not awaiting typed process-start evidence",
+                    )
+                cursor = await conn.execute(
+                    """
+                    UPDATE prototype_document_generation_run_items
+                    SET execution_process_id = ?, updated_at = ?
+                    WHERE id = ? AND status = 'generating' AND task_id = ?
+                      AND execution_process_id IS NULL
+                    """,
+                    (
+                        execution_process_id,
+                        bound_at.isoformat(),
+                        item.id,
+                        task_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "generation_execution_bind_conflict",
+                        "generation execution binding changed concurrently",
+                    )
+                updated_row = await self._load_generation_item_row(conn, item.id)
+                if updated_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "generation_item_missing",
+                        "generation item disappeared after execution binding",
+                    )
+                updated = self._generation_item_from_row(updated_row)
+            except StructuredPrototypeStoreError:
+                await conn.rollback()
+                raise
+            except aiosqlite.Error as exc:
+                await conn.rollback()
+                raise StructuredPrototypeStoreError(
+                    "generation_execution_bind_failed",
+                    "generation execution process could not be persisted",
+                ) from exc
+            await conn.commit()
+        return updated
+
     async def create_generation_run(
         self,
         *,
         operation: PrototypeOperation,
-        initial_event: PrototypeOperationEvent,
+        initial_event: PrototypeOperationEvent | None,
         job: PrototypeDocumentGenerationJobRecord,
         run: PrototypeDocumentGenerationRunRecord,
         item_operations: tuple[
@@ -1129,21 +1577,69 @@ class AsyncStructuredPrototypeStore:
             ...,
         ],
         expected_job_statuses: tuple[str, ...],
+        expected_blueprint_version: int,
+        expected_blueprint_hash: str,
         descriptors_and_references: tuple[
             tuple[PrototypeObjectDescriptor, PrototypeObjectReference], ...
         ] = (),
+        operation_transitions: tuple[
+            tuple[PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent], ...
+        ] = (),
     ) -> PrototypeDocumentGenerationRunCreateResult:
-        if not expected_job_statuses or not item_operations:
+        if (
+            not expected_job_statuses
+            or not item_operations
+            or expected_blueprint_version <= 0
+            or SHA256_RE.fullmatch(expected_blueprint_hash) is None
+        ):
             raise StructuredPrototypeStoreError(
                 "generation_run_invalid",
                 "generation run creation requires expected state and durable items",
             )
-        self._validate_new_operation(operation, initial_event)
-        items = tuple(item for item, _, _ in item_operations)
+        if (
+            job.blueprint_version != expected_blueprint_version
+            or job.blueprint_hash != expected_blueprint_hash
+        ):
+            raise StructuredPrototypeStoreError(
+                "blueprint_conflict",
+                "scheduled generation run does not match the expected blueprint",
+            )
+        if initial_event is None:
+            if (
+                operation.status != "running"
+                or operation.started_at is None
+                or operation.completed_at is not None
+                or operation.result_manifest_hash is not None
+                or operation.failure_evidence_hash is not None
+                or operation.error_code is not None
+            ):
+                raise StructuredPrototypeStoreError(
+                    "generation_run_invalid",
+                    "pre-created generation run operation must be actively running",
+                )
+        else:
+            self._validate_new_operation(operation, initial_event)
+        items = tuple(
+            sorted(
+                (item for item, _, _ in item_operations),
+                key=lambda item: item.item_ordinal,
+            )
+        )
         self._validate_generation_run_counts(run, items)
         self._validate_generation_run_create(operation, job, run, item_operations)
         for _, item_operation, item_event in item_operations:
             self._validate_new_operation(item_operation, item_event)
+        allowed_transition_operation_ids = {
+            operation.id,
+            *(item_operation.id for _, item_operation, _ in item_operations),
+        }
+        for transitioned_operation, step, event in operation_transitions:
+            if transitioned_operation.id not in allowed_transition_operation_ids:
+                raise StructuredPrototypeStoreError(
+                    "generation_evidence_identity_mismatch",
+                    "generation run transition belongs to an unrelated operation",
+                )
+            self._validate_operation_transition_payload(transitioned_operation, step, event)
         await self.initialize()
         conn = await self._get_conn()
         async with self._transaction_lock:
@@ -1156,10 +1652,28 @@ class AsyncStructuredPrototypeStore:
                         "structured prototype generation job does not exist",
                     )
                 current_job = self._generation_job_from_row(current_job_row)
+                if (
+                    current_job.blueprint_version != expected_blueprint_version
+                    or current_job.blueprint_hash != expected_blueprint_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "blueprint_conflict",
+                        "generation blueprint changed before scheduling",
+                    )
                 existing_run_row = await self._load_generation_run_row(conn, run.id)
                 if existing_run_row is not None:
                     existing_run = self._generation_run_from_row(existing_run_row)
-                    self._assert_generation_run_identity(existing_run, run)
+                    self._assert_generation_run_schedule_idempotent(existing_run, run)
+                    existing_operation_row = await self._load_operation_row(conn, operation.id)
+                    if existing_operation_row is None:
+                        raise StructuredPrototypeStoreError(
+                            "generation_run_corrupt",
+                            "generation run has no scheduling operation",
+                        )
+                    self._assert_idempotent_operation(
+                        self._operation_from_row(existing_operation_row),
+                        operation,
+                    )
                     snapshot = await self._load_generation_snapshot_tx(conn, job.id)
                     await conn.commit()
                     return PrototypeDocumentGenerationRunCreateResult(
@@ -1186,8 +1700,22 @@ class AsyncStructuredPrototypeStore:
                             "generation_object_identity_mismatch",
                             "generation run context owner does not match the scheduled records",
                         )
-                await self._insert_operation(conn, operation)
-                await self._insert_operation_event(conn, initial_event)
+                existing_operation_row = await self._load_operation_row(conn, operation.id)
+                if existing_operation_row is None:
+                    if initial_event is None:
+                        raise StructuredPrototypeStoreError(
+                            "generation_evidence_missing",
+                            "new generation run operation requires its queued event",
+                        )
+                    await self._insert_operation(conn, operation)
+                    await self._insert_operation_event(conn, initial_event)
+                else:
+                    existing_operation = self._operation_from_row(existing_operation_row)
+                    if initial_event is not None or existing_operation != operation:
+                        raise StructuredPrototypeStoreError(
+                            "generation_evidence_conflict",
+                            "pre-created generation run operation changed before scheduling",
+                        )
                 for descriptor, reference in descriptors_and_references:
                     await self._register_object_tx(conn, descriptor)
                     await self._insert_object_reference(conn, reference)
@@ -1197,6 +1725,13 @@ class AsyncStructuredPrototypeStore:
                     await self._insert_operation(conn, item_operation)
                     await self._insert_operation_event(conn, item_event)
                     await self._insert_generation_item(conn, item)
+                for transitioned_operation, step, event in operation_transitions:
+                    await self._apply_operation_transition(
+                        conn,
+                        transitioned_operation,
+                        step,
+                        event,
+                    )
             except (aiosqlite.Error, StructuredPrototypeStoreError):
                 await conn.rollback()
                 raise
@@ -1208,6 +1743,278 @@ class AsyncStructuredPrototypeStore:
                 items=items,
             ),
             created=True,
+        )
+
+    async def load_generation_confirm_result(
+        self,
+        *,
+        job_id: str,
+        client_request_id: str,
+        request_hash: str,
+        expected_operation_id: str,
+        expected_run_id: str,
+        expected_blueprint_hash: str,
+    ) -> PrototypeDocumentGenerationConfirmResult | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN")
+            try:
+                job_row = await self._load_generation_job_row(conn, job_id)
+                if job_row is None:
+                    await conn.commit()
+                    return None
+                job = self._generation_job_from_row(job_row)
+                operation_row = await self._load_operation_by_request_row(
+                    conn,
+                    job.project_id,
+                    "generation_job",
+                    client_request_id,
+                )
+                if operation_row is None:
+                    await conn.commit()
+                    return None
+                operation = self._operation_from_row(operation_row)
+                if (
+                    operation.id != expected_operation_id
+                    or operation.parent_operation_id != job.operation_id
+                    or operation.resource_kind != "generation_job"
+                    or operation.resource_id != job.id
+                    or operation.request_manifest_hash != request_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_confirm_idempotency_conflict",
+                        "generation blueprint confirmation was retried with different inputs",
+                    )
+                run_row = await self._load_generation_run_row(conn, expected_run_id)
+                if run_row is None:
+                    if operation.status in {"queued", "running"}:
+                        raise StructuredPrototypeStoreError(
+                            "generation_confirm_in_progress",
+                            "generation blueprint confirmation is still freezing its context",
+                        )
+                    if operation.status in {"failed", "interrupted", "cancelled"}:
+                        raise StructuredPrototypeStoreError(
+                            "generation_confirm_conflict",
+                            "generation blueprint confirmation is already terminal",
+                        )
+                    raise StructuredPrototypeStoreError(
+                        "generation_confirm_result_corrupt",
+                        "generation blueprint confirmation has no foundation run",
+                    )
+                run = self._generation_run_from_row(run_row)
+                async with conn.execute(
+                    """
+                    SELECT
+                        item.kind,
+                        item.item_key,
+                        item.page_key,
+                        item.status,
+                        operation.parent_operation_id
+                    FROM prototype_document_generation_run_items AS item
+                    JOIN prototype_operations AS operation ON operation.id = item.operation_id
+                    WHERE item.run_id = ?
+                    ORDER BY item.item_ordinal
+                    """,
+                    (run.id,),
+                ) as cursor:
+                    item_rows = list(await cursor.fetchall())
+                if (
+                    run.job_id != job.id
+                    or run.blueprint_hash != expected_blueprint_hash
+                    or job.blueprint_hash != expected_blueprint_hash
+                    or len(item_rows) != 1
+                    or str(item_rows[0][0]) != "foundation"
+                    or str(item_rows[0][1]) != "foundation"
+                    or item_rows[0][2] is not None
+                    or item_rows[0][4] != operation.id
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_confirm_result_corrupt",
+                        "generation blueprint confirmation lineage is inconsistent",
+                    )
+                if operation.status in {"queued", "running"}:
+                    raise StructuredPrototypeStoreError(
+                        "generation_confirm_in_progress",
+                        "generation blueprint confirmation is still in progress",
+                    )
+                if operation.status != "succeeded":
+                    raise StructuredPrototypeStoreError(
+                        "generation_confirm_conflict",
+                        "generation blueprint confirmation is already terminal",
+                    )
+                if (
+                    run.status != "completed"
+                    or str(item_rows[0][3]) != "done"
+                    or job.status == "awaiting_confirmation"
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_confirm_result_corrupt",
+                        "completed blueprint confirmation has inconsistent durable state",
+                    )
+                snapshot = await self._load_generation_snapshot_tx(conn, job.id)
+            except StructuredPrototypeStoreError:
+                await conn.rollback()
+                raise
+            except aiosqlite.Error as exc:
+                await conn.rollback()
+                raise StructuredPrototypeStoreError(
+                    "generation_confirm_result_unavailable",
+                    "generation blueprint confirmation result could not be loaded",
+                ) from exc
+            await conn.commit()
+        return PrototypeDocumentGenerationConfirmResult(
+            operation_id=operation.id,
+            correlation_id=operation.correlation_id,
+            snapshot=snapshot,
+        )
+
+    async def load_generation_accept_result(
+        self,
+        *,
+        job_id: str,
+        client_request_id: str,
+        request_hash: str,
+    ) -> PrototypeDocumentGenerationAcceptResult | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN")
+            try:
+                job_row = await self._load_generation_job_row(conn, job_id)
+                if job_row is None:
+                    await conn.commit()
+                    return None
+                job = self._generation_job_from_row(job_row)
+                operation_row = await self._load_operation_by_request_row(
+                    conn,
+                    job.project_id,
+                    "create_document",
+                    client_request_id,
+                )
+                if operation_row is None:
+                    await conn.commit()
+                    return None
+                operation = self._operation_from_row(operation_row)
+                if (
+                    operation.parent_operation_id != job.operation_id
+                    or operation.resource_kind != "document"
+                    or operation.request_manifest_hash != request_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_accept_idempotency_conflict",
+                        "generation accept request was retried with different inputs",
+                    )
+                if operation.status == "queued":
+                    await conn.commit()
+                    return None
+                if operation.status == "running":
+                    raise StructuredPrototypeStoreError(
+                        "generation_accept_in_progress",
+                        "generation accept request is still in progress",
+                    )
+                if operation.status != "succeeded":
+                    raise StructuredPrototypeStoreError(
+                        "generation_accept_conflict",
+                        "generation accept request is already terminal",
+                    )
+                if (
+                    job.status != "accepted"
+                    or job.document_id is None
+                    or operation.resource_id != job.document_id
+                    or operation.result_manifest_hash is None
+                    or job.replay_manifest_object_hash is None
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_accept_result_corrupt",
+                        "accepted generation result does not match its operation",
+                    )
+                root_operation_row = await self._load_operation_row(conn, job.operation_id)
+                if root_operation_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "generation_accept_result_corrupt",
+                        "accepted generation root operation is missing",
+                    )
+                root_operation = self._operation_from_row(root_operation_row)
+                if (
+                    root_operation.status != "succeeded"
+                    or root_operation.result_manifest_hash != job.replay_manifest_object_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_accept_result_corrupt",
+                        "accepted generation root replay identity is inconsistent",
+                    )
+                async with conn.execute(
+                    """
+                    SELECT 1
+                    FROM prototype_object_references
+                    WHERE project_id = ?
+                      AND owner_kind = 'replay_manifest'
+                      AND owner_id = ?
+                      AND role = 'operation-replay-manifest'
+                      AND content_hash = ?
+                      AND payload_type = 'replay_manifest'
+                      AND schema_version = 1
+                    LIMIT 1
+                    """,
+                    (
+                        job.project_id,
+                        operation.id,
+                        operation.result_manifest_hash,
+                    ),
+                ) as cursor:
+                    replay_reference_row = await cursor.fetchone()
+                if replay_reference_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "generation_accept_result_corrupt",
+                        "accepted generation operation replay reference is missing",
+                    )
+                document = await self._require_document(conn, job.document_id)
+                if document.active_draft_id is None:
+                    raise StructuredPrototypeStoreError(
+                        "generation_accept_result_corrupt",
+                        "accepted generation document has no active draft",
+                    )
+                draft = await self._require_draft(conn, document.active_draft_id)
+                if draft.latest_checkpoint_id is None:
+                    raise StructuredPrototypeStoreError(
+                        "generation_accept_result_corrupt",
+                        "accepted generation draft has no checkpoint",
+                    )
+                checkpoint = await self._require_checkpoint(conn, draft.latest_checkpoint_id)
+                if (
+                    document.project_id != job.project_id
+                    or draft.document_id != document.id
+                    or draft.head_document_hash != job.candidate_object_hash
+                    or checkpoint.document_id != document.id
+                    or checkpoint.draft_id != draft.id
+                    or checkpoint.checkpoint_kind != "generation_accept"
+                    or checkpoint.document_object_hash != job.candidate_object_hash
+                    or checkpoint.document_hash != job.candidate_object_hash
+                    or checkpoint.created_by_operation_id != operation.id
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_accept_result_corrupt",
+                        "accepted generation document lineage is inconsistent",
+                    )
+                snapshot = await self._load_generation_snapshot_tx(conn, job.id)
+            except StructuredPrototypeStoreError:
+                await conn.rollback()
+                raise
+            except aiosqlite.Error as exc:
+                await conn.rollback()
+                raise StructuredPrototypeStoreError(
+                    "generation_accept_result_unavailable",
+                    "generation accept result could not be loaded",
+                ) from exc
+            await conn.commit()
+        return PrototypeDocumentGenerationAcceptResult(
+            operation_id=operation.id,
+            correlation_id=operation.correlation_id,
+            snapshot=snapshot,
+            document=document,
+            draft=draft,
+            checkpoint=checkpoint,
         )
 
     async def transition_generation_records(
@@ -1236,6 +2043,7 @@ class AsyncStructuredPrototypeStore:
                 "generation_evidence_missing",
                 "generation transition requires a durable operation step and event",
             )
+        items = tuple(sorted(items, key=lambda item: item.item_ordinal))
         self._validate_generation_run_counts(run, items)
         await self.initialize()
         conn = await self._get_conn()
@@ -1268,6 +2076,82 @@ class AsyncStructuredPrototypeStore:
                 transition_operation_ids = {
                     operation.id for operation, _, _ in operation_transitions
                 }
+                item_operation_ids = {item.operation_id for item in items}
+                phase_operation_ids = {
+                    operation.id
+                    for operation, _, _ in operation_transitions
+                    if operation.operation_kind == "generation_job"
+                    and operation.project_id == job.project_id
+                    and operation.resource_kind == "generation_job"
+                    and operation.resource_id == job.id
+                    and operation.parent_operation_id == job.operation_id
+                }
+                replay_operation_ids = {
+                    job.operation_id,
+                    *item_operation_ids,
+                    *phase_operation_ids,
+                }
+                succeeded_operation_ids = {
+                    operation.id
+                    for operation, _, _ in operation_transitions
+                    if operation.status == "succeeded"
+                }
+                failed_operation_ids = {
+                    operation.id
+                    for operation, _, _ in operation_transitions
+                    if operation.status == "failed"
+                }
+                replay_reference_counts: dict[str, int] = {}
+                failure_reference_counts: dict[str, int] = {}
+                for _, reference in descriptors_and_references:
+                    if reference.owner_kind == "replay_manifest":
+                        if reference.owner_id not in replay_operation_ids:
+                            raise StructuredPrototypeStoreError(
+                                "generation_object_identity_mismatch",
+                                "generation transition replay owner does not match its records",
+                            )
+                        if reference.role not in {
+                            "operation-replay-manifest",
+                            "operation-failure-evidence",
+                        }:
+                            raise StructuredPrototypeStoreError(
+                                "generation_replay_manifest_identity_mismatch",
+                                "generation operation evidence role is unsupported",
+                            )
+                        if reference.role == "operation-replay-manifest":
+                            replay_reference_counts[reference.owner_id] = (
+                                replay_reference_counts.get(reference.owner_id, 0) + 1
+                            )
+                        elif reference.role == "operation-failure-evidence":
+                            failure_reference_counts[reference.owner_id] = (
+                                failure_reference_counts.get(reference.owner_id, 0) + 1
+                            )
+                registered_replay_operation_ids = set(replay_reference_counts)
+                if registered_replay_operation_ids - succeeded_operation_ids:
+                    raise StructuredPrototypeStoreError(
+                        "generation_replay_manifest_identity_mismatch",
+                        "generation replay manifest cannot seal a nonterminal operation",
+                    )
+                if succeeded_operation_ids - registered_replay_operation_ids or any(
+                    count != 1 for count in replay_reference_counts.values()
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_replay_manifest_registration_required",
+                        "every successful generation operation requires exactly one replay manifest",
+                    )
+                registered_failure_operation_ids = set(failure_reference_counts)
+                if registered_failure_operation_ids - failed_operation_ids:
+                    raise StructuredPrototypeStoreError(
+                        "generation_failure_evidence_invalid",
+                        "generation failure evidence cannot seal a nonfailed operation",
+                    )
+                if failed_operation_ids - registered_failure_operation_ids or any(
+                    count != 1 for count in failure_reference_counts.values()
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_failure_evidence_required",
+                        "every failed generation operation requires exactly one evidence object",
+                    )
                 if (
                     current_job.status != job.status
                     and job.operation_id not in transition_operation_ids
@@ -1287,7 +2171,9 @@ class AsyncStructuredPrototypeStore:
                     if current_item.status not in expected_item_statuses:
                         raise StructuredPrototypeStoreError(
                             "generation_item_conflict",
-                            "structured prototype generation item status changed",
+                            "structured prototype generation item status changed: "
+                            f"item_id={item.id} current={current_item.status} "
+                            f"expected={','.join(expected_item_statuses)}",
                         )
                     self._assert_generation_item_identity(current_item, item)
                     self._assert_generation_item_status_transition(
@@ -1321,13 +2207,78 @@ class AsyncStructuredPrototypeStore:
                         )
                         or (
                             reference.owner_kind == "replay_manifest"
-                            and reference.owner_id != job.operation_id
+                            and reference.owner_id not in replay_operation_ids
                         )
                     ):
                         raise StructuredPrototypeStoreError(
                             "generation_object_identity_mismatch",
                             "generation transition object owner does not match its records",
                         )
+                    if reference.owner_kind == "replay_manifest":
+                        terminal_transition = next(
+                            (
+                                transition
+                                for transition in operation_transitions
+                                if transition[0].id == reference.owner_id
+                            ),
+                            None,
+                        )
+                        if terminal_transition is None:
+                            raise StructuredPrototypeStoreError(
+                                "generation_replay_manifest_identity_mismatch",
+                                "generation evidence has no owning terminal transition",
+                            )
+                        if reference.role == "operation-replay-manifest":
+                            if (
+                                terminal_transition[0].status != "succeeded"
+                                or terminal_transition[0].result_manifest_hash
+                                != descriptor.content_hash
+                                or reference.payload_type != "replay_manifest"
+                                or reference.schema_version != 1
+                            ):
+                                raise StructuredPrototypeStoreError(
+                                    "generation_replay_manifest_identity_mismatch",
+                                    "generation replay manifest does not seal its owning operation",
+                                )
+                            self._validate_operation_transition_payload(*terminal_transition)
+                        elif reference.role == "operation-failure-evidence":
+                            self._validate_generation_failure_evidence_registration(
+                                descriptor=descriptor,
+                                reference=reference,
+                                operation=terminal_transition[0],
+                                step=terminal_transition[1],
+                                event=terminal_transition[2],
+                            )
+                        else:
+                            raise StructuredPrototypeStoreError(
+                                "generation_replay_manifest_identity_mismatch",
+                                "generation operation evidence role is unsupported",
+                            )
+                        async with conn.execute(
+                            """
+                            SELECT COUNT(*)
+                            FROM prototype_object_references
+                            WHERE project_id = ?
+                              AND owner_kind = 'replay_manifest'
+                              AND owner_id = ?
+                            """,
+                            (job.project_id, reference.owner_id),
+                        ) as cursor:
+                            existing_replay_row = await cursor.fetchone()
+                        if existing_replay_row is None:
+                            raise StructuredPrototypeStoreError(
+                                "generation_replay_manifest_identity_mismatch",
+                                "generation replay ownership could not be verified",
+                            )
+                        existing_replay_count = _required_non_negative_int(
+                            existing_replay_row[0],
+                            "generation_replay_manifest.reference_count",
+                        )
+                        if existing_replay_count != 0:
+                            raise StructuredPrototypeStoreError(
+                                "generation_replay_manifest_identity_mismatch",
+                                "generation operation already owns replay manifest evidence",
+                            )
                     await self._register_object_tx(conn, descriptor)
                     await self._insert_object_reference(conn, reference)
                 for operation, step, event in operation_transitions:
@@ -1342,74 +2293,150 @@ class AsyncStructuredPrototypeStore:
             await conn.commit()
         return PrototypeDocumentGenerationSnapshot(job=job, latest_run=run, items=items)
 
-    async def interrupt_active_generation_jobs(self, interrupted_at: datetime) -> int:
+    async def load_generation_restart_recovery_scope(
+        self,
+    ) -> PrototypeGenerationRestartRecoveryScope:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN")
+            try:
+                scope = await self._load_generation_restart_recovery_scope_tx(conn)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return scope
+
+    async def interrupt_active_generation_jobs(
+        self,
+        *,
+        expected_scope_fingerprint: str,
+        descriptors_and_references: tuple[
+            tuple[PrototypeObjectDescriptor, PrototypeObjectReference], ...
+        ],
+        interrupted_at: datetime,
+    ) -> int:
+        _required_hash(expected_scope_fingerprint, "generation_recovery.scope_fingerprint")
         await self.initialize()
         conn = await self._get_conn()
         async with self._transaction_lock:
             await conn.execute("BEGIN IMMEDIATE")
             try:
-                async with conn.execute(
-                    """
-                    SELECT id, operation_id
-                    FROM prototype_document_generation_jobs
-                    WHERE status IN (
-                        'queued', 'planning', 'generating', 'assembling',
-                        'validating', 'rendering_preview'
+                scope = await self._load_generation_restart_recovery_scope_tx(conn)
+                if scope.fingerprint != expected_scope_fingerprint:
+                    raise StructuredPrototypeStoreError(
+                        "generation_recovery_conflict",
+                        "structured prototype generation changed before restart recovery",
                     )
-                    """
-                ) as cursor:
-                    jobs = await cursor.fetchall()
-                async with conn.execute(
-                    """
-                    SELECT id, operation_id
-                    FROM prototype_document_generation_run_items
-                    WHERE status IN ('pending', 'generating', 'validating')
-                      AND job_id IN (
-                          SELECT id FROM prototype_document_generation_jobs
-                          WHERE status IN (
-                              'queued', 'planning', 'generating', 'assembling',
-                              'validating', 'rendering_preview'
-                          )
-                      )
-                    """
-                ) as cursor:
-                    items = await cursor.fetchall()
+                targets_by_id = {target.operation.id: target for target in scope.operations}
+                evidence_by_operation_id: dict[
+                    str,
+                    tuple[PrototypeObjectDescriptor, PrototypeObjectReference],
+                ] = {}
+                for descriptor, reference in descriptors_and_references:
+                    self._validate_registration(descriptor, reference)
+                    if (
+                        reference.owner_kind != "replay_manifest"
+                        or reference.owner_id not in targets_by_id
+                        or reference.role != "operation-interruption-evidence"
+                        or reference.payload_type != "generation_evidence_manifest"
+                        or reference.schema_version != 1
+                        or descriptor.project_id
+                        != targets_by_id[reference.owner_id].operation.project_id
+                        or reference.owner_id in evidence_by_operation_id
+                    ):
+                        raise StructuredPrototypeStoreError(
+                            "generation_recovery_evidence_invalid",
+                            "generation restart evidence does not match its active operation",
+                        )
+                    evidence_by_operation_id[reference.owner_id] = (descriptor, reference)
+                if set(evidence_by_operation_id) != set(targets_by_id):
+                    raise StructuredPrototypeStoreError(
+                        "generation_recovery_evidence_missing",
+                        "generation restart recovery requires evidence for every active operation",
+                    )
+                for descriptor, reference in evidence_by_operation_id.values():
+                    async with conn.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM prototype_object_references
+                        WHERE project_id = ?
+                          AND owner_kind = 'replay_manifest'
+                          AND owner_id = ?
+                        """,
+                        (reference.project_id, reference.owner_id),
+                    ) as cursor:
+                        existing_row = await cursor.fetchone()
+                    if (
+                        existing_row is None
+                        or _required_non_negative_int(
+                            existing_row[0],
+                            "generation_recovery_evidence.reference_count",
+                        )
+                        != 0
+                    ):
+                        raise StructuredPrototypeStoreError(
+                            "generation_recovery_evidence_invalid",
+                            "generation operation already owns terminal evidence",
+                        )
+                    await self._register_object_tx(conn, descriptor)
+                    await self._insert_object_reference(conn, reference)
+                for target in scope.operations:
+                    descriptor, _ = evidence_by_operation_id[target.operation.id]
+                    await self._interrupt_generation_operation(
+                        conn,
+                        target,
+                        evidence_hash=descriptor.content_hash,
+                        interrupted_at=interrupted_at,
+                    )
+
                 timestamp = interrupted_at.isoformat()
-                await conn.execute(
+                item_cursor = await conn.execute(
                     """
                     UPDATE prototype_document_generation_run_items
-                    SET status = 'interrupted', phase = 'interrupted',
+                    SET status = 'interrupted', phase = 'service_restart_recovery',
                         error_code = 'restart_interrupted',
                         error_message = 'generation item was interrupted by backend restart',
                         updated_at = ?, completed_at = ?
                     WHERE status IN ('pending', 'generating', 'validating')
-                      AND job_id IN (
-                          SELECT id FROM prototype_document_generation_jobs
-                          WHERE status IN (
-                              'queued', 'planning', 'generating', 'assembling',
-                              'validating', 'rendering_preview'
-                          )
-                      )
                     """,
                     (timestamp, timestamp),
                 )
-                await conn.execute(
+                if item_cursor.rowcount != scope.active_item_count:
+                    raise StructuredPrototypeStoreError(
+                        "generation_recovery_conflict",
+                        "generation restart item scope changed during recovery",
+                    )
+                run_cursor = await conn.execute(
                     """
-                    UPDATE prototype_document_generation_runs
+                    UPDATE prototype_document_generation_runs AS run
                     SET status = 'interrupted', error_code = 'restart_interrupted',
                         error_message = 'generation run was interrupted by backend restart',
+                        processed = (
+                            SELECT COUNT(*) FROM prototype_document_generation_run_items AS item
+                            WHERE item.run_id = run.id
+                              AND item.status IN ('done', 'failed', 'interrupted')
+                        ),
+                        succeeded = (
+                            SELECT COUNT(*) FROM prototype_document_generation_run_items AS item
+                            WHERE item.run_id = run.id AND item.status = 'done'
+                        ),
+                        failed = (
+                            SELECT COUNT(*) FROM prototype_document_generation_run_items AS item
+                            WHERE item.run_id = run.id
+                              AND item.status IN ('failed', 'interrupted')
+                        ),
                         running = 0, pending = 0, updated_at = ?, completed_at = ?
                     WHERE status IN ('queued', 'running')
-                      AND job_id IN (
-                          SELECT id FROM prototype_document_generation_jobs
-                          WHERE status IN (
-                              'queued', 'planning', 'generating', 'assembling',
-                              'validating', 'rendering_preview'
-                          )
-                      )
                     """,
                     (timestamp, timestamp),
                 )
+                if run_cursor.rowcount != scope.active_run_count:
+                    raise StructuredPrototypeStoreError(
+                        "generation_recovery_conflict",
+                        "generation restart run scope changed during recovery",
+                    )
                 job_cursor = await conn.execute(
                     """
                     UPDATE prototype_document_generation_jobs
@@ -1423,43 +2450,61 @@ class AsyncStructuredPrototypeStore:
                     """,
                     (timestamp, timestamp),
                 )
-                for operation_id in [str(row[1]) for row in (*jobs, *items)]:
-                    await self._interrupt_generation_operation(conn, operation_id, interrupted_at)
+                if job_cursor.rowcount != scope.active_job_count:
+                    raise StructuredPrototypeStoreError(
+                        "generation_recovery_conflict",
+                        "generation restart job scope changed during recovery",
+                    )
+                remaining = await self._load_generation_restart_recovery_scope_tx(conn)
+                if (
+                    remaining.operations
+                    or remaining.active_job_count
+                    or remaining.active_run_count
+                    or remaining.active_item_count
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_recovery_incomplete",
+                        "generation restart recovery left active durable state",
+                    )
             except (aiosqlite.Error, StructuredPrototypeStoreError):
                 await conn.rollback()
                 raise
             await conn.commit()
-        return int(job_cursor.rowcount)
+        return scope.affected_root_count
 
     async def accept_generation_candidate(
         self,
         *,
         descriptor: PrototypeObjectDescriptor,
         checkpoint_reference: PrototypeObjectReference,
-        replay_descriptor: PrototypeObjectDescriptor,
-        replay_references: tuple[PrototypeObjectReference, ...],
+        history_descriptor: PrototypeObjectDescriptor,
+        history_reference: PrototypeObjectReference,
+        history_checkpoint: PrototypeCommandHistoryCheckpoint,
+        accept_replay_descriptor: PrototypeObjectDescriptor,
+        accept_replay_reference: PrototypeObjectReference,
         job: PrototypeDocumentGenerationJobRecord,
         document: PrototypeDocumentRecord,
         draft: PrototypeDraftRecord,
         checkpoint: PrototypeCheckpointRecord,
+        expected_candidate_object_hash: str,
+        expected_preview_output_hash: str,
+        expected_source_fingerprint: str,
         completed_transition: tuple[
-            PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent
-        ],
-        job_completion_transition: tuple[
             PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent
         ],
     ) -> PrototypeDocumentGenerationAcceptResult:
         completed_operation, completed_step, completed_event = completed_transition
-        job_operation, job_step, job_event = job_completion_transition
         self._validate_operation_transition_payload(
             completed_operation,
             completed_step,
             completed_event,
         )
-        self._validate_operation_transition_payload(job_operation, job_step, job_event)
         self._validate_initial_checkpoint(
             descriptor=descriptor,
             reference=checkpoint_reference,
+            history_descriptor=history_descriptor,
+            history_reference=history_reference,
+            history_checkpoint=history_checkpoint,
             document=document,
             draft=draft,
             checkpoint=checkpoint,
@@ -1467,36 +2512,26 @@ class AsyncStructuredPrototypeStore:
             completion_step=completed_step,
             completion_event=completed_event,
         )
-        if len(replay_references) != 2:
-            raise StructuredPrototypeStoreError(
-                "generation_accept_identity_mismatch",
-                "generation accept requires both operation replay references",
-            )
-        for replay_reference in replay_references:
-            self._validate_registration(replay_descriptor, replay_reference)
+        self._validate_replay_manifest_registration(
+            descriptor=accept_replay_descriptor,
+            reference=accept_replay_reference,
+            operation=completed_operation,
+            step=completed_step,
+            event=completed_event,
+        )
         if (
-            any(
-                reference.content_hash != replay_descriptor.content_hash
-                or reference.owner_kind != "replay_manifest"
-                or reference.payload_type != "replay_manifest"
-                for reference in replay_references
-            )
-            or {reference.owner_id for reference in replay_references}
-            != {completed_operation.id, job.operation_id}
-            or job.status != "accepted"
+            job.status != "accepted"
             or job.document_id != document.id
             or job.completed_at is None
-            or job.candidate_object_hash != descriptor.content_hash
+            or descriptor.content_hash != expected_candidate_object_hash
+            or job.candidate_object_hash != expected_candidate_object_hash
             or job.candidate_document_hash != descriptor.content_hash
-            or job.replay_manifest_object_hash != replay_descriptor.content_hash
+            or job.preview_output_hash != expected_preview_output_hash
+            or job.source_fingerprint != expected_source_fingerprint
+            or job.replay_manifest_object_hash is None
             or completed_operation.parent_operation_id != job.operation_id
             or completed_operation.operation_kind != "create_document"
-            or completed_operation.result_manifest_hash != replay_descriptor.content_hash
-            or job_operation.id != job.operation_id
-            or job_operation.status != "succeeded"
-            or job_operation.result_manifest_hash != replay_descriptor.content_hash
-            or job_step.status != "succeeded"
-            or job_step.completion_evidence_ref != replay_descriptor.content_hash
+            or completed_operation.result_manifest_hash != accept_replay_descriptor.content_hash
         ):
             raise StructuredPrototypeStoreError(
                 "generation_accept_identity_mismatch",
@@ -1522,15 +2557,43 @@ class AsyncStructuredPrototypeStore:
                 self._assert_generation_job_identity(current_job, job)
                 self._assert_generation_job_status_transition(current_job.status, job.status)
                 if (
-                    current_job.candidate_object_hash != descriptor.content_hash
+                    current_job.candidate_object_hash != expected_candidate_object_hash
                     or current_job.preview_artifact_id != job.preview_artifact_id
-                    or current_job.preview_output_hash != job.preview_output_hash
+                    or current_job.preview_output_hash != expected_preview_output_hash
+                    or current_job.source_fingerprint != expected_source_fingerprint
                 ):
                     raise StructuredPrototypeStoreError(
                         "generation_candidate_conflict",
                         "generation candidate or preview changed before accept",
                     )
+                root_operation_row = await self._load_operation_row(conn, job.operation_id)
+                if root_operation_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "generation_evidence_conflict",
+                        "generation root operation is missing before accept",
+                    )
+                root_operation = self._operation_from_row(root_operation_row)
+                if (
+                    root_operation.status != "succeeded"
+                    or root_operation.result_manifest_hash
+                    != current_job.replay_manifest_object_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_evidence_conflict",
+                        "generation root replay evidence is not terminal before accept",
+                    )
+                current_snapshot = await self._load_generation_snapshot_tx(conn, job.id)
+                if (
+                    current_snapshot.latest_run is None
+                    or current_snapshot.latest_run.status != "completed"
+                    or any(item.status != "done" for item in current_snapshot.items)
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_evidence_conflict",
+                        "generation candidate evidence is not terminal before accept",
+                    )
                 await self._register_object_tx(conn, descriptor)
+                await self._register_object_tx(conn, history_descriptor)
                 await conn.execute(
                     """
                     INSERT INTO prototype_documents (
@@ -1559,6 +2622,7 @@ class AsyncStructuredPrototypeStore:
                 )
                 await self._insert_checkpoint(conn, checkpoint)
                 await self._insert_object_reference(conn, checkpoint_reference)
+                await self._insert_object_reference(conn, history_reference)
                 await conn.execute(
                     "UPDATE prototype_documents SET active_draft_id = ? WHERE id = ?",
                     (draft.id, document.id),
@@ -1567,9 +2631,8 @@ class AsyncStructuredPrototypeStore:
                     "UPDATE prototype_drafts SET latest_checkpoint_id = ? WHERE id = ?",
                     (checkpoint.id, draft.id),
                 )
-                await self._register_object_tx(conn, replay_descriptor)
-                for replay_reference in replay_references:
-                    await self._insert_object_reference(conn, replay_reference)
+                await self._register_object_tx(conn, accept_replay_descriptor)
+                await self._insert_object_reference(conn, accept_replay_reference)
                 await self._update_generation_job(conn, job)
                 await self._apply_operation_transition(
                     conn,
@@ -1577,13 +2640,14 @@ class AsyncStructuredPrototypeStore:
                     completed_step,
                     completed_event,
                 )
-                await self._apply_operation_transition(conn, job_operation, job_step, job_event)
                 snapshot = await self._load_generation_snapshot_tx(conn, job.id)
             except (aiosqlite.Error, StructuredPrototypeStoreError):
                 await conn.rollback()
                 raise
             await conn.commit()
         return PrototypeDocumentGenerationAcceptResult(
+            operation_id=completed_operation.id,
+            correlation_id=completed_operation.correlation_id,
             snapshot=snapshot,
             document=document,
             draft=draft,
@@ -1623,6 +2687,306 @@ class AsyncStructuredPrototypeStore:
                 "current structured prototype document disappeared during load",
             )
         return self._document_from_row(document_row)
+
+    async def delete_project_prototype(
+        self,
+        *,
+        project_id: str,
+        deletion_operation_id: str,
+        completed_operation: PrototypeOperation,
+        completion_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
+    ) -> PrototypeProjectDeletionCounts:
+        self._validate_operation_transition_payload(
+            completed_operation,
+            completion_step,
+            completion_event,
+        )
+        if (
+            completed_operation.id != deletion_operation_id
+            or completed_operation.operation_kind != "delete_project_prototype"
+            or completed_operation.project_id != project_id
+            or completed_operation.resource_kind != "project_prototype"
+            or completed_operation.resource_id != project_id
+            or completed_operation.status != "succeeded"
+            or completion_step.completion_evidence_kind != "project_prototype_deleted"
+            or completion_step.completion_evidence_ref != project_id
+        ):
+            raise StructuredPrototypeStoreError(
+                "prototype_delete_identity_mismatch",
+                "prototype deletion operation identity is inconsistent",
+            )
+        self._validate_replay_manifest_registration(
+            descriptor=replay_descriptor,
+            reference=replay_reference,
+            operation=completed_operation,
+            step=completion_step,
+            event=completion_event,
+        )
+
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                await conn.execute("PRAGMA defer_foreign_keys = ON")
+                operation_row = await self._load_operation_row(conn, deletion_operation_id)
+                if operation_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "operation_missing",
+                        "prototype deletion operation does not exist",
+                    )
+                current_operation = self._operation_from_row(operation_row)
+                if (
+                    current_operation.operation_kind != "delete_project_prototype"
+                    or current_operation.project_id != project_id
+                    or current_operation.status != "running"
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "prototype_delete_conflict",
+                        "prototype deletion operation is not running for this project",
+                    )
+
+                async with conn.execute(
+                    """
+                    SELECT operation.id
+                    FROM prototype_operations AS operation
+                    LEFT JOIN prototype_document_generation_jobs AS generation_job
+                      ON generation_job.operation_id = operation.id
+                     AND generation_job.project_id = operation.project_id
+                    WHERE operation.project_id = ? AND operation.id <> ?
+                      AND operation.status IN ('queued', 'running')
+                      AND NOT (
+                          operation.operation_kind = 'generation_job'
+                          AND generation_job.status IN ('awaiting_confirmation', 'ready')
+                      )
+                    LIMIT 1
+                    """,
+                    (project_id, deletion_operation_id),
+                ) as cursor:
+                    busy_row = await cursor.fetchone()
+                if busy_row is not None:
+                    raise StructuredPrototypeStoreError(
+                        "prototype_busy",
+                        "prototype cannot be deleted while another prototype operation is active",
+                    )
+
+                async with conn.execute(
+                    "SELECT COUNT(*) FROM prototype_documents WHERE project_id = ?",
+                    (project_id,),
+                ) as cursor:
+                    document_row = await cursor.fetchone()
+                async with conn.execute(
+                    "SELECT COUNT(*) FROM prototype_document_generation_jobs WHERE project_id = ?",
+                    (project_id,),
+                ) as cursor:
+                    generation_row = await cursor.fetchone()
+                async with conn.execute(
+                    "SELECT COUNT(*) FROM prototype_object_references WHERE project_id = ?",
+                    (project_id,),
+                ) as cursor:
+                    reference_row = await cursor.fetchone()
+                if document_row is None or generation_row is None or reference_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "prototype_delete_failed",
+                        "prototype deletion counts could not be loaded",
+                    )
+                counts = PrototypeProjectDeletionCounts(
+                    documents=int(document_row[0]),
+                    generation_jobs=int(generation_row[0]),
+                    object_references=int(reference_row[0]),
+                )
+
+                await conn.execute(
+                    "DELETE FROM prototype_object_references WHERE project_id = ?",
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_runtime_event_batches
+                    WHERE session_id IN (
+                        SELECT id FROM prototype_runtime_sessions WHERE project_id = ?
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_runtime_checkpoints
+                    WHERE session_id IN (
+                        SELECT id FROM prototype_runtime_sessions WHERE project_id = ?
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    "DELETE FROM prototype_runtime_sessions WHERE project_id = ?",
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_render_artifacts
+                    WHERE document_id IN (
+                        SELECT id FROM prototype_documents WHERE project_id = ?
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_render_runs
+                    WHERE document_id IN (
+                        SELECT id FROM prototype_documents WHERE project_id = ?
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_ai_edit_runs
+                    WHERE document_id IN (
+                        SELECT id FROM prototype_documents WHERE project_id = ?
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_ai_messages
+                    WHERE thread_id IN (
+                        SELECT thread.id
+                        FROM prototype_ai_threads AS thread
+                        JOIN prototype_documents AS document ON document.id = thread.document_id
+                        WHERE document.project_id = ?
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_ai_threads
+                    WHERE document_id IN (
+                        SELECT id FROM prototype_documents WHERE project_id = ?
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_document_generation_run_items
+                    WHERE job_id IN (
+                        SELECT id FROM prototype_document_generation_jobs WHERE project_id = ?
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_document_generation_runs
+                    WHERE job_id IN (
+                        SELECT id FROM prototype_document_generation_jobs WHERE project_id = ?
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    "DELETE FROM prototype_document_generation_jobs WHERE project_id = ?",
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_command_batches
+                    WHERE draft_id IN (
+                        SELECT draft.id
+                        FROM prototype_drafts AS draft
+                        JOIN prototype_documents AS document ON document.id = draft.document_id
+                        WHERE document.project_id = ?
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_revisions
+                    WHERE document_id IN (
+                        SELECT id FROM prototype_documents WHERE project_id = ?
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_checkpoints
+                    WHERE document_id IN (
+                        SELECT id FROM prototype_documents WHERE project_id = ?
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_drafts
+                    WHERE document_id IN (
+                        SELECT id FROM prototype_documents WHERE project_id = ?
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    "DELETE FROM prototype_documents WHERE project_id = ?",
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_operation_events
+                    WHERE operation_id IN (
+                        SELECT id FROM prototype_operations
+                        WHERE project_id = ?
+                          AND operation_kind <> 'delete_project_prototype'
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_operation_steps
+                    WHERE operation_id IN (
+                        SELECT id FROM prototype_operations
+                        WHERE project_id = ?
+                          AND operation_kind <> 'delete_project_prototype'
+                    )
+                    """,
+                    (project_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM prototype_operations
+                    WHERE project_id = ?
+                      AND operation_kind <> 'delete_project_prototype'
+                    """,
+                    (project_id,),
+                )
+                await self._register_object_tx(conn, replay_descriptor)
+                await self._insert_object_reference(conn, replay_reference)
+                await self._apply_operation_transition(
+                    conn,
+                    completed_operation,
+                    completion_step,
+                    completion_event,
+                )
+                await conn.commit()
+            except StructuredPrototypeStoreError:
+                await conn.rollback()
+                raise
+            except aiosqlite.Error as exc:
+                await conn.rollback()
+                raise StructuredPrototypeStoreError(
+                    "prototype_delete_failed",
+                    "prototype records could not be deleted atomically",
+                ) from exc
+        return counts
 
     async def load_draft(self, draft_id: str) -> PrototypeDraftRecord | None:
         await self.initialize()
@@ -2263,8 +3627,14 @@ class AsyncStructuredPrototypeStore:
             PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent
         ],
         batch: PrototypeCommandBatchRecord,
+        base_history_checkpoint: PrototypeCommandHistoryCheckpoint,
+        base_tail_batches: tuple[PrototypeCommandBatchRecord, ...],
+        base_journal_prefix_hash: str,
         descriptor: PrototypeObjectDescriptor,
         reference: PrototypeObjectReference,
+        history_descriptor: PrototypeObjectDescriptor,
+        history_reference: PrototypeObjectReference,
+        history_checkpoint: PrototypeCommandHistoryCheckpoint,
         replay_descriptor: PrototypeObjectDescriptor,
         replay_reference: PrototypeObjectReference,
         checkpoint: PrototypeCheckpointRecord,
@@ -2284,12 +3654,18 @@ class AsyncStructuredPrototypeStore:
             completed_event,
         )
         self._validate_registration(descriptor, reference)
+        self._validate_history_checkpoint_artifact(
+            descriptor=history_descriptor,
+            reference=history_reference,
+            history_checkpoint=history_checkpoint,
+            checkpoint=checkpoint,
+        )
         self._validate_registration(replay_descriptor, replay_reference)
         if (
             run.status != "applied"
             or batch.origin != "ai"
             or batch.operation_kind != "forward"
-            or run.proposed_command_batch_hash != batch.command_batch_hash
+            or run.proposed_command_batch_json != batch.commands_json
             or run.candidate_object_hash != batch.result_document_hash
             or checkpoint.draft_id != run.draft_id
             or checkpoint.checkpoint_kind != "ai_apply"
@@ -2330,6 +3706,19 @@ class AsyncStructuredPrototypeStore:
                 self._assert_ai_edit_run_immutable_identity(current_run, run)
                 draft = await self._require_draft(conn, run.draft_id)
                 await self._assert_draft_accepts_batch(conn, draft, batch)
+                history, records_by_id = await self._validate_bounded_command_history_base(
+                    conn,
+                    draft=draft,
+                    base_history_checkpoint=base_history_checkpoint,
+                    base_tail_batches=base_tail_batches,
+                    base_journal_prefix_hash=base_journal_prefix_hash,
+                )
+                await self._assert_command_history_accepts_batch(
+                    conn,
+                    history,
+                    batch,
+                    records_by_id,
+                )
                 await self._insert_operation(conn, queued_operation)
                 await self._insert_operation_event(conn, queued_event)
                 await self._apply_operation_transition(
@@ -2340,6 +3729,8 @@ class AsyncStructuredPrototypeStore:
                 )
                 await self._register_object_tx(conn, descriptor)
                 await self._insert_object_reference(conn, reference)
+                await self._register_object_tx(conn, history_descriptor)
+                await self._insert_object_reference(conn, history_reference)
                 await self._register_object_tx(conn, replay_descriptor)
                 await self._insert_object_reference(conn, replay_reference)
                 await self._insert_command_batch(conn, batch)
@@ -2413,6 +3804,16 @@ class AsyncStructuredPrototypeStore:
         )
         return self._command_batch_from_row(row) if row is not None else None
 
+    async def load_command_batch(
+        self,
+        draft_id: str,
+        batch_id: str,
+    ) -> PrototypeCommandBatchRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        row = await self._load_command_batch_row(conn, draft_id, batch_id)
+        return self._command_batch_from_row(row) if row is not None else None
+
     async def record_operation_transition(
         self,
         operation: PrototypeOperation,
@@ -2420,6 +3821,11 @@ class AsyncStructuredPrototypeStore:
         event: PrototypeOperationEvent,
     ) -> None:
         self._validate_operation_transition_payload(operation, step, event)
+        if operation.status == "succeeded":
+            raise StructuredPrototypeStoreError(
+                "replay_manifest_registration_required",
+                "successful prototype operations require atomic replay manifest registration",
+            )
         await self.initialize()
         conn = await self._get_conn()
         async with self._transaction_lock:
@@ -2431,21 +3837,120 @@ class AsyncStructuredPrototypeStore:
                 raise
             await conn.commit()
 
+    async def register_replay_manifest_and_transition(
+        self,
+        *,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
+        completed_operation: PrototypeOperation,
+        completion_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+    ) -> None:
+        self._validate_replay_manifest_registration(
+            descriptor=replay_descriptor,
+            reference=replay_reference,
+            operation=completed_operation,
+            step=completion_step,
+            event=completion_event,
+        )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                await self._register_object_tx(conn, replay_descriptor)
+                await self._insert_object_reference(conn, replay_reference)
+                await self._apply_operation_transition(
+                    conn,
+                    completed_operation,
+                    completion_step,
+                    completion_event,
+                )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+
+    async def register_generation_failure_evidence_and_transition(
+        self,
+        *,
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+        failed_operation: PrototypeOperation,
+        failed_step: PrototypeOperationStep,
+        failed_event: PrototypeOperationEvent,
+    ) -> None:
+        self._validate_generation_failure_evidence_registration(
+            descriptor=descriptor,
+            reference=reference,
+            operation=failed_operation,
+            step=failed_step,
+            event=failed_event,
+        )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                async with conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM prototype_object_references
+                    WHERE project_id = ?
+                      AND owner_kind = 'replay_manifest'
+                      AND owner_id = ?
+                    """,
+                    (reference.project_id, reference.owner_id),
+                ) as cursor:
+                    existing_row = await cursor.fetchone()
+                if (
+                    existing_row is None
+                    or _required_non_negative_int(
+                        existing_row[0],
+                        "generation_failure_evidence.reference_count",
+                    )
+                    != 0
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "generation_failure_evidence_invalid",
+                        "generation operation already owns terminal evidence",
+                    )
+                await self._register_object_tx(conn, descriptor)
+                await self._insert_object_reference(conn, reference)
+                await self._apply_operation_transition(
+                    conn,
+                    failed_operation,
+                    failed_step,
+                    failed_event,
+                )
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+
     async def create_document_with_initial_checkpoint(
         self,
         *,
         descriptor: PrototypeObjectDescriptor,
         reference: PrototypeObjectReference,
+        history_descriptor: PrototypeObjectDescriptor,
+        history_reference: PrototypeObjectReference,
+        history_checkpoint: PrototypeCommandHistoryCheckpoint,
         document: PrototypeDocumentRecord,
         draft: PrototypeDraftRecord,
         checkpoint: PrototypeCheckpointRecord,
         completed_operation: PrototypeOperation,
         completion_step: PrototypeOperationStep,
         completion_event: PrototypeOperationEvent,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
     ) -> None:
         self._validate_initial_checkpoint(
             descriptor=descriptor,
             reference=reference,
+            history_descriptor=history_descriptor,
+            history_reference=history_reference,
+            history_checkpoint=history_checkpoint,
             document=document,
             draft=draft,
             checkpoint=checkpoint,
@@ -2453,12 +3958,21 @@ class AsyncStructuredPrototypeStore:
             completion_step=completion_step,
             completion_event=completion_event,
         )
+        self._validate_replay_manifest_registration(
+            descriptor=replay_descriptor,
+            reference=replay_reference,
+            operation=completed_operation,
+            step=completion_step,
+            event=completion_event,
+        )
         await self.initialize()
         conn = await self._get_conn()
         async with self._transaction_lock:
             await conn.execute("BEGIN IMMEDIATE")
             try:
                 await self._register_object_tx(conn, descriptor)
+                await self._register_object_tx(conn, history_descriptor)
+                await self._register_object_tx(conn, replay_descriptor)
                 await conn.execute(
                     """
                     INSERT INTO prototype_documents (
@@ -2500,6 +4014,8 @@ class AsyncStructuredPrototypeStore:
                 )
                 await self._insert_checkpoint(conn, checkpoint)
                 await self._insert_object_reference(conn, reference)
+                await self._insert_object_reference(conn, history_reference)
+                await self._insert_object_reference(conn, replay_reference)
                 await conn.execute(
                     "UPDATE prototype_documents SET active_draft_id = ? WHERE id = ?",
                     (draft.id, document.id),
@@ -2523,9 +4039,14 @@ class AsyncStructuredPrototypeStore:
         self,
         *,
         batch: PrototypeCommandBatchRecord,
+        base_history_checkpoint: PrototypeCommandHistoryCheckpoint,
+        base_tail_batches: tuple[PrototypeCommandBatchRecord, ...],
+        base_journal_prefix_hash: str,
         completed_operation: PrototypeOperation,
         completion_step: PrototypeOperationStep,
         completion_event: PrototypeOperationEvent,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
     ) -> PrototypeCommandAppendResult:
         self._validate_command_append(
             batch,
@@ -2533,26 +4054,45 @@ class AsyncStructuredPrototypeStore:
             completion_step,
             completion_event,
         )
+        self._validate_replay_manifest_registration(
+            descriptor=replay_descriptor,
+            reference=replay_reference,
+            operation=completed_operation,
+            step=completion_step,
+            event=completion_event,
+        )
         await self.initialize()
         conn = await self._get_conn()
         async with self._transaction_lock:
             await conn.execute("BEGIN IMMEDIATE")
             try:
+                draft = await self._require_draft(conn, batch.draft_id)
                 existing_row = await self._load_command_batch_by_request_row(
                     conn, batch.draft_id, batch.client_request_id
                 )
                 if existing_row is not None:
                     existing = self._command_batch_from_row(existing_row)
                     self._assert_idempotent_command_batch(existing, batch)
-                    draft = await self._require_draft(conn, batch.draft_id)
                     result = PrototypeCommandAppendResult(
                         batch=existing,
                         draft=draft,
                         created=False,
                     )
                 else:
-                    draft = await self._require_draft(conn, batch.draft_id)
                     await self._assert_draft_accepts_batch(conn, draft, batch)
+                    history, records_by_id = await self._validate_bounded_command_history_base(
+                        conn,
+                        draft=draft,
+                        base_history_checkpoint=base_history_checkpoint,
+                        base_tail_batches=base_tail_batches,
+                        base_journal_prefix_hash=base_journal_prefix_hash,
+                    )
+                    await self._assert_command_history_accepts_batch(
+                        conn,
+                        history,
+                        batch,
+                        records_by_id,
+                    )
                     await self._insert_command_batch(conn, batch)
                     cursor = await conn.execute(
                         """
@@ -2577,6 +4117,8 @@ class AsyncStructuredPrototypeStore:
                             "draft_conflict",
                             "prototype draft head changed before command commit",
                         )
+                    await self._register_object_tx(conn, replay_descriptor)
+                    await self._insert_object_reference(conn, replay_reference)
                     await self._apply_operation_transition(
                         conn,
                         completed_operation,
@@ -2600,18 +4142,33 @@ class AsyncStructuredPrototypeStore:
         *,
         descriptor: PrototypeObjectDescriptor,
         reference: PrototypeObjectReference,
+        history_descriptor: PrototypeObjectDescriptor,
+        history_reference: PrototypeObjectReference,
+        history_checkpoint: PrototypeCommandHistoryCheckpoint,
         checkpoint: PrototypeCheckpointRecord,
         completed_operation: PrototypeOperation,
         completion_step: PrototypeOperationStep,
         completion_event: PrototypeOperationEvent,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
     ) -> PrototypeDraftRecord:
         self._validate_checkpoint_registration(
             descriptor,
             reference,
+            history_descriptor,
+            history_reference,
+            history_checkpoint,
             checkpoint,
             completed_operation,
             completion_step,
             completion_event,
+        )
+        self._validate_replay_manifest_registration(
+            descriptor=replay_descriptor,
+            reference=replay_reference,
+            operation=completed_operation,
+            step=completion_step,
+            event=completion_event,
         )
         if checkpoint.draft_id is None:
             raise StructuredPrototypeStoreError(
@@ -2638,8 +4195,12 @@ class AsyncStructuredPrototypeStore:
                         "prototype checkpoint does not match the current draft head",
                     )
                 await self._register_object_tx(conn, descriptor)
+                await self._register_object_tx(conn, history_descriptor)
+                await self._register_object_tx(conn, replay_descriptor)
                 await self._insert_checkpoint(conn, checkpoint)
                 await self._insert_object_reference(conn, reference)
+                await self._insert_object_reference(conn, history_reference)
+                await self._insert_object_reference(conn, replay_reference)
                 cursor = await conn.execute(
                     """
                     UPDATE prototype_drafts
@@ -3001,10 +4562,19 @@ class AsyncStructuredPrototypeStore:
         active_draft: PrototypeDraftRecord,
         active_checkpoint: PrototypeCheckpointRecord,
         active_checkpoint_reference: PrototypeObjectReference,
+        active_history_descriptor: PrototypeObjectDescriptor,
+        active_history_reference: PrototypeObjectReference,
+        active_history_checkpoint: PrototypeCommandHistoryCheckpoint,
         completed_operation: PrototypeOperation,
         completed_step: PrototypeOperationStep,
         completion_event: PrototypeOperationEvent,
     ) -> PrototypePublicationCompletionResult:
+        self._validate_history_checkpoint_artifact(
+            descriptor=active_history_descriptor,
+            reference=active_history_reference,
+            history_checkpoint=active_history_checkpoint,
+            checkpoint=active_checkpoint,
+        )
         await self.initialize()
         conn = await self._get_conn()
         async with self._transaction_lock:
@@ -3099,6 +4669,8 @@ class AsyncStructuredPrototypeStore:
                 )
                 await self._insert_checkpoint(conn, active_checkpoint)
                 await self._insert_object_reference(conn, active_checkpoint_reference)
+                await self._register_object_tx(conn, active_history_descriptor)
+                await self._insert_object_reference(conn, active_history_reference)
                 await conn.execute(
                     "UPDATE prototype_drafts SET latest_checkpoint_id = ? WHERE id = ?",
                     (active_checkpoint.id, active_draft.id),
@@ -3424,7 +4996,8 @@ class AsyncStructuredPrototypeStore:
             failure_event,
         )
         if (
-            failed_operation.operation_kind != "recover_draft"
+            failed_operation.operation_kind
+            not in {"recover_draft", "apply_command_batch", "undo", "redo"}
             or failed_operation.resource_kind != "draft"
             or failed_operation.resource_id != draft_id
             or failed_operation.status != "failed"
@@ -3510,6 +5083,15 @@ class AsyncStructuredPrototypeStore:
                     )
                 document = await self._require_document(conn, draft.document_id)
                 checkpoint = await self._require_checkpoint(conn, draft.latest_checkpoint_id)
+                if (
+                    checkpoint.history_snapshot_object_hash is None
+                    or checkpoint.history_snapshot_schema_version is None
+                    or checkpoint.journal_prefix_hash is None
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "command_history_checkpoint_missing",
+                        "prototype draft checkpoint has no command history seal",
+                    )
                 descriptor_row = await self._load_object_row(
                     conn,
                     document.project_id,
@@ -3521,6 +5103,39 @@ class AsyncStructuredPrototypeStore:
                         "prototype checkpoint object descriptor is missing",
                     )
                 descriptor = self._descriptor_from_row(descriptor_row)
+                history_descriptor_row = await self._load_object_row(
+                    conn,
+                    document.project_id,
+                    checkpoint.history_snapshot_object_hash,
+                )
+                if history_descriptor_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "object_missing",
+                        "prototype command history checkpoint object descriptor is missing",
+                    )
+                history_descriptor = self._descriptor_from_row(history_descriptor_row)
+                async with conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM prototype_object_references
+                    WHERE project_id = ? AND owner_kind = 'checkpoint' AND owner_id = ?
+                      AND role = 'command-history-checkpoint' AND content_hash = ?
+                      AND payload_type = 'prototype_command_history_checkpoint'
+                      AND schema_version = ?
+                    """,
+                    (
+                        document.project_id,
+                        checkpoint.id,
+                        checkpoint.history_snapshot_object_hash,
+                        checkpoint.history_snapshot_schema_version,
+                    ),
+                ) as cursor:
+                    reference_row = await cursor.fetchone()
+                if reference_row is None or int(reference_row[0]) != 1:
+                    raise StructuredPrototypeStoreError(
+                        "command_history_checkpoint_missing",
+                        "prototype command history checkpoint reference is missing",
+                    )
                 batches = await self._list_command_batches_after(
                     conn,
                     draft.id,
@@ -3536,6 +5151,7 @@ class AsyncStructuredPrototypeStore:
             draft=draft,
             checkpoint=checkpoint,
             object_descriptor=descriptor,
+            history_object_descriptor=history_descriptor,
             command_batches=tuple(batches),
         )
 
@@ -3567,6 +5183,8 @@ class AsyncStructuredPrototypeStore:
         *,
         descriptor: PrototypeObjectDescriptor,
         reference: PrototypeObjectReference,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
         session: PrototypeRuntimeSessionRecord,
         checkpoint: PrototypeRuntimeCheckpointRecord,
         completed_operation: PrototypeOperation,
@@ -3578,6 +5196,13 @@ class AsyncStructuredPrototypeStore:
             reference=reference,
             session=session,
             checkpoint=checkpoint,
+            operation=completed_operation,
+            step=completion_step,
+            event=completion_event,
+        )
+        self._validate_replay_manifest_registration(
+            descriptor=replay_descriptor,
+            reference=replay_reference,
             operation=completed_operation,
             step=completion_step,
             event=completion_event,
@@ -3604,9 +5229,11 @@ class AsyncStructuredPrototypeStore:
                         "prototype runtime pinned document object is not registered",
                     )
                 await self._register_object_tx(conn, descriptor)
+                await self._register_object_tx(conn, replay_descriptor)
                 await self._insert_runtime_session(conn, session, latest_checkpoint_id=None)
                 await self._insert_runtime_checkpoint(conn, checkpoint)
                 await self._insert_object_reference(conn, reference)
+                await self._insert_object_reference(conn, replay_reference)
                 cursor = await conn.execute(
                     "UPDATE prototype_runtime_sessions SET latest_checkpoint_id = ? WHERE id = ?",
                     (checkpoint.id, session.id),
@@ -3627,10 +5254,206 @@ class AsyncStructuredPrototypeStore:
                 raise
             await conn.commit()
 
+    async def reset_runtime_session(
+        self,
+        *,
+        expected_old_status: PrototypeRuntimeSessionStatus,
+        expected_old_latest_checkpoint_id: str | None,
+        expected_old_head_sequence_no: int,
+        expected_old_state_hash: str,
+        expected_old_view_model_hash: str,
+        expected_old_runtime_core_bundle_hash: str,
+        target_draft_id: str,
+        expected_target_head_sequence_no: int,
+        expected_target_document_hash: str,
+        state_descriptor: PrototypeObjectDescriptor,
+        state_reference: PrototypeObjectReference,
+        reset_manifest_descriptor: PrototypeObjectDescriptor,
+        old_reset_reference: PrototypeObjectReference,
+        new_reset_reference: PrototypeObjectReference,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
+        session: PrototypeRuntimeSessionRecord,
+        checkpoint: PrototypeRuntimeCheckpointRecord,
+        completed_operation: PrototypeOperation,
+        completion_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+    ) -> PrototypeRuntimeSessionRecord:
+        self._validate_runtime_reset(
+            state_descriptor=state_descriptor,
+            state_reference=state_reference,
+            reset_manifest_descriptor=reset_manifest_descriptor,
+            old_reset_reference=old_reset_reference,
+            new_reset_reference=new_reset_reference,
+            session=session,
+            checkpoint=checkpoint,
+            operation=completed_operation,
+            step=completion_step,
+            event=completion_event,
+        )
+        self._validate_replay_manifest_registration(
+            descriptor=replay_descriptor,
+            reference=replay_reference,
+            operation=completed_operation,
+            step=completion_step,
+            event=completion_event,
+        )
+        _required_hash(expected_old_state_hash, "runtime_reset.expected_old_state_hash")
+        _required_hash(
+            expected_old_view_model_hash,
+            "runtime_reset.expected_old_view_model_hash",
+        )
+        _required_hash(
+            expected_old_runtime_core_bundle_hash,
+            "runtime_reset.expected_old_runtime_core_bundle_hash",
+        )
+        _required_hash(
+            expected_target_document_hash,
+            "runtime_reset.expected_target_document_hash",
+        )
+        old_session_id = session.replaces_session_id
+        if old_session_id is None:
+            raise StructuredPrototypeStoreError(
+                "runtime_reset_identity_mismatch",
+                "prototype runtime reset session has no replaced-session identity",
+            )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                old_session = await self._require_runtime_session(conn, old_session_id)
+                if (
+                    old_session.recording_kind != "studio_preview"
+                    or old_session.source_kind != "draft"
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "runtime_session_reset_not_allowed",
+                        "only draft-backed Studio preview sessions can be reset",
+                    )
+                if (
+                    old_session.status != expected_old_status
+                    or old_session.latest_checkpoint_id != expected_old_latest_checkpoint_id
+                    or old_session.head_sequence_no != expected_old_head_sequence_no
+                    or old_session.head_state_hash != expected_old_state_hash
+                    or old_session.head_view_model_hash != expected_old_view_model_hash
+                    or old_session.runtime_core_bundle_hash != expected_old_runtime_core_bundle_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "runtime_session_conflict",
+                        "prototype runtime reset source changed before commit",
+                    )
+                target_draft = await self._require_draft(conn, target_draft_id)
+                if (
+                    target_draft.status != "active"
+                    or target_draft.head_sequence_no != expected_target_head_sequence_no
+                    or target_draft.head_document_hash != expected_target_document_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "draft_conflict",
+                        "prototype runtime reset target changed before commit",
+                    )
+                target_document = await self._require_document(conn, target_draft.document_id)
+                if (
+                    target_document.project_id != old_session.project_id
+                    or target_document.id != old_session.document_id
+                    or session.project_id != old_session.project_id
+                    or session.document_id != old_session.document_id
+                    or session.source_id != target_draft.id
+                    or session.pinned_document_object_hash != expected_target_document_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "runtime_session_reset_target_mismatch",
+                        "prototype runtime reset target belongs to another document",
+                    )
+                await self._register_object_tx(conn, state_descriptor)
+                await self._register_object_tx(conn, reset_manifest_descriptor)
+                await self._register_object_tx(conn, replay_descriptor)
+                try:
+                    await self._insert_runtime_session(
+                        conn,
+                        session,
+                        latest_checkpoint_id=None,
+                    )
+                except aiosqlite.IntegrityError as exc:
+                    raise StructuredPrototypeStoreError(
+                        "runtime_session_conflict",
+                        "prototype runtime session was already reset",
+                    ) from exc
+                await self._insert_runtime_checkpoint(conn, checkpoint)
+                for reference in (
+                    state_reference,
+                    old_reset_reference,
+                    new_reset_reference,
+                    replay_reference,
+                ):
+                    await self._insert_object_reference(conn, reference)
+                cursor = await conn.execute(
+                    "UPDATE prototype_runtime_sessions SET latest_checkpoint_id = ? WHERE id = ?",
+                    (checkpoint.id, session.id),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "runtime_session_conflict",
+                        "prototype runtime reset checkpoint could not be attached",
+                    )
+                if old_session.status == "active":
+                    completed_at = completed_operation.completed_at
+                    if completed_at is None:
+                        raise StructuredPrototypeStoreError(
+                            "runtime_reset_evidence_invalid",
+                            "prototype runtime reset operation has no completion time",
+                        )
+                    cursor = await conn.execute(
+                        """
+                        UPDATE prototype_runtime_sessions
+                        SET status = 'completed', updated_at = ?, completed_at = ?
+                        WHERE id = ?
+                          AND status = 'active'
+                          AND head_sequence_no = ?
+                          AND head_state_hash = ?
+                          AND head_view_model_hash = ?
+                          AND runtime_core_bundle_hash = ?
+                          AND latest_checkpoint_id IS ?
+                        """,
+                        (
+                            completed_at.isoformat(),
+                            completed_at.isoformat(),
+                            old_session.id,
+                            expected_old_head_sequence_no,
+                            expected_old_state_hash,
+                            expected_old_view_model_hash,
+                            expected_old_runtime_core_bundle_hash,
+                            expected_old_latest_checkpoint_id,
+                        ),
+                    )
+                    if cursor.rowcount != 1:
+                        raise StructuredPrototypeStoreError(
+                            "runtime_session_conflict",
+                            "prototype runtime reset source changed before close",
+                        )
+                await self._apply_operation_transition(
+                    conn,
+                    completed_operation,
+                    completion_step,
+                    completion_event,
+                )
+                result = await self._require_runtime_session(conn, session.id)
+                await conn.commit()
+            except asyncio.CancelledError:
+                await conn.rollback()
+                raise
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+        return result
+
     async def append_runtime_event_batch(
         self,
         *,
         event_batch: PrototypeRuntimeEventBatchRecord,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
         completed_operation: PrototypeOperation,
         completion_step: PrototypeOperationStep,
         completion_event: PrototypeOperationEvent,
@@ -3640,6 +5463,13 @@ class AsyncStructuredPrototypeStore:
             completed_operation,
             completion_step,
             completion_event,
+        )
+        self._validate_replay_manifest_registration(
+            descriptor=replay_descriptor,
+            reference=replay_reference,
+            operation=completed_operation,
+            step=completion_step,
+            event=completion_event,
         )
         await self.initialize()
         conn = await self._get_conn()
@@ -3669,6 +5499,8 @@ class AsyncStructuredPrototypeStore:
                         )
                     await self._assert_runtime_session_accepts_event(conn, session, event_batch)
                     await self._insert_runtime_event_batch(conn, event_batch)
+                    await self._register_object_tx(conn, replay_descriptor)
+                    await self._insert_object_reference(conn, replay_reference)
                     cursor = await conn.execute(
                         """
                         UPDATE prototype_runtime_sessions
@@ -3720,6 +5552,8 @@ class AsyncStructuredPrototypeStore:
         descriptor: PrototypeObjectDescriptor,
         reference: PrototypeObjectReference,
         checkpoint: PrototypeRuntimeCheckpointRecord,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
         completed_operation: PrototypeOperation,
         completion_step: PrototypeOperationStep,
         completion_event: PrototypeOperationEvent,
@@ -3731,6 +5565,13 @@ class AsyncStructuredPrototypeStore:
             completed_operation,
             completion_step,
             completion_event,
+        )
+        self._validate_replay_manifest_registration(
+            descriptor=replay_descriptor,
+            reference=replay_reference,
+            operation=completed_operation,
+            step=completion_step,
+            event=completion_event,
         )
         await self.initialize()
         conn = await self._get_conn()
@@ -3758,8 +5599,10 @@ class AsyncStructuredPrototypeStore:
                         "prototype runtime checkpoint does not match the session head",
                     )
                 await self._register_object_tx(conn, descriptor)
+                await self._register_object_tx(conn, replay_descriptor)
                 await self._insert_runtime_checkpoint(conn, checkpoint)
                 await self._insert_object_reference(conn, reference)
+                await self._insert_object_reference(conn, replay_reference)
                 cursor = await conn.execute(
                     """
                     UPDATE prototype_runtime_sessions
@@ -4170,11 +6013,116 @@ class AsyncStructuredPrototypeStore:
             )
 
     @classmethod
+    def _validate_replay_manifest_registration(
+        cls,
+        *,
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+        operation: PrototypeOperation,
+        step: PrototypeOperationStep,
+        event: PrototypeOperationEvent,
+    ) -> None:
+        cls._validate_registration(descriptor, reference)
+        cls._validate_operation_transition_payload(operation, step, event)
+        if (
+            operation.status != "succeeded"
+            or operation.result_manifest_hash != descriptor.content_hash
+            or step.status != "succeeded"
+            or step.output_manifest_hash != descriptor.content_hash
+            or event.output_hash != descriptor.content_hash
+            or event.evidence_hash != descriptor.content_hash
+            or reference.owner_kind != "replay_manifest"
+            or reference.owner_id != operation.id
+            or reference.role != "operation-replay-manifest"
+            or reference.payload_type != "replay_manifest"
+            or reference.schema_version != 1
+        ):
+            raise StructuredPrototypeStoreError(
+                "replay_manifest_registration_invalid",
+                "prototype replay manifest completion identity is inconsistent",
+            )
+
+    @classmethod
+    def _validate_generation_failure_evidence_registration(
+        cls,
+        *,
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+        operation: PrototypeOperation,
+        step: PrototypeOperationStep,
+        event: PrototypeOperationEvent,
+    ) -> None:
+        cls._validate_registration(descriptor, reference)
+        cls._validate_operation_transition_payload(operation, step, event)
+        if (
+            operation.status != "failed"
+            or operation.failure_evidence_hash != descriptor.content_hash
+            or step.status != "failed"
+            or step.output_manifest_hash != descriptor.content_hash
+            or step.completion_evidence_kind != "generation_evidence_manifest"
+            or step.completion_evidence_ref != descriptor.content_hash
+            or event.output_hash != descriptor.content_hash
+            or event.evidence_hash != descriptor.content_hash
+            or reference.owner_kind != "replay_manifest"
+            or reference.owner_id != operation.id
+            or reference.role != "operation-failure-evidence"
+            or reference.payload_type != "generation_evidence_manifest"
+            or reference.schema_version != 1
+        ):
+            raise StructuredPrototypeStoreError(
+                "generation_failure_evidence_invalid",
+                "generation failure evidence does not seal its owning operation",
+            )
+
+    @classmethod
+    def _validate_history_checkpoint_artifact(
+        cls,
+        *,
+        descriptor: PrototypeObjectDescriptor,
+        reference: PrototypeObjectReference,
+        history_checkpoint: PrototypeCommandHistoryCheckpoint,
+        checkpoint: PrototypeCheckpointRecord,
+    ) -> None:
+        cls._validate_registration(descriptor, reference)
+        canonical_hash = (
+            "sha256:"
+            + hashlib.sha256(canonical_json_bytes(history_checkpoint.to_payload())).hexdigest()
+        )
+        if (
+            checkpoint.draft_id is None
+            or checkpoint.history_snapshot_object_hash is None
+            or checkpoint.history_snapshot_schema_version is None
+            or checkpoint.journal_prefix_hash is None
+            or descriptor.content_hash != canonical_hash
+            or descriptor.content_hash != history_checkpoint.snapshot_object_hash
+            or descriptor.content_hash != checkpoint.history_snapshot_object_hash
+            or history_checkpoint.snapshot_schema_version
+            != checkpoint.history_snapshot_schema_version
+            or history_checkpoint.draft_id != checkpoint.draft_id
+            or history_checkpoint.checkpoint_sequence_no != checkpoint.checkpoint_sequence_no
+            or history_checkpoint.checkpoint_document_hash != checkpoint.document_hash
+            or history_checkpoint.journal_prefix_hash != checkpoint.journal_prefix_hash
+            or reference.owner_kind != "checkpoint"
+            or reference.owner_id != checkpoint.id
+            or reference.role != "command-history-checkpoint"
+            or reference.content_hash != descriptor.content_hash
+            or reference.payload_type != "prototype_command_history_checkpoint"
+            or reference.schema_version != history_checkpoint.snapshot_schema_version
+        ):
+            raise StructuredPrototypeStoreError(
+                "command_history_checkpoint_identity_mismatch",
+                "prototype command history checkpoint artifact identity is inconsistent",
+            )
+
+    @classmethod
     def _validate_initial_checkpoint(
         cls,
         *,
         descriptor: PrototypeObjectDescriptor,
         reference: PrototypeObjectReference,
+        history_descriptor: PrototypeObjectDescriptor,
+        history_reference: PrototypeObjectReference,
+        history_checkpoint: PrototypeCommandHistoryCheckpoint,
         document: PrototypeDocumentRecord,
         draft: PrototypeDraftRecord,
         checkpoint: PrototypeCheckpointRecord,
@@ -4183,6 +6131,12 @@ class AsyncStructuredPrototypeStore:
         completion_event: PrototypeOperationEvent,
     ) -> None:
         cls._validate_registration(descriptor, reference)
+        cls._validate_history_checkpoint_artifact(
+            descriptor=history_descriptor,
+            reference=history_reference,
+            history_checkpoint=history_checkpoint,
+            checkpoint=checkpoint,
+        )
         cls._validate_operation_transition_payload(
             completed_operation,
             completion_step,
@@ -4210,6 +6164,9 @@ class AsyncStructuredPrototypeStore:
             or checkpoint.document_object_hash != descriptor.content_hash
             or checkpoint.document_hash != descriptor.content_hash
             or checkpoint.created_by_operation_id != completed_operation.id
+            or history_checkpoint.history.undo_stack
+            or history_checkpoint.history.redo_stack
+            or checkpoint.journal_prefix_hash != _initial_journal_prefix_hash(draft.id)
         ):
             raise StructuredPrototypeStoreError(
                 "initial_checkpoint_invalid",
@@ -4299,12 +6256,21 @@ class AsyncStructuredPrototypeStore:
         cls,
         descriptor: PrototypeObjectDescriptor,
         reference: PrototypeObjectReference,
+        history_descriptor: PrototypeObjectDescriptor,
+        history_reference: PrototypeObjectReference,
+        history_checkpoint: PrototypeCommandHistoryCheckpoint,
         checkpoint: PrototypeCheckpointRecord,
         operation: PrototypeOperation,
         step: PrototypeOperationStep,
         event: PrototypeOperationEvent,
     ) -> None:
         cls._validate_registration(descriptor, reference)
+        cls._validate_history_checkpoint_artifact(
+            descriptor=history_descriptor,
+            reference=history_reference,
+            history_checkpoint=history_checkpoint,
+            checkpoint=checkpoint,
+        )
         cls._validate_operation_transition_payload(operation, step, event)
         if (
             checkpoint.document_object_hash != descriptor.content_hash
@@ -4409,6 +6375,93 @@ class AsyncStructuredPrototypeStore:
             raise StructuredPrototypeStoreError(
                 "runtime_initial_checkpoint_invalid",
                 "prototype runtime create-session evidence is invalid",
+            )
+
+    @classmethod
+    def _validate_runtime_reset(
+        cls,
+        *,
+        state_descriptor: PrototypeObjectDescriptor,
+        state_reference: PrototypeObjectReference,
+        reset_manifest_descriptor: PrototypeObjectDescriptor,
+        old_reset_reference: PrototypeObjectReference,
+        new_reset_reference: PrototypeObjectReference,
+        session: PrototypeRuntimeSessionRecord,
+        checkpoint: PrototypeRuntimeCheckpointRecord,
+        operation: PrototypeOperation,
+        step: PrototypeOperationStep,
+        event: PrototypeOperationEvent,
+    ) -> None:
+        cls._validate_registration(state_descriptor, state_reference)
+        cls._validate_registration(reset_manifest_descriptor, old_reset_reference)
+        cls._validate_registration(reset_manifest_descriptor, new_reset_reference)
+        cls._validate_operation_transition_payload(operation, step, event)
+        old_session_id = session.replaces_session_id
+        if old_session_id is None:
+            raise StructuredPrototypeStoreError(
+                "runtime_reset_identity_mismatch",
+                "prototype runtime reset session has no replaced-session identity",
+            )
+        for value, field in (
+            (session.pinned_document_object_hash, "runtime_session.pinned_document_object_hash"),
+            (session.runtime_core_bundle_hash, "runtime_session.runtime_core_bundle_hash"),
+            (session.scenario_hash, "runtime_session.scenario_hash"),
+            (session.head_state_hash, "runtime_session.head_state_hash"),
+            (session.head_view_model_hash, "runtime_session.head_view_model_hash"),
+        ):
+            _required_hash(value, field)
+        if (
+            session.status != "active"
+            or session.source_kind != "draft"
+            or session.recording_kind != "studio_preview"
+            or session.head_sequence_no != 0
+            or session.completed_at is not None
+            or session.latest_checkpoint_id != checkpoint.id
+            or checkpoint.session_id != session.id
+            or checkpoint.checkpoint_sequence_no != 0
+            or checkpoint.state_object_hash != state_descriptor.content_hash
+            or checkpoint.state_hash != state_descriptor.content_hash
+            or checkpoint.state_hash != session.head_state_hash
+            or checkpoint.view_model_hash != session.head_view_model_hash
+            or checkpoint.created_by_operation_id != operation.id
+            or state_reference.owner_kind != "runtime_checkpoint"
+            or state_reference.owner_id != checkpoint.id
+            or state_reference.payload_type != "prototype_runtime_state"
+            or state_reference.schema_version != checkpoint.runtime_state_schema_version
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_reset_identity_mismatch",
+                "prototype runtime reset checkpoint does not match the new session",
+            )
+        if (
+            old_reset_reference.owner_kind != "runtime_session"
+            or old_reset_reference.owner_id != old_session_id
+            or new_reset_reference.owner_kind != "runtime_session"
+            or new_reset_reference.owner_id != session.id
+            or old_reset_reference.role != "runtime-session-reset-manifest"
+            or new_reset_reference.role != "runtime-session-reset-manifest"
+            or old_reset_reference.payload_type != "runtime_session_reset_manifest"
+            or new_reset_reference.payload_type != "runtime_session_reset_manifest"
+            or old_reset_reference.schema_version != 1
+            or new_reset_reference.schema_version != 1
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_reset_identity_mismatch",
+                "prototype runtime reset manifest references are invalid",
+            )
+        if (
+            operation.operation_kind != "reset_runtime_session"
+            or operation.project_id != session.project_id
+            or operation.resource_kind != "runtime_session"
+            or operation.resource_id != session.id
+            or operation.status != "succeeded"
+            or step.status != "succeeded"
+            or step.completion_evidence_kind != "runtime_session_reset_manifest"
+            or step.completion_evidence_ref != reset_manifest_descriptor.content_hash
+        ):
+            raise StructuredPrototypeStoreError(
+                "runtime_reset_evidence_invalid",
+                "prototype runtime reset completion evidence is invalid",
             )
 
     @classmethod
@@ -4520,6 +6573,7 @@ class AsyncStructuredPrototypeStore:
             self._conn = await aiosqlite.connect(self.db_path, timeout=30.0)
             await self._conn.execute("PRAGMA journal_mode=WAL")
             await self._conn.execute("PRAGMA synchronous=NORMAL")
+            await self._conn.execute("PRAGMA busy_timeout=30000")
             await self._conn.execute("PRAGMA foreign_keys=ON")
         return self._conn
 
@@ -4947,9 +7001,12 @@ class AsyncStructuredPrototypeStore:
                 document_schema_version,
                 command_contract_version,
                 document_hash,
+                history_snapshot_object_hash,
+                history_snapshot_schema_version,
+                journal_prefix_hash,
                 created_by_operation_id,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 checkpoint.id,
@@ -4962,6 +7019,9 @@ class AsyncStructuredPrototypeStore:
                 checkpoint.document_schema_version,
                 checkpoint.command_contract_version,
                 checkpoint.document_hash,
+                checkpoint.history_snapshot_object_hash,
+                checkpoint.history_snapshot_schema_version,
+                checkpoint.journal_prefix_hash,
                 checkpoint.created_by_operation_id,
                 checkpoint.created_at.isoformat(),
             ),
@@ -5124,6 +7184,12 @@ class AsyncStructuredPrototypeStore:
             INSERT INTO prototype_document_generation_jobs (
                 id, project_id, client_request_id, status, operation_id,
                 request_manifest_object_hash, request_hash, context_manifest_object_hash,
+                source_policy, source_snapshot_object_hash, source_fingerprint,
+                source_snapshot_ref, repository_object_format, worktree_base_commit,
+                repository_project_prefix, repository_tree_object_id, working_tree_dirty,
+                excluded_tracked_change_count, excluded_untracked_count,
+                source_file_exclusion_policy, excluded_sensitive_file_count,
+                excluded_status_hash,
                 blueprint_object_hash, blueprint_version, blueprint_hash,
                 candidate_object_hash, candidate_document_hash, preview_render_run_id,
                 preview_artifact_id, preview_renderer_version, preview_storage_key,
@@ -5131,7 +7197,8 @@ class AsyncStructuredPrototypeStore:
                 preview_visual_preflight_report_hash, replay_manifest_object_hash,
                 document_id, error_code, error_message, created_at, updated_at, completed_at
             ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             """,
             AsyncStructuredPrototypeStore._generation_job_params(job),
@@ -5244,14 +7311,14 @@ class AsyncStructuredPrototypeStore:
         await conn.execute(
             """
             INSERT INTO prototype_document_generation_run_items (
-                id, job_id, run_id, kind, item_key, page_key, status, phase,
+                id, job_id, run_id, kind, item_key, page_key, item_ordinal, status, phase,
                 attempt, task_kind, operation_id, context_object_hash, submission_id,
                 submission_request_hash, submission_normalized_fields_json,
                 submission_accepted_at, output_object_hash,
                 task_id, execution_process_id, error_code, error_message, created_at,
                 updated_at, completed_at
             ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             """,
             AsyncStructuredPrototypeStore._generation_item_params(item),
@@ -5414,10 +7481,11 @@ class AsyncStructuredPrototypeStore:
                 recording_kind,
                 allow_simulated_role_switch,
                 actor_subject_id,
+                replaces_session_id,
                 created_at,
                 updated_at,
                 completed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session.id,
@@ -5439,6 +7507,7 @@ class AsyncStructuredPrototypeStore:
                 session.recording_kind,
                 1 if session.allow_simulated_role_switch else 0,
                 session.actor_subject_id,
+                session.replaces_session_id,
                 session.created_at.isoformat(),
                 session.updated_at.isoformat(),
                 session.completed_at.isoformat() if session.completed_at else None,
@@ -5659,6 +7728,27 @@ class AsyncStructuredPrototypeStore:
             return await cursor.fetchone()
 
     @staticmethod
+    async def _load_command_batch_row(
+        conn: aiosqlite.Connection,
+        draft_id: str,
+        batch_id: str,
+    ) -> aiosqlite.Row | tuple[object, ...] | None:
+        async with conn.execute(
+            """
+            SELECT
+                id, draft_id, base_sequence_no, result_sequence_no,
+                client_request_id, origin, operation_kind, target_batch_id,
+                command_contract_version, commands_json, inverse_commands_json,
+                command_batch_hash, base_document_hash, result_document_hash,
+                operation_id, created_at
+            FROM prototype_command_batches
+            WHERE draft_id = ? AND id = ?
+            """,
+            (draft_id, batch_id),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
     async def _load_command_batch_by_request_row(
         conn: aiosqlite.Connection,
         draft_id: str,
@@ -5841,14 +7931,7 @@ class AsyncStructuredPrototypeStore:
             SELECT {cls._GENERATION_ITEM_COLUMNS}
             FROM prototype_document_generation_run_items
             WHERE run_id = ?
-            ORDER BY CASE kind WHEN 'blueprint' THEN 0 WHEN 'foundation' THEN 1 ELSE 2 END,
-                     CASE item_key
-                         WHEN 'purchase-list' THEN 0
-                         WHEN 'purchase-create' THEN 1
-                         WHEN 'purchase-detail' THEN 2
-                         ELSE 3
-                     END,
-                     item_key
+            ORDER BY item_ordinal
             """,
             (run.id,),
         ) as cursor:
@@ -5886,6 +7969,7 @@ class AsyncStructuredPrototypeStore:
                 recording_kind,
                 allow_simulated_role_switch,
                 actor_subject_id,
+                replaces_session_id,
                 created_at,
                 updated_at,
                 completed_at
@@ -6073,6 +8157,9 @@ class AsyncStructuredPrototypeStore:
                 document_schema_version,
                 command_contract_version,
                 document_hash,
+                history_snapshot_object_hash,
+                history_snapshot_schema_version,
+                journal_prefix_hash,
                 created_by_operation_id,
                 created_at
             FROM prototype_checkpoints
@@ -6226,8 +8313,13 @@ class AsyncStructuredPrototypeStore:
             FROM prototype_command_batches
             WHERE draft_id = ? AND result_sequence_no > ?
             ORDER BY result_sequence_no
+            LIMIT ?
             """,
-            (draft_id, checkpoint_sequence_no),
+            (
+                draft_id,
+                checkpoint_sequence_no,
+                MAX_REPLAY_TAIL_BATCHES + 1,
+            ),
         ) as cursor:
             rows = await cursor.fetchall()
         return [AsyncStructuredPrototypeStore._command_batch_from_row(row) for row in rows]
@@ -6300,6 +8392,218 @@ class AsyncStructuredPrototypeStore:
                 "prototype command requires a checkpoint before the replay tail can grow",
             )
 
+    async def _validate_bounded_command_history_base(
+        self,
+        conn: aiosqlite.Connection,
+        *,
+        draft: PrototypeDraftRecord,
+        base_history_checkpoint: PrototypeCommandHistoryCheckpoint,
+        base_tail_batches: tuple[PrototypeCommandBatchRecord, ...],
+        base_journal_prefix_hash: str,
+    ) -> tuple[PrototypeCommandHistory, dict[str, PrototypeCommandBatchRecord]]:
+        if draft.latest_checkpoint_id is None:
+            raise StructuredPrototypeStoreError(
+                "command_history_checkpoint_missing",
+                "prototype draft has no command history checkpoint",
+            )
+        checkpoint = await self._require_checkpoint(conn, draft.latest_checkpoint_id)
+        if (
+            checkpoint.draft_id != draft.id
+            or checkpoint.document_id != draft.document_id
+            or checkpoint.history_snapshot_object_hash is None
+            or checkpoint.history_snapshot_schema_version is None
+            or checkpoint.journal_prefix_hash is None
+            or base_history_checkpoint.draft_id != draft.id
+            or base_history_checkpoint.checkpoint_sequence_no != checkpoint.checkpoint_sequence_no
+            or base_history_checkpoint.checkpoint_document_hash != checkpoint.document_hash
+            or base_history_checkpoint.journal_prefix_hash != checkpoint.journal_prefix_hash
+            or base_history_checkpoint.snapshot_object_hash
+            != checkpoint.history_snapshot_object_hash
+            or base_history_checkpoint.snapshot_schema_version
+            != checkpoint.history_snapshot_schema_version
+        ):
+            raise StructuredPrototypeStoreError(
+                "command_history_checkpoint_identity_mismatch",
+                "prototype command history base does not match the latest checkpoint",
+            )
+        if (
+            _hash_canonical_json(base_history_checkpoint.to_payload())
+            != base_history_checkpoint.snapshot_object_hash
+        ):
+            raise StructuredPrototypeStoreError(
+                "command_history_checkpoint_hash_mismatch",
+                "prototype command history checkpoint canonical hash is invalid",
+            )
+        document = await self._require_document(conn, draft.document_id)
+        descriptor_row = await self._load_object_row(
+            conn,
+            document.project_id,
+            base_history_checkpoint.snapshot_object_hash,
+        )
+        if descriptor_row is None:
+            raise StructuredPrototypeStoreError(
+                "object_missing",
+                "prototype command history checkpoint object descriptor is missing",
+            )
+        descriptor = self._descriptor_from_row(descriptor_row)
+        if descriptor.content_hash != base_history_checkpoint.snapshot_object_hash:
+            raise StructuredPrototypeStoreError(
+                "command_history_checkpoint_hash_mismatch",
+                "prototype command history checkpoint descriptor hash is invalid",
+            )
+        async with conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM prototype_object_references
+            WHERE project_id = ? AND owner_kind = 'checkpoint' AND owner_id = ?
+              AND role = 'command-history-checkpoint' AND content_hash = ?
+              AND payload_type = 'prototype_command_history_checkpoint'
+              AND schema_version = ?
+            """,
+            (
+                document.project_id,
+                checkpoint.id,
+                base_history_checkpoint.snapshot_object_hash,
+                base_history_checkpoint.snapshot_schema_version,
+            ),
+        ) as cursor:
+            reference_row = await cursor.fetchone()
+        if reference_row is None or int(reference_row[0]) != 1:
+            raise StructuredPrototypeStoreError(
+                "command_history_checkpoint_missing",
+                "prototype command history checkpoint reference is missing",
+            )
+        tail = await self._list_command_batches_after(
+            conn,
+            draft.id,
+            checkpoint.checkpoint_sequence_no,
+        )
+        if len(tail) > MAX_REPLAY_TAIL_BATCHES:
+            raise StructuredPrototypeStoreError(
+                "replay_tail_limit_exceeded",
+                "prototype command replay tail exceeds the hard limit",
+            )
+        if tuple(tail) != base_tail_batches:
+            raise StructuredPrototypeStoreError(
+                "command_history_conflict",
+                "prototype command tail changed after service validation",
+            )
+        history = base_history_checkpoint.history
+        prefix_hash = base_history_checkpoint.journal_prefix_hash
+        expected_sequence_no = checkpoint.checkpoint_sequence_no
+        expected_document_hash = checkpoint.document_hash
+        records_by_id: dict[str, PrototypeCommandBatchRecord] = {}
+        try:
+            for stored in tail:
+                if (
+                    stored.draft_id != draft.id
+                    or stored.base_sequence_no != expected_sequence_no
+                    or stored.result_sequence_no != expected_sequence_no + 1
+                    or stored.base_document_hash != expected_document_hash
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "replay_sequence_gap",
+                        "prototype command tail is not continuous from its checkpoint",
+                    )
+                if stored.operation_kind != "forward":
+                    stack = (
+                        history.undo_stack
+                        if stored.operation_kind == "undo"
+                        else history.redo_stack
+                    )
+                    if not stack or stored.target_batch_id != stack[-1].batch_id:
+                        raise StructuredPrototypeStoreError(
+                            "command_history_corrupt",
+                            "prototype history command does not target the sealed stack top",
+                        )
+                    target_entry = stack[-1]
+                    target = records_by_id.get(target_entry.batch_id)
+                    if target is None:
+                        target_row = await self._load_command_batch_row(
+                            conn,
+                            draft.id,
+                            target_entry.batch_id,
+                        )
+                        if target_row is None:
+                            raise StructuredPrototypeStoreError(
+                                "command_history_entry_missing",
+                                "prototype sealed history target batch is missing",
+                            )
+                        target = self._command_batch_from_row(target_row)
+                    if target.command_batch_hash != target_entry.command_batch_hash:
+                        raise StructuredPrototypeStoreError(
+                            "command_history_entry_hash_mismatch",
+                            "prototype sealed history target hash does not match its batch",
+                        )
+                    if (
+                        stored.commands_json != target.inverse_commands_json
+                        or stored.base_document_hash != target.result_document_hash
+                        or stored.result_document_hash != target.base_document_hash
+                    ):
+                        raise StructuredPrototypeStoreError(
+                            "command_history_corrupt",
+                            "prototype history command does not exactly invert its target",
+                        )
+                history = advance_prototype_command_history(history, stored)
+                prefix_hash = _advance_journal_prefix_hash(prefix_hash, stored)
+                records_by_id[stored.id] = stored
+                expected_sequence_no = stored.result_sequence_no
+                expected_document_hash = stored.result_document_hash
+        except PrototypeCommandHistoryError as exc:
+            raise StructuredPrototypeStoreError(
+                "command_history_corrupt",
+                "prototype command tail cannot be folded from its checkpoint",
+            ) from exc
+        if (
+            expected_sequence_no != draft.head_sequence_no
+            or expected_document_hash != draft.head_document_hash
+            or prefix_hash != base_journal_prefix_hash
+        ):
+            raise StructuredPrototypeStoreError(
+                "journal_prefix_hash_mismatch",
+                "prototype command tail does not match the durable draft head",
+            )
+        return history, records_by_id
+
+    async def _assert_command_history_accepts_batch(
+        self,
+        conn: aiosqlite.Connection,
+        history: PrototypeCommandHistory,
+        batch: PrototypeCommandBatchRecord,
+        records_by_id: dict[str, PrototypeCommandBatchRecord],
+    ) -> None:
+        if batch.operation_kind == "forward":
+            return
+        stack = history.undo_stack if batch.operation_kind == "undo" else history.redo_stack
+        if not stack or batch.target_batch_id != stack[-1].batch_id:
+            raise StructuredPrototypeStoreError(
+                "command_history_conflict",
+                "prototype history target is no longer the legal stack top",
+            )
+        target = records_by_id.get(stack[-1].batch_id)
+        if target is None:
+            target_row = await self._load_command_batch_row(
+                conn,
+                batch.draft_id,
+                stack[-1].batch_id,
+            )
+            if target_row is None:
+                raise StructuredPrototypeStoreError(
+                    "command_history_entry_missing",
+                    "prototype sealed history target batch is missing",
+                )
+            target = self._command_batch_from_row(target_row)
+        if (
+            target.command_batch_hash != stack[-1].command_batch_hash
+            or batch.commands_json != target.inverse_commands_json
+            or batch.base_document_hash != target.result_document_hash
+            or batch.result_document_hash != target.base_document_hash
+        ):
+            raise StructuredPrototypeStoreError(
+                "command_batch_invalid",
+                "prototype history command does not exactly invert its target batch",
+            )
+
     async def _assert_runtime_session_accepts_event(
         self,
         conn: aiosqlite.Connection,
@@ -6369,7 +8673,8 @@ class AsyncStructuredPrototypeStore:
         expected_hash = checkpoint.document_hash
         for batch in batches:
             if (
-                batch.base_sequence_no != expected_sequence
+                batch.draft_id != draft.id
+                or batch.base_sequence_no != expected_sequence
                 or batch.result_sequence_no != expected_sequence + 1
             ):
                 raise StructuredPrototypeStoreError(
@@ -6505,6 +8810,20 @@ class AsyncStructuredPrototypeStore:
             job.request_manifest_object_hash,
             job.request_hash,
             job.context_manifest_object_hash,
+            job.source_policy,
+            job.source_snapshot_object_hash,
+            job.source_fingerprint,
+            job.source_snapshot_ref,
+            job.repository_object_format,
+            job.worktree_base_commit,
+            job.repository_project_prefix,
+            job.repository_tree_object_id,
+            int(job.working_tree_dirty) if job.working_tree_dirty is not None else None,
+            job.excluded_tracked_change_count,
+            job.excluded_untracked_count,
+            job.source_file_exclusion_policy,
+            job.excluded_sensitive_file_count,
+            job.excluded_status_hash,
             job.blueprint_object_hash,
             job.blueprint_version,
             job.blueprint_hash,
@@ -6556,6 +8875,7 @@ class AsyncStructuredPrototypeStore:
             item.kind,
             item.item_key,
             item.page_key,
+            item.item_ordinal,
             item.status,
             item.phase,
             item.attempt,
@@ -6717,6 +9037,7 @@ class AsyncStructuredPrototypeStore:
                     "redo",
                     "create_checkpoint",
                     "recover_draft",
+                    "delete_project_prototype",
                     "generation_job",
                     "generation_item",
                     "ai_edit",
@@ -6727,6 +9048,7 @@ class AsyncStructuredPrototypeStore:
                     "create_runtime_session",
                     "apply_runtime_event",
                     "replay_runtime_session",
+                    "reset_runtime_session",
                     "gc_run",
                     "diagnostic_replay",
                 ),
@@ -6791,7 +9113,20 @@ class AsyncStructuredPrototypeStore:
             event_no=_required_non_negative_int(row[1], "event.event_no"),
             step_id=_optional_str(row[2], "event.step_id"),
             event_kind=_required_str(row[3], "event.event_kind"),
-            status=_required_str(row[4], "event.status"),
+            status=_literal(
+                row[4],
+                (
+                    "queued",
+                    "pending",
+                    "running",
+                    "succeeded",
+                    "failed",
+                    "skipped",
+                    "interrupted",
+                    "cancelled",
+                ),
+                "event.status",
+            ),
             phase=_required_str(row[5], "event.phase"),
             input_hash=_optional_hash(row[6], "event.input_hash"),
             output_hash=_optional_hash(row[7], "event.output_hash"),
@@ -6834,37 +9169,65 @@ class AsyncStructuredPrototypeStore:
             context_manifest_object_hash=_required_hash(
                 row[7], "generation_job.context_manifest_object_hash"
             ),
-            blueprint_object_hash=_optional_hash(row[8], "generation_job.blueprint_object_hash"),
+            source_policy=_generation_source_policy(row[8]),
+            source_snapshot_object_hash=_optional_hash(
+                row[9], "generation_job.source_snapshot_object_hash"
+            ),
+            source_fingerprint=_optional_hash(row[10], "generation_job.source_fingerprint"),
+            source_snapshot_ref=_optional_str(row[11], "generation_job.source_snapshot_ref"),
+            repository_object_format=_optional_str(
+                row[12], "generation_job.repository_object_format"
+            ),
+            worktree_base_commit=_optional_str(row[13], "generation_job.worktree_base_commit"),
+            repository_project_prefix=_optional_text(
+                row[14], "generation_job.repository_project_prefix"
+            ),
+            repository_tree_object_id=_optional_str(
+                row[15], "generation_job.repository_tree_object_id"
+            ),
+            working_tree_dirty=_optional_sqlite_bool(row[16], "generation_job.working_tree_dirty"),
+            excluded_tracked_change_count=_optional_non_negative_int(
+                row[17], "generation_job.excluded_tracked_change_count"
+            ),
+            excluded_untracked_count=_optional_non_negative_int(
+                row[18], "generation_job.excluded_untracked_count"
+            ),
+            source_file_exclusion_policy=_generation_source_file_exclusion_policy(row[19]),
+            excluded_sensitive_file_count=_optional_non_negative_int(
+                row[20], "generation_job.excluded_sensitive_file_count"
+            ),
+            excluded_status_hash=_optional_hash(row[21], "generation_job.excluded_status_hash"),
+            blueprint_object_hash=_optional_hash(row[22], "generation_job.blueprint_object_hash"),
             blueprint_version=_required_non_negative_int(
-                row[9], "generation_job.blueprint_version"
+                row[23], "generation_job.blueprint_version"
             ),
-            blueprint_hash=_optional_hash(row[10], "generation_job.blueprint_hash"),
-            candidate_object_hash=_optional_hash(row[11], "generation_job.candidate_object_hash"),
+            blueprint_hash=_optional_hash(row[24], "generation_job.blueprint_hash"),
+            candidate_object_hash=_optional_hash(row[25], "generation_job.candidate_object_hash"),
             candidate_document_hash=_optional_hash(
-                row[12], "generation_job.candidate_document_hash"
+                row[26], "generation_job.candidate_document_hash"
             ),
-            preview_render_run_id=_optional_str(row[13], "generation_job.preview_render_run_id"),
-            preview_artifact_id=_optional_str(row[14], "generation_job.preview_artifact_id"),
+            preview_render_run_id=_optional_str(row[27], "generation_job.preview_render_run_id"),
+            preview_artifact_id=_optional_str(row[28], "generation_job.preview_artifact_id"),
             preview_renderer_version=_optional_str(
-                row[15], "generation_job.preview_renderer_version"
+                row[29], "generation_job.preview_renderer_version"
             ),
-            preview_storage_key=_optional_str(row[16], "generation_job.preview_storage_key"),
-            preview_output_hash=_optional_hash(row[17], "generation_job.preview_output_hash"),
+            preview_storage_key=_optional_str(row[30], "generation_job.preview_storage_key"),
+            preview_output_hash=_optional_hash(row[31], "generation_job.preview_output_hash"),
             preview_output_manifest_hash=_optional_hash(
-                row[18], "generation_job.preview_output_manifest_hash"
+                row[32], "generation_job.preview_output_manifest_hash"
             ),
             preview_visual_preflight_report_hash=_optional_hash(
-                row[19], "generation_job.preview_visual_preflight_report_hash"
+                row[33], "generation_job.preview_visual_preflight_report_hash"
             ),
             replay_manifest_object_hash=_optional_hash(
-                row[20], "generation_job.replay_manifest_object_hash"
+                row[34], "generation_job.replay_manifest_object_hash"
             ),
-            document_id=_optional_str(row[21], "generation_job.document_id"),
-            error_code=_optional_str(row[22], "generation_job.error_code"),
-            error_message=_optional_str(row[23], "generation_job.error_message"),
-            created_at=_datetime(row[24], "generation_job.created_at"),
-            updated_at=_datetime(row[25], "generation_job.updated_at"),
-            completed_at=_optional_datetime(row[26], "generation_job.completed_at"),
+            document_id=_optional_str(row[35], "generation_job.document_id"),
+            error_code=_optional_str(row[36], "generation_job.error_code"),
+            error_message=_optional_str(row[37], "generation_job.error_message"),
+            created_at=_datetime(row[38], "generation_job.created_at"),
+            updated_at=_datetime(row[39], "generation_job.updated_at"),
+            completed_at=_optional_datetime(row[40], "generation_job.completed_at"),
         )
 
     @staticmethod
@@ -6905,34 +9268,35 @@ class AsyncStructuredPrototypeStore:
             kind=_literal(row[3], ("blueprint", "foundation", "page"), "generation_item.kind"),
             item_key=_required_str(row[4], "generation_item.item_key"),
             page_key=_optional_str(row[5], "generation_item.page_key"),
+            item_ordinal=_required_non_negative_int(row[6], "generation_item.item_ordinal"),
             status=_literal(
-                row[6],
+                row[7],
                 ("pending", "generating", "validating", "done", "failed", "interrupted"),
                 "generation_item.status",
             ),
-            phase=_required_str(row[7], "generation_item.phase"),
-            attempt=_required_positive_int(row[8], "generation_item.attempt"),
-            task_kind=_required_str(row[9], "generation_item.task_kind"),
-            operation_id=_required_str(row[10], "generation_item.operation_id"),
-            context_object_hash=_required_hash(row[11], "generation_item.context_object_hash"),
-            submission_id=_optional_str(row[12], "generation_item.submission_id"),
+            phase=_required_str(row[8], "generation_item.phase"),
+            attempt=_required_positive_int(row[9], "generation_item.attempt"),
+            task_kind=_required_str(row[10], "generation_item.task_kind"),
+            operation_id=_required_str(row[11], "generation_item.operation_id"),
+            context_object_hash=_required_hash(row[12], "generation_item.context_object_hash"),
+            submission_id=_optional_str(row[13], "generation_item.submission_id"),
             submission_request_hash=_optional_hash(
-                row[13], "generation_item.submission_request_hash"
+                row[14], "generation_item.submission_request_hash"
             ),
             submission_normalized_fields=_string_tuple_from_json(
-                row[14], "generation_item.submission_normalized_fields_json"
+                row[15], "generation_item.submission_normalized_fields_json"
             ),
             submission_accepted_at=_optional_datetime(
-                row[15], "generation_item.submission_accepted_at"
+                row[16], "generation_item.submission_accepted_at"
             ),
-            output_object_hash=_optional_hash(row[16], "generation_item.output_object_hash"),
-            task_id=_optional_str(row[17], "generation_item.task_id"),
-            execution_process_id=_optional_str(row[18], "generation_item.execution_process_id"),
-            error_code=_optional_str(row[19], "generation_item.error_code"),
-            error_message=_optional_str(row[20], "generation_item.error_message"),
-            created_at=_datetime(row[21], "generation_item.created_at"),
-            updated_at=_datetime(row[22], "generation_item.updated_at"),
-            completed_at=_optional_datetime(row[23], "generation_item.completed_at"),
+            output_object_hash=_optional_hash(row[17], "generation_item.output_object_hash"),
+            task_id=_optional_str(row[18], "generation_item.task_id"),
+            execution_process_id=_optional_str(row[19], "generation_item.execution_process_id"),
+            error_code=_optional_str(row[20], "generation_item.error_code"),
+            error_message=_optional_str(row[21], "generation_item.error_message"),
+            created_at=_datetime(row[22], "generation_item.created_at"),
+            updated_at=_datetime(row[23], "generation_item.updated_at"),
+            completed_at=_optional_datetime(row[24], "generation_item.completed_at"),
         )
 
     @staticmethod
@@ -6996,8 +9360,15 @@ class AsyncStructuredPrototypeStore:
                 row[8], "checkpoint.command_contract_version"
             ),
             document_hash=_required_hash(row[9], "checkpoint.document_hash"),
-            created_by_operation_id=_required_str(row[10], "checkpoint.created_by_operation_id"),
-            created_at=_datetime(row[11], "checkpoint.created_at"),
+            history_snapshot_object_hash=_optional_hash(
+                row[10], "checkpoint.history_snapshot_object_hash"
+            ),
+            history_snapshot_schema_version=_optional_positive_int(
+                row[11], "checkpoint.history_snapshot_schema_version"
+            ),
+            journal_prefix_hash=_optional_hash(row[12], "checkpoint.journal_prefix_hash"),
+            created_by_operation_id=_required_str(row[13], "checkpoint.created_by_operation_id"),
+            created_at=_datetime(row[14], "checkpoint.created_at"),
         )
 
     @staticmethod
@@ -7272,9 +9643,10 @@ class AsyncStructuredPrototypeStore:
                 row[17], "runtime_session.allow_simulated_role_switch"
             ),
             actor_subject_id=_optional_str(row[18], "runtime_session.actor_subject_id"),
-            created_at=_datetime(row[19], "runtime_session.created_at"),
-            updated_at=_datetime(row[20], "runtime_session.updated_at"),
-            completed_at=_optional_datetime(row[21], "runtime_session.completed_at"),
+            replaces_session_id=_optional_str(row[19], "runtime_session.replaces_session_id"),
+            created_at=_datetime(row[20], "runtime_session.created_at"),
+            updated_at=_datetime(row[21], "runtime_session.updated_at"),
+            completed_at=_optional_datetime(row[22], "runtime_session.completed_at"),
         )
 
     @staticmethod
@@ -7513,11 +9885,30 @@ class AsyncStructuredPrototypeStore:
             (job.request_manifest_object_hash, "generation_job.request_manifest_object_hash"),
             (job.request_hash, "generation_job.request_hash"),
             (job.context_manifest_object_hash, "generation_job.context_manifest_object_hash"),
+            (job.source_snapshot_object_hash, "generation_job.source_snapshot_object_hash"),
+            (job.source_fingerprint, "generation_job.source_fingerprint"),
+            (job.excluded_status_hash, "generation_job.excluded_status_hash"),
             (item.context_object_hash, "generation_item.context_object_hash"),
         ):
             _required_hash(value, field)
         if (
             job.status != "queued"
+            or job.source_policy != "committed_head_v1"
+            or job.source_snapshot_ref != f"refs/agent-collab/prototype-generation/{job.id}"
+            or job.repository_object_format not in {"sha1", "sha256"}
+            or job.worktree_base_commit is None
+            or GIT_OBJECT_ID_RE.fullmatch(job.worktree_base_commit) is None
+            or job.repository_project_prefix is None
+            or job.repository_tree_object_id is None
+            or GIT_OBJECT_ID_RE.fullmatch(job.repository_tree_object_id) is None
+            or job.working_tree_dirty is None
+            or job.excluded_tracked_change_count is None
+            or job.excluded_tracked_change_count < 0
+            or job.excluded_untracked_count is None
+            or job.excluded_untracked_count < 0
+            or job.source_file_exclusion_policy != "dotenv_checkout_filter_v1"
+            or job.excluded_sensitive_file_count is None
+            or job.excluded_sensitive_file_count < 0
             or job.blueprint_version != 0
             or job.blueprint_object_hash is not None
             or job.blueprint_hash is not None
@@ -7591,6 +9982,11 @@ class AsyncStructuredPrototypeStore:
                 "generation_run_invalid",
                 "generation run items do not belong to the supplied run",
             )
+        if sorted(item.item_ordinal for item in items) != list(range(len(items))):
+            raise StructuredPrototypeStoreError(
+                "generation_run_invalid",
+                "generation run item ordinals must be unique and contiguous",
+            )
         succeeded = sum(item.status == "done" for item in items)
         failed = sum(item.status in {"failed", "interrupted"} for item in items)
         running = sum(item.status in {"generating", "validating"} for item in items)
@@ -7643,11 +10039,16 @@ class AsyncStructuredPrototypeStore:
             or operation.resource_kind != "generation_job"
             or operation.resource_id != job.id
             or operation.parent_operation_id != job.operation_id
-            or operation.status != "queued"
+            or operation.status not in {"queued", "running"}
         ):
             raise StructuredPrototypeStoreError(
                 "generation_run_invalid",
                 "scheduled generation run does not match its confirmed job",
+            )
+        if sorted(item.item_ordinal for item in items) != list(range(len(items))):
+            raise StructuredPrototypeStoreError(
+                "generation_run_invalid",
+                "generation run item ordinals must be unique and contiguous",
             )
         item_kinds = {item.kind for item in items}
         if item_kinds == {"foundation"}:
@@ -7657,15 +10058,14 @@ class AsyncStructuredPrototypeStore:
                     "foundation generation run must contain exactly one foundation item",
                 )
         elif item_kinds == {"page"}:
-            page_keys = {"purchase-list", "purchase-create", "purchase-detail"}
             if (
-                len(items) != 3
-                or {item.item_key for item in items} != page_keys
-                or {item.page_key for item in items} != page_keys
+                not items
+                or any(item.page_key is None or item.item_key != item.page_key for item in items)
+                or len({item.page_key for item in items}) != len(items)
             ):
                 raise StructuredPrototypeStoreError(
                     "generation_run_invalid",
-                    "page generation run must contain the ordered procurement page set",
+                    "page generation run must contain unique page items",
                 )
         else:
             raise StructuredPrototypeStoreError(
@@ -7714,6 +10114,20 @@ class AsyncStructuredPrototypeStore:
             existing.request_manifest_object_hash,
             existing.request_hash,
             existing.context_manifest_object_hash,
+            existing.source_policy,
+            existing.source_snapshot_object_hash,
+            existing.source_fingerprint,
+            existing.source_snapshot_ref,
+            existing.repository_object_format,
+            existing.worktree_base_commit,
+            existing.repository_project_prefix,
+            existing.repository_tree_object_id,
+            existing.working_tree_dirty,
+            existing.excluded_tracked_change_count,
+            existing.excluded_untracked_count,
+            existing.source_file_exclusion_policy,
+            existing.excluded_sensitive_file_count,
+            existing.excluded_status_hash,
             existing.created_at,
         ) != (
             incoming.id,
@@ -7723,6 +10137,20 @@ class AsyncStructuredPrototypeStore:
             incoming.request_manifest_object_hash,
             incoming.request_hash,
             incoming.context_manifest_object_hash,
+            incoming.source_policy,
+            incoming.source_snapshot_object_hash,
+            incoming.source_fingerprint,
+            incoming.source_snapshot_ref,
+            incoming.repository_object_format,
+            incoming.worktree_base_commit,
+            incoming.repository_project_prefix,
+            incoming.repository_tree_object_id,
+            incoming.working_tree_dirty,
+            incoming.excluded_tracked_change_count,
+            incoming.excluded_untracked_count,
+            incoming.source_file_exclusion_policy,
+            incoming.excluded_sensitive_file_count,
+            incoming.excluded_status_hash,
             incoming.created_at,
         ):
             raise StructuredPrototypeStoreError(
@@ -7736,11 +10164,17 @@ class AsyncStructuredPrototypeStore:
         existing: PrototypeDocumentGenerationJobRecord,
         incoming: PrototypeDocumentGenerationJobRecord,
     ) -> None:
-        cls._assert_generation_job_identity(existing, incoming)
-        if existing.id != incoming.id or existing.status != incoming.status:
+        del cls
+        if (
+            existing.id != incoming.id
+            or existing.project_id != incoming.project_id
+            or existing.client_request_id != incoming.client_request_id
+            or existing.request_manifest_object_hash != incoming.request_manifest_object_hash
+            or existing.request_hash != incoming.request_hash
+        ):
             raise StructuredPrototypeStoreError(
                 "generation_job_idempotency_conflict",
-                "generation job request was retried with different initial state",
+                "generation job request was retried with different requirements",
             )
 
     @staticmethod
@@ -7752,10 +10186,32 @@ class AsyncStructuredPrototypeStore:
             incoming.id,
             incoming.job_id,
             incoming.created_at,
+        ) or (
+            existing.blueprint_hash is not None
+            and existing.blueprint_hash != incoming.blueprint_hash
         ):
             raise StructuredPrototypeStoreError(
                 "generation_run_identity_mismatch",
                 "structured prototype generation run immutable identity changed",
+            )
+
+    @staticmethod
+    def _assert_generation_run_schedule_idempotent(
+        existing: PrototypeDocumentGenerationRunRecord,
+        incoming: PrototypeDocumentGenerationRunRecord,
+    ) -> None:
+        if (
+            existing.id,
+            existing.job_id,
+            existing.blueprint_hash,
+        ) != (
+            incoming.id,
+            incoming.job_id,
+            incoming.blueprint_hash,
+        ):
+            raise StructuredPrototypeStoreError(
+                "generation_run_identity_mismatch",
+                "structured prototype generation run retry changed its scheduling identity",
             )
 
     @staticmethod
@@ -7770,6 +10226,7 @@ class AsyncStructuredPrototypeStore:
             existing.kind,
             existing.item_key,
             existing.page_key,
+            existing.item_ordinal,
             existing.attempt,
             existing.task_kind,
             existing.operation_id,
@@ -7782,6 +10239,7 @@ class AsyncStructuredPrototypeStore:
             incoming.kind,
             incoming.item_key,
             incoming.page_key,
+            incoming.item_ordinal,
             incoming.attempt,
             incoming.task_kind,
             incoming.operation_id,
@@ -7848,43 +10306,333 @@ class AsyncStructuredPrototypeStore:
             )
 
     @classmethod
-    async def _interrupt_generation_operation(
+    async def _load_generation_restart_recovery_scope_tx(
         cls,
         conn: aiosqlite.Connection,
-        operation_id: str,
+    ) -> PrototypeGenerationRestartRecoveryScope:
+        async with conn.execute(
+            """
+            WITH RECURSIVE generation_tree(id, root_id) AS (
+                SELECT id, id
+                FROM prototype_operations
+                WHERE operation_kind = 'generation_job'
+                  AND resource_kind = 'generation_job'
+                  AND parent_operation_id IS NULL
+                UNION ALL
+                SELECT child.id, generation_tree.root_id
+                FROM prototype_operations AS child
+                JOIN generation_tree ON child.parent_operation_id = generation_tree.id
+            )
+            SELECT generation_tree.root_id, operation.id
+            FROM generation_tree
+            JOIN prototype_operations AS operation ON operation.id = generation_tree.id
+            WHERE operation.status IN ('queued', 'running')
+              AND NOT (
+                  operation.id = generation_tree.root_id
+                  AND EXISTS (
+                      SELECT 1
+                      FROM prototype_document_generation_jobs AS job
+                      WHERE job.operation_id = operation.id
+                        AND job.status = 'awaiting_confirmation'
+                  )
+              )
+            ORDER BY operation.created_at, operation.id
+            """
+        ) as cursor:
+            operation_rows = list(await cursor.fetchall())
+
+        targets: list[PrototypeGenerationRestartOperationTarget] = []
+        root_ids: set[str] = set()
+        for root_id_value, operation_id_value in operation_rows:
+            root_id = _required_str(root_id_value, "generation_recovery.root_operation_id")
+            operation_id = _required_str(
+                operation_id_value,
+                "generation_recovery.operation_id",
+            )
+            operation_row = await cls._load_operation_row(conn, operation_id)
+            if operation_row is None:
+                raise StructuredPrototypeStoreError(
+                    "generation_recovery_corrupt",
+                    "generation restart operation disappeared while loading its scope",
+                )
+            operation = cls._operation_from_row(operation_row)
+            async with conn.execute(
+                """
+                SELECT
+                    id, operation_id, parent_step_id, step_kind, step_ordinal,
+                    attempt, status, phase, input_manifest_hash, config_manifest_hash,
+                    output_manifest_hash, completion_evidence_kind,
+                    completion_evidence_ref, error_code, started_at, completed_at
+                FROM prototype_operation_steps
+                WHERE operation_id = ? AND status IN ('pending', 'running')
+                ORDER BY step_ordinal, attempt
+                """,
+                (operation.id,),
+            ) as cursor:
+                active_step_rows = list(await cursor.fetchall())
+            if len(active_step_rows) > 1:
+                raise StructuredPrototypeStoreError(
+                    "generation_recovery_corrupt",
+                    "generation operation has multiple active steps",
+                )
+            active_step = (
+                cls._operation_step_from_row(active_step_rows[0]) if active_step_rows else None
+            )
+            if (
+                operation.status == "queued"
+                and active_step is not None
+                and active_step.status == "running"
+            ):
+                raise StructuredPrototypeStoreError(
+                    "generation_recovery_corrupt",
+                    "queued generation operation has a running step",
+                )
+            async with conn.execute(
+                """
+                SELECT COALESCE(MAX(step_ordinal), -1) + 1
+                FROM prototype_operation_steps
+                WHERE operation_id = ?
+                """,
+                (operation.id,),
+            ) as cursor:
+                ordinal_row = await cursor.fetchone()
+            if ordinal_row is None:
+                raise StructuredPrototypeStoreError(
+                    "generation_recovery_corrupt",
+                    "generation recovery step ordinal could not be loaded",
+                )
+            targets.append(
+                PrototypeGenerationRestartOperationTarget(
+                    operation=operation,
+                    active_step=active_step,
+                    next_step_ordinal=_required_non_negative_int(
+                        ordinal_row[0],
+                        "generation_recovery.next_step_ordinal",
+                    ),
+                    next_event_no=await cls._next_operation_event_no(conn, operation.id),
+                )
+            )
+            root_ids.add(root_id)
+
+        async with conn.execute(
+            """
+            SELECT id, status, operation_id, updated_at
+            FROM prototype_document_generation_jobs
+            WHERE status IN (
+                'queued', 'planning', 'generating', 'assembling',
+                'validating', 'rendering_preview'
+            )
+            ORDER BY id
+            """
+        ) as cursor:
+            job_rows = list(await cursor.fetchall())
+        async with conn.execute(
+            """
+            SELECT id, job_id, status, total, processed, succeeded, failed,
+                   running, pending, updated_at
+            FROM prototype_document_generation_runs
+            WHERE status IN ('queued', 'running')
+            ORDER BY id
+            """
+        ) as cursor:
+            run_rows = list(await cursor.fetchall())
+        async with conn.execute(
+            """
+            SELECT id, job_id, run_id, status, phase, operation_id, updated_at
+            FROM prototype_document_generation_run_items
+            WHERE status IN ('pending', 'generating', 'validating')
+            ORDER BY id
+            """
+        ) as cursor:
+            item_rows = list(await cursor.fetchall())
+
+        target_operation_ids = {target.operation.id for target in targets}
+        active_job_ids: set[str] = set()
+        for row in job_rows:
+            job_id = _required_str(row[0], "generation_recovery.job_id")
+            operation_id = _required_str(row[2], "generation_recovery.job_operation_id")
+            if operation_id not in target_operation_ids:
+                raise StructuredPrototypeStoreError(
+                    "generation_recovery_corrupt",
+                    "active generation job has no active root operation",
+                )
+            active_job_ids.add(job_id)
+        active_run_ids: set[str] = set()
+        for row in run_rows:
+            run_id = _required_str(row[0], "generation_recovery.run_id")
+            job_id = _required_str(row[1], "generation_recovery.run_job_id")
+            if job_id not in active_job_ids:
+                raise StructuredPrototypeStoreError(
+                    "generation_recovery_corrupt",
+                    "active generation run has no active job",
+                )
+            active_run_ids.add(run_id)
+        for row in item_rows:
+            if (
+                _required_str(row[1], "generation_recovery.item_job_id") not in active_job_ids
+                or _required_str(row[2], "generation_recovery.item_run_id") not in active_run_ids
+                or _required_str(row[5], "generation_recovery.item_operation_id")
+                not in target_operation_ids
+            ):
+                raise StructuredPrototypeStoreError(
+                    "generation_recovery_corrupt",
+                    "active generation item has inconsistent restart lineage",
+                )
+
+        operation_payloads: list[dict[str, object]] = []
+        for target in targets:
+            operation = target.operation
+            step = target.active_step
+            operation_payloads.append(
+                {
+                    "id": operation.id,
+                    "projectId": operation.project_id,
+                    "operationKind": operation.operation_kind,
+                    "resourceKind": operation.resource_kind,
+                    "resourceId": operation.resource_id,
+                    "parentOperationId": operation.parent_operation_id,
+                    "status": operation.status,
+                    "phase": operation.phase,
+                    "requestManifestHash": operation.request_manifest_hash,
+                    "configManifestHash": operation.config_manifest_hash,
+                    "activeStep": None
+                    if step is None
+                    else {
+                        "id": step.id,
+                        "stepKind": step.step_kind,
+                        "stepOrdinal": step.step_ordinal,
+                        "attempt": step.attempt,
+                        "status": step.status,
+                        "phase": step.phase,
+                        "inputManifestHash": step.input_manifest_hash,
+                        "configManifestHash": step.config_manifest_hash,
+                    },
+                    "nextStepOrdinal": target.next_step_ordinal,
+                    "nextEventNo": target.next_event_no,
+                }
+            )
+        fingerprint = _hash_canonical_json(
+            {
+                "operations": operation_payloads,
+                "jobs": [list(row) for row in job_rows],
+                "runs": [list(row) for row in run_rows],
+                "items": [list(row) for row in item_rows],
+            }
+        )
+        return PrototypeGenerationRestartRecoveryScope(
+            fingerprint=fingerprint,
+            operations=tuple(targets),
+            affected_root_count=len(root_ids),
+            active_job_count=len(job_rows),
+            active_run_count=len(run_rows),
+            active_item_count=len(item_rows),
+        )
+
+    async def _interrupt_generation_operation(
+        self,
+        conn: aiosqlite.Connection,
+        target: PrototypeGenerationRestartOperationTarget,
+        *,
+        evidence_hash: str,
         interrupted_at: datetime,
     ) -> None:
-        row = await cls._load_operation_row(conn, operation_id)
-        if row is None:
-            raise StructuredPrototypeStoreError(
-                "operation_missing",
-                "generation recovery operation does not exist",
+        _required_hash(evidence_hash, "generation_recovery.evidence_hash")
+        operation = target.operation
+        step = target.active_step
+        event_no = target.next_event_no
+        recovery_phase = "service_restart_recovery"
+        if step is None or step.status == "pending":
+            running_operation = replace(
+                operation,
+                status="running",
+                phase=recovery_phase,
+                started_at=operation.started_at or interrupted_at,
             )
-        operation = cls._operation_from_row(row)
-        if operation.status in {"succeeded", "failed", "interrupted", "cancelled"}:
-            return
-        await conn.execute(
-            """
-            UPDATE prototype_operations
-            SET status = 'interrupted', phase = 'interrupted',
-                error_code = 'restart_interrupted', completed_at = ?
-            WHERE id = ?
-            """,
-            (interrupted_at.isoformat(), operation_id),
+            running_step = (
+                replace(
+                    step,
+                    status="running",
+                    phase=recovery_phase,
+                    started_at=step.started_at or interrupted_at,
+                )
+                if step is not None
+                else PrototypeOperationStep(
+                    id=f"{operation.id}:restart-recovery:{target.next_step_ordinal}",
+                    operation_id=operation.id,
+                    parent_step_id=None,
+                    step_kind="service_restart_recovery",
+                    step_ordinal=target.next_step_ordinal,
+                    attempt=1,
+                    status="running",
+                    phase=recovery_phase,
+                    input_manifest_hash=operation.request_manifest_hash,
+                    config_manifest_hash=operation.config_manifest_hash,
+                    output_manifest_hash=None,
+                    completion_evidence_kind=None,
+                    completion_evidence_ref=None,
+                    error_code=None,
+                    started_at=interrupted_at,
+                    completed_at=None,
+                )
+            )
+            await self._apply_operation_transition(
+                conn,
+                running_operation,
+                running_step,
+                PrototypeOperationEvent(
+                    operation_id=operation.id,
+                    event_no=event_no,
+                    step_id=running_step.id,
+                    event_kind="recovery_step_started",
+                    status="running",
+                    phase=recovery_phase,
+                    input_hash=running_step.input_manifest_hash,
+                    output_hash=None,
+                    evidence_hash=None,
+                    error_code=None,
+                    occurred_at=interrupted_at,
+                ),
+            )
+            operation = running_operation
+            step = running_step
+            event_no += 1
+        if step is None or step.status != "running":
+            raise StructuredPrototypeStoreError(
+                "generation_recovery_corrupt",
+                "generation operation has no running step to interrupt",
+            )
+        interrupted_operation = replace(
+            operation,
+            status="interrupted",
+            phase=recovery_phase,
+            failure_evidence_hash=evidence_hash,
+            error_code="restart_interrupted",
+            completed_at=interrupted_at,
         )
-        event_no = await cls._next_operation_event_no(conn, operation_id)
-        await cls._insert_operation_event(
+        interrupted_step = replace(
+            step,
+            status="interrupted",
+            phase=recovery_phase,
+            output_manifest_hash=evidence_hash,
+            completion_evidence_kind="generation_evidence_manifest",
+            completion_evidence_ref=evidence_hash,
+            error_code="restart_interrupted",
+            completed_at=interrupted_at,
+        )
+        await self._apply_operation_transition(
             conn,
+            interrupted_operation,
+            interrupted_step,
             PrototypeOperationEvent(
-                operation_id=operation_id,
+                operation_id=operation.id,
                 event_no=event_no,
-                step_id=None,
+                step_id=interrupted_step.id,
                 event_kind="operation_interrupted",
                 status="interrupted",
-                phase="interrupted",
-                input_hash=None,
-                output_hash=None,
-                evidence_hash=None,
+                phase=recovery_phase,
+                input_hash=interrupted_step.input_manifest_hash,
+                output_hash=evidence_hash,
+                evidence_hash=evidence_hash,
                 error_code="restart_interrupted",
                 occurred_at=interrupted_at,
             ),

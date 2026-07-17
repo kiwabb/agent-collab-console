@@ -15,6 +15,11 @@ import {
   type FormInputBinding,
 } from "../src/features/prototype/structured/prototypeRendererCore";
 import { parseRendererDocument } from "../src/features/prototype/structured/rendererDocumentCodec";
+import {
+  runtimeNodeActivationEvents,
+  runtimeNodeTriggerEvents,
+} from "../src/features/prototype/structured/structuredPrototypeDerived";
+import { isStructuredPrototypeContainerNode } from "../src/features/prototype/structured/structuredPrototypeNodes";
 import type {
   StructuredPrototypeDocument,
   StructuredPrototypeTableNode,
@@ -49,10 +54,7 @@ function runtimeValueText(value: RuntimeValue): string {
     case "integer":
       return String(value.value);
     case "string":
-      return value.value;
     case "enum":
-      if (value.value === "pending") return "待审批";
-      if (value.value === "approved") return "已通过";
       return value.value;
     case "entityRef":
       return value.entityId;
@@ -72,7 +74,7 @@ function findTableNode(
     node: StructuredPrototypeDocument["pages"][number]["root"],
   ): StructuredPrototypeTableNode | null => {
     if (node.id === nodeId) return node.type === "Table" ? node : null;
-    if (node.type === "Stack" || node.type === "Form") {
+    if (isStructuredPrototypeContainerNode(node)) {
       for (const child of node.children) {
         const found = visit(child);
         if (found !== null) return found;
@@ -89,31 +91,40 @@ function findTableNode(
 
 function renderTable(runtime: PublicRuntime, nodeId: string, rows: RuntimeEntity[]): void {
   const node = findTableNode(runtime.document, nodeId);
+  if (node === null) throw new Error(`Runtime table ${nodeId} does not exist`);
   const root = nodeElement(nodeId);
   const body = root?.querySelector("tbody");
-  if (node === null || !(body instanceof HTMLTableSectionElement)) return;
+  if (!(body instanceof HTMLTableSectionElement)) {
+    throw new Error(`Runtime table ${nodeId} has no table body`);
+  }
   const binding = runtime.document.runtime.viewBindings.find(
     (candidate) => candidate.nodeId === nodeId && candidate.target === "tableRows",
   );
-  if (binding === undefined || binding.target !== "tableRows") return;
-  const schema = runtime.document.runtime.entitySchemas.find(
-    (candidate) => candidate.id === binding.schemaId,
-  );
-  if (schema === undefined) return;
-  body.replaceChildren();
+  if (binding === undefined || binding.target !== "tableRows") {
+    throw new Error(`Runtime table ${nodeId} has no rows binding`);
+  }
+  const renderedRows: HTMLTableRowElement[] = [];
   for (const entity of rows) {
     const row = document.createElement("tr");
     row.dataset["entityId"] = entity.id;
     row.dataset["schemaId"] = entity.schemaId;
     for (const column of node.columns) {
-      const definition = schema.fields.find((field) => field.key === column.key);
-      const field = entity.fields.find((candidate) => candidate.fieldId === definition?.id);
+      if (column.fieldId === null) {
+        throw new Error(`Runtime table ${nodeId} column ${column.key} has no schema field binding`);
+      }
+      const field = entity.fields.find((candidate) => candidate.fieldId === column.fieldId);
+      if (field === undefined) {
+        throw new Error(
+          `Runtime entity ${entity.id} has no value for table field ${column.fieldId}`,
+        );
+      }
       const cell = document.createElement("td");
-      cell.textContent = field === undefined ? "" : runtimeValueText(field.value);
+      cell.textContent = runtimeValueText(field.value);
       row.append(cell);
     }
-    body.append(row);
+    renderedRows.push(row);
   }
+  body.replaceChildren(...renderedRows);
 }
 
 function renderRuntime(runtime: PublicRuntime): void {
@@ -135,6 +146,7 @@ function renderRuntime(runtime: PublicRuntime): void {
   );
   const roleSelect = requiredElement(document, "[data-role-select]", HTMLSelectElement);
   roleSelect.value = runtime.state.actorRoleId;
+  roleSelect.disabled = !runtime.state.allowSimulatedRoleSwitch;
   requiredElement(document, "[data-current-role-label]", HTMLElement).textContent =
     role?.label ?? runtime.state.actorRoleId;
   const notification = runtime.state.notifications.at(-1);
@@ -223,36 +235,38 @@ function bindInteractions(runtime: PublicRuntime): void {
       renderRuntime(runtime);
     });
   });
-  requiredElement(document, "[data-role-select]", HTMLSelectElement).addEventListener(
-    "change",
-    (event) => {
-      if (!(event.currentTarget instanceof HTMLSelectElement)) return;
-      const roleId = event.currentTarget.value;
-      queue(() => applyEvents(runtime, [{ kind: "switchSimulatedRole", roleId }]));
-    },
-  );
+  if (runtime.state.allowSimulatedRoleSwitch) {
+    requiredElement(document, "[data-role-select]", HTMLSelectElement).addEventListener(
+      "change",
+      (event) => {
+        if (!(event.currentTarget instanceof HTMLSelectElement)) return;
+        const roleId = event.currentTarget.value;
+        queue(() => applyEvents(runtime, [{ kind: "switchSimulatedRole", roleId }]));
+      },
+    );
+  }
   document.querySelectorAll<HTMLButtonElement>("[data-runtime-node-id]").forEach((button) => {
     button.addEventListener("click", () => {
       const nodeId = button.dataset["runtimeNodeId"];
       if (nodeId === undefined) return;
-      const rule = runtime.document.runtime.rules.find(
-        (candidate) => candidate.enabled && candidate.trigger.nodeId === nodeId,
-      );
-      if (rule === undefined || rule.trigger.event === "rowActivated") return;
-      const events: RuntimeEvent[] = [];
-      if (rule.trigger.event === "submit") {
-        const form = button.closest<HTMLFormElement>("[data-prototype-form-id]");
-        if (form === null) throw new Error(`Submit button ${nodeId} is outside a form`);
-        form.querySelectorAll<HTMLInputElement>("[data-runtime-field-id]").forEach((input) => {
-          const binding = runtime.inputBindings.get(
-            input.closest<HTMLElement>("[data-prototype-node-id]")?.dataset["prototypeNodeId"] ??
-              "",
-          );
-          if (binding !== undefined) events.push(formValueEvent(binding, input));
-        });
-      }
-      events.push({ kind: "nodeActivated", nodeId, event: rule.trigger.event });
-      queue(() => applyEvents(runtime, events));
+      queue(async () => {
+        const activationEvents = runtimeNodeActivationEvents(runtime.document, nodeId);
+        if (activationEvents.length === 0) return;
+        const events: RuntimeEvent[] = [];
+        if (activationEvents.some((event) => event.event === "submit")) {
+          const form = button.closest<HTMLFormElement>("[data-prototype-form-id]");
+          if (form === null) throw new Error(`Submit button ${nodeId} is outside a form`);
+          form.querySelectorAll<HTMLInputElement>("[data-runtime-field-id]").forEach((input) => {
+            const binding = runtime.inputBindings.get(
+              input.closest<HTMLElement>("[data-prototype-node-id]")?.dataset["prototypeNodeId"] ??
+                "",
+            );
+            if (binding !== undefined) events.push(formValueEvent(binding, input));
+          });
+        }
+        events.push(...activationEvents);
+        await applyEvents(runtime, events);
+      });
     });
   });
   document.addEventListener("click", (event) => {
@@ -264,15 +278,16 @@ function bindInteractions(runtime: PublicRuntime): void {
     const schemaId = row?.dataset["schemaId"];
     const nodeId = table?.dataset["prototypeNodeId"];
     if (entityId === undefined || schemaId === undefined || nodeId === undefined) return;
-    queue(() =>
-      applyEvents(runtime, [
+    queue(async () => {
+      if (!runtimeNodeTriggerEvents(runtime.document, nodeId).includes("rowActivated")) return;
+      await applyEvents(runtime, [
         {
           kind: "tableRowActivated",
           nodeId,
           entityRef: { type: "entityRef", schemaId, entityId },
         },
-      ]),
-    );
+      ]);
+    });
   });
 }
 

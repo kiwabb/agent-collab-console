@@ -7,12 +7,15 @@ import type {
   StringRuntimeValue,
   RuntimeTransitionResult,
   RuntimeValue,
-} from "./types";
-import { applyRuntimeEventBatch, createInitialRuntimeState } from "./runtimeCore";
+} from "../../src/features/prototype/runtime/types";
+import {
+  applyRuntimeEventBatch,
+  createInitialRuntimeState,
+} from "../../src/features/prototype/runtime/runtimeCore";
 import {
   parsePrototypeRuntimeStateJson,
   serializePrototypeRuntimeState,
-} from "./runtimeStateCodec";
+} from "../../src/features/prototype/runtime/runtimeStateCodec";
 
 export const PROCUREMENT_IDS = {
   roles: {
@@ -84,6 +87,7 @@ export const PROCUREMENT_RUNTIME_DEFINITION: RuntimeDefinition = {
       key: "selected-request",
       valueType: "entityRef",
       nullable: true,
+      entitySchemaId: PROCUREMENT_IDS.schema.request,
       defaultValue: nullValue(),
     },
   ],

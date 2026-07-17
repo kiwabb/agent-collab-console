@@ -280,6 +280,7 @@ class AsyncProcessEntry:
     last_event_at: float = 0.0
     idle_timed_out: bool = False
     idle_timeout_seconds: int | None = None
+    max_timeout_seconds: int | None = None
     turn_watchdog_task: asyncio.Task[None] | None = None
     timeout_reason: str | None = None
     # Latest activity kind tracked by _capture_on_reader for heartbeat phase
@@ -1837,7 +1838,7 @@ class BaseProcessRuntime:
         import time as _time
 
         idle_timeout = timeouts.process_idle_timeout_s()
-        max_timeout = timeouts.process_max_timeout_s()
+        max_timeout = entry.max_timeout_seconds or timeouts.process_max_timeout_s()
         entry.last_event_at = _time.monotonic()
         watchdog_task = asyncio.create_task(
             self._watchdog(workspace_id, entry, task_id, max_timeout)

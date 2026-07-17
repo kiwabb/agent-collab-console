@@ -22,6 +22,8 @@ const sourceFiles = [
   "src/features/prototype/runtime/types.ts",
   "src/features/prototype/structured/prototypeRendererCore.ts",
   "src/features/prototype/structured/rendererDocumentCodec.ts",
+  "src/features/prototype/structured/structuredPrototypeDerived.ts",
+  "src/features/prototype/structured/structuredPrototypeNodes.ts",
   "src/features/prototype/structured/types.ts",
   "src/lib/utils.tsx",
   "scripts/prototype-public-runtime.ts",

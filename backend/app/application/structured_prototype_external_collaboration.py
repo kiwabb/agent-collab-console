@@ -32,6 +32,7 @@ from app.application.structured_prototype_contracts import (
     COMMAND_CONTRACT_VERSION,
     DomainCommandBatchV1,
     FormNodeV1,
+    GridNodeV1,
     PrototypeDocumentV1,
     PrototypePageV1,
     StackNodeV1,
@@ -58,6 +59,10 @@ SUPPORTED_COMMAND_KINDS = (
     "setNodeProperty",
     "setNodeLayout",
     "reorderPage",
+    "reorderNavigationItem",
+    "addBehaviorRule",
+    "replaceBehaviorRule",
+    "removeBehaviorRule",
 )
 
 
@@ -216,9 +221,7 @@ class StructuredPrototypeExternalCollaboration:
         except StructuredPrototypeContractError as exc:
             raise ExternalPrototypeAgentError(exc.code, str(exc)) from exc
         allocated_ids = {entity_id for _, entity_id in execution.allocated_entity_ids}
-        affected_entity_ids = tuple(
-            sorted(set(execution.affected_entity_ids) - allocated_ids)
-        )
+        affected_entity_ids = tuple(sorted(set(execution.affected_entity_ids) - allocated_ids))
         if not affected_entity_ids:
             raise ExternalPrototypeAgentError(
                 "command_batch_invalid",
@@ -425,7 +428,7 @@ class StructuredPrototypeExternalCollaboration:
     ) -> None:
         if node.id in wanted:
             found[node.id] = node
-        if isinstance(node, (StackNodeV1, FormNodeV1)):
+        if isinstance(node, (StackNodeV1, GridNodeV1, FormNodeV1)):
             for child in node.children:
                 cls._collect_nodes(child, wanted, found)
 
@@ -438,9 +441,7 @@ class StructuredPrototypeExternalCollaboration:
             if request.page_id is not None:
                 return {
                     "pages": [
-                        self._page(document, request.page_id).model_dump(
-                            mode="json", by_alias=True
-                        )
+                        self._page(document, request.page_id).model_dump(mode="json", by_alias=True)
                     ]
                 }
             return {"pages": [self._page_summary(page) for page in document.pages]}
@@ -450,9 +451,7 @@ class StructuredPrototypeExternalCollaboration:
                 request.entity_ids,
                 page_id=request.page_id,
             )
-            return {
-                "entities": [node.model_dump(mode="json", by_alias=True) for node in nodes]
-            }
+            return {"entities": [node.model_dump(mode="json", by_alias=True) for node in nodes]}
         if request.slice_kind == "tokens":
             return {"tokens": document.tokens.model_dump(mode="json", by_alias=True)}
         return {

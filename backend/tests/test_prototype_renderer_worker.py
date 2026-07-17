@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from app.adapters.prototype_renderer_worker import (
     PrototypeRendererWorker,
     PrototypeRendererWorkerError,
 )
+from app.adapters.prototype_object_store import canonical_json_bytes
 from app.application.structured_prototype_contracts import document_hash, document_payload
 
 
@@ -89,6 +91,43 @@ async def test_renderer_rejects_document_that_does_not_match_frozen_hash() -> No
         )
 
     assert error.value.code == "renderer_document_hash_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_renderer_rejects_duplicate_view_binding_targets_like_preview() -> None:
+    worker = PrototypeRendererWorker()
+    manifest = _input_manifest(worker)
+    document = document_payload(procurement_document())
+    runtime = document["runtime"]
+    assert isinstance(runtime, dict)
+    runtime["viewBindings"] = [
+        {
+            "id": fixture_id("renderer-binding-first"),
+            "nodeId": fixture_id("title-list"),
+            "target": "textContent",
+            "value": {"kind": "literal", "value": {"type": "string", "value": "first"}},
+        },
+        {
+            "id": fixture_id("renderer-binding-duplicate"),
+            "nodeId": fixture_id("title-list"),
+            "target": "textContent",
+            "value": {"kind": "literal", "value": {"type": "string", "value": "second"}},
+        },
+    ]
+    manifest["documentObjectHash"] = (
+        "sha256:" + hashlib.sha256(canonical_json_bytes(document)).hexdigest()
+    )
+
+    with pytest.raises(PrototypeRendererWorkerError) as error:
+        await worker.render(
+            request_id=fixture_id("renderer-duplicate-view-binding"),
+            artifact_id=fixture_id("renderer-duplicate-view-binding-artifact"),
+            input_manifest=manifest,
+            document=document,
+        )
+
+    assert error.value.code == "renderer_document_invalid"
+    assert "duplicate node target" in str(error.value)
 
 
 def test_renderer_refuses_a_tampered_bundle_manifest(tmp_path: Path) -> None:

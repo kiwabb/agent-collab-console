@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime  # noqa: I001, RUF100
 from typing import Protocol, cast
 from uuid import uuid4
 
+from app.adapters.prototype_object_store import canonical_json_bytes
 from app.application.help_orchestrator import is_help_request_terminal_status
 from app.application.role_workflow_service import RoleWorkflowService
 from app.application.runtime_catalog_service import RuntimeCatalogStore
@@ -34,12 +38,84 @@ RefreshTaskResult = Callable[[CodexTask], Awaitable[object]]
 ExecutionStartedCallback = Callable[[CodexTask, ExecutionProcess], Awaitable[None]]
 
 
+@dataclass(frozen=True, slots=True)
+class CodexTaskWireInputEvidence:
+    """The exact Claude stdin frame that is about to be written, without its contents."""
+
+    task_id: str
+    execution_process_id: str
+    wire_input_hash: str
+    wire_input_size: int
+    framing: str
+    executor: str
+    executor_type: str
+    provider: str | None
+    model: str | None
+    runtime_config_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class CodexTaskExecutionTerminalEvidence:
+    """Persisted terminal task/process state used for durable generation evidence."""
+
+    task: CodexTask
+    process: ExecutionProcess
+    task_status: str
+    result_hash: str | None
+    result_size: int | None
+
+
+class CodexTaskTerminalOutcomeError(RuntimeError):
+    """A terminal callback rejected the successful runtime outcome itself."""
+
+
+WireInputReadyCallback = Callable[[CodexTaskWireInputEvidence], Awaitable[None]]
+ExecutionTerminalCallback = Callable[[CodexTaskExecutionTerminalEvidence], Awaitable[None]]
+
+
+def _safe_command_args_identity(command_args: list[str]) -> list[object]:
+    """Retain launch-shape identity without exposing scoped MCP credentials."""
+
+    identity: list[object] = []
+    redact_next = False
+    for argument in command_args:
+        if redact_next:
+            identity.append("sha256:" + hashlib.sha256(argument.encode("utf-8")).hexdigest())
+            redact_next = False
+            continue
+        if argument == "--mcp-config":
+            identity.append(argument)
+            redact_next = True
+            continue
+        if argument.startswith("--mcp-config="):
+            value = argument.removeprefix("--mcp-config=")
+            identity.append(
+                "--mcp-config=sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+            )
+            continue
+        identity.append(argument)
+    if redact_next:
+        raise ValueError("MCP configuration flag is missing its value")
+    return identity
+
+
+def _safe_environment_identity(env_overrides: dict[str, str] | None) -> dict[str, str]:
+    if env_overrides is None:
+        return {}
+    return {
+        key: "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+        for key, value in sorted(env_overrides.items())
+    }
+
+
 class TaskRunnerStore(RuntimeCatalogStore, Protocol):
     async def save_execution_process(self, process: ExecutionProcess) -> None: ...
 
     async def save_codex_task(self, task: CodexTask) -> None: ...
 
     async def load_codex_task(self, task_id: str) -> CodexTask | None: ...
+
+    async def load_execution_process(self, process_id: str) -> ExecutionProcess | None: ...
 
     async def update_execution_process_status(
         self,
@@ -162,6 +238,8 @@ class CodexTaskRunner:
         triggering_message_id: str | None = None,
         wait_for_completion: bool = False,
         execution_started_callback: ExecutionStartedCallback | None = None,
+        wire_input_ready_callback: WireInputReadyCallback | None = None,
+        execution_terminal_callback: ExecutionTerminalCallback | None = None,
         command_args_override: list[str] | None = None,
     ) -> ExecutionProcess:
         if is_task_active_status(task.status):
@@ -215,9 +293,6 @@ class CodexTaskRunner:
             kind=kind,
             triggering_message_id=triggering_message_id,
         )
-        await self.event_bus.append(
-            build_task_status_event(task, "running", execution_process_id=exec_process.id)
-        )
         if execution_started_callback is not None:
             try:
                 await execution_started_callback(task, exec_process)
@@ -237,6 +312,14 @@ class CodexTaskRunner:
                     exit_code=-1,
                     completed_at=datetime.now(),
                 )
+                exec_process.status = "Failed"
+                exec_process.exit_code = -1
+                exec_process.completed_at = datetime.now()
+                await self._emit_terminal_callback(
+                    task,
+                    exec_process,
+                    execution_terminal_callback,
+                )
                 await self.event_bus.append(
                     build_task_status_event(
                         task,
@@ -246,6 +329,9 @@ class CodexTaskRunner:
                     )
                 )
                 raise
+        await self.event_bus.append(
+            build_task_status_event(task, "running", execution_process_id=exec_process.id)
+        )
 
         mgr = self._process_manager_factory()
         if self._help_orchestrator_factory is not None:
@@ -267,6 +353,23 @@ class CodexTaskRunner:
 
         effective_command_args = [*(rendered_command_args or []), *(command_args_override or [])]
         try:
+            if wire_input_ready_callback is not None:
+                await wire_input_ready_callback(
+                    self._wire_input_evidence(
+                        task=task,
+                        process=exec_process,
+                        input_text=prompt_text,
+                        executor=executor,
+                        executor_type=executor_type,
+                        provider=provider,
+                        model=model,
+                        env_overrides=rendered_env,
+                        command_args=effective_command_args,
+                        force_new_session=kind in ("rerun", "initial"),
+                        resume_session_id=resume_session_id,
+                        resume_message_id=resume_message_id,
+                    )
+                )
             final_status = await mgr.write_input_async(
                 task.session_id,
                 prompt_text,
@@ -284,10 +387,19 @@ class CodexTaskRunner:
             )
         except Exception:
             task.status = "failed"
+            task.result = task.result or "task runtime input was not accepted"
             task.updated_at = datetime.now()
             await self.codex_store.save_codex_task(task)
             await self.codex_store.update_execution_process_status(
                 exec_process.id, "Failed", exit_code=-1, completed_at=datetime.now()
+            )
+            exec_process.status = "Failed"
+            exec_process.exit_code = -1
+            exec_process.completed_at = datetime.now()
+            await self._emit_terminal_callback(
+                task,
+                exec_process,
+                execution_terminal_callback,
             )
             await self.event_bus.append(
                 build_task_status_event(task, "failed", execution_process_id=exec_process.id)
@@ -312,6 +424,13 @@ class CodexTaskRunner:
                 completed_at=datetime.now(),
             )
             exec_process.status = "Failed"
+            exec_process.exit_code = -1
+            exec_process.completed_at = datetime.now()
+            await self._emit_terminal_callback(
+                task,
+                exec_process,
+                execution_terminal_callback,
+            )
             await self.event_bus.append(
                 build_task_status_event(
                     task,
@@ -359,6 +478,45 @@ class CodexTaskRunner:
             completed_at=datetime.now() if is_task_terminal_status(task.status) else None,
         )
         exec_process.status = exec_final_status
+        exec_process.exit_code = exec_exit_code
+        exec_process.completed_at = datetime.now() if is_task_terminal_status(task.status) else None
+        if is_task_terminal_status(task.status):
+            try:
+                await self._emit_terminal_callback(
+                    task,
+                    exec_process,
+                    execution_terminal_callback,
+                )
+            except CodexTaskTerminalOutcomeError as exc:
+                task.status = "failed"
+                task.result = str(exc)
+                task.updated_at = datetime.now()
+                await self.codex_store.save_codex_task(task)
+                await self.codex_store.update_execution_process_status(
+                    exec_process.id,
+                    "Failed",
+                    exit_code=-1,
+                    completed_at=datetime.now(),
+                )
+                exec_process.status = "Failed"
+                exec_process.exit_code = -1
+                exec_process.completed_at = datetime.now()
+                await self._emit_terminal_callback(
+                    task,
+                    exec_process,
+                    execution_terminal_callback,
+                )
+                await self.event_bus.append(
+                    build_task_status_event(
+                        task,
+                        task.status,
+                        result=task.result,
+                        review_comment=task.review_comment,
+                        execution_process_id=exec_process.id,
+                    )
+                )
+                await self._complete_help_child_if_needed(task)
+                raise
         await self.event_bus.append(
             build_task_status_event(
                 task,
@@ -371,6 +529,91 @@ class CodexTaskRunner:
         await self._complete_help_child_if_needed(task)
 
         return exec_process
+
+    @staticmethod
+    def _wire_input_evidence(
+        *,
+        task: CodexTask,
+        process: ExecutionProcess,
+        input_text: str,
+        executor: str,
+        executor_type: str,
+        provider: str | None,
+        model: str | None,
+        env_overrides: dict[str, str] | None,
+        command_args: list[str],
+        force_new_session: bool,
+        resume_session_id: str | None,
+        resume_message_id: str | None,
+    ) -> CodexTaskWireInputEvidence:
+        if executor_type != "claude":
+            raise RuntimeError("wire-input evidence requires the Claude stream-json runtime")
+        wire_input = (
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": input_text.rstrip("\n")}],
+                    },
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
+        runtime_config = {
+            "executor": executor,
+            "executorType": executor_type,
+            "provider": provider,
+            "model": model,
+            "commandArgs": _safe_command_args_identity(command_args),
+            "envOverrides": _safe_environment_identity(env_overrides),
+            "forceNewSession": force_new_session,
+            "resumeSession": resume_session_id is not None,
+            "resumeMessage": resume_message_id is not None,
+        }
+        return CodexTaskWireInputEvidence(
+            task_id=task.id,
+            execution_process_id=process.id,
+            wire_input_hash="sha256:" + hashlib.sha256(wire_input).hexdigest(),
+            wire_input_size=len(wire_input),
+            framing="claude-stream-json/user-message/v1",
+            executor=executor,
+            executor_type=executor_type,
+            provider=provider,
+            model=model,
+            runtime_config_hash=(
+                "sha256:" + hashlib.sha256(canonical_json_bytes(runtime_config)).hexdigest()
+            ),
+        )
+
+    async def _emit_terminal_callback(
+        self,
+        task: CodexTask,
+        process: ExecutionProcess,
+        callback: ExecutionTerminalCallback | None,
+    ) -> None:
+        if callback is None:
+            return
+        persisted = await self.codex_store.load_execution_process(process.id)
+        if persisted is None:
+            raise RuntimeError("terminal execution process persistence is unavailable")
+        result = task.result
+        result_bytes = result.encode("utf-8") if result is not None else None
+        await callback(
+            CodexTaskExecutionTerminalEvidence(
+                task=task,
+                process=persisted,
+                task_status=task.status,
+                result_hash=(
+                    "sha256:" + hashlib.sha256(result_bytes).hexdigest()
+                    if result_bytes is not None
+                    else None
+                ),
+                result_size=len(result_bytes) if result_bytes is not None else None,
+            )
+        )
 
     def _read_current_artifact(self, task: CodexTask) -> str | None:
         """Read the role's canonical artifact for refine prompt building."""

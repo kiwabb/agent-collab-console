@@ -1,0 +1,68 @@
+{
+  "manifestVersion": "prototype-snap-worker-manifest/v1",
+  "protocolVersion": "prototype-snap-worker/v1",
+  "snapSolverVersion": "structured-prototype-freeform-snap/v1",
+  "snapSolverSourceHash": "sha256:131040c38fa2ec4e0ecedaebba1a0006a5d007059417527e092cff2c85d48dcf",
+  "bundleFile": "prototype_snap_worker.mjs",
+  "bundleHash": "sha256:28c1e919cd90b02fb02a1a66a253ad198d5a49bec75d7147f96ec2b6ae0db38a",
+  "bundleByteSize": 90822,
+  "buildTool": "esbuild@0.28.1",
+  "target": "node20",
+  "sources": [
+    {
+      "path": "src/features/prototype/runtime/canonical.ts",
+      "hash": "sha256:d694a6f7f233409791c4fcc8f7a1a8b2e1549e1d729bbd2a600ab01208e0783b",
+      "byteSize": 3831
+    },
+    {
+      "path": "src/features/prototype/structured/structuredPrototypeFreeformGrids.ts",
+      "hash": "sha256:da0f158c6cdf6bba5dc877d475f0b2ed810b5fb64b869515ba61f1921e497ae8",
+      "byteSize": 1024
+    },
+    {
+      "path": "src/features/prototype/structured/structuredPrototypeFreeformMoveEvidence.ts",
+      "hash": "sha256:43b992b1ae7b007c75b6bfc2a47982a6313141937ed3abbbc2bd307dc8880d98",
+      "byteSize": 754
+    },
+    {
+      "path": "src/features/prototype/structured/structuredPrototypeFreeformMoveReplay.ts",
+      "hash": "sha256:791ebb82235da9cf41ae135bc1e710d2e267574292a4be3cdd8dad41cf2c2d2d",
+      "byteSize": 34132
+    },
+    {
+      "path": "src/features/prototype/structured/structuredPrototypeGridGeometry.ts",
+      "hash": "sha256:c994c983c047971bc69a51dedf2d9a2b048da70ba338d43ea6527747a4838fab",
+      "byteSize": 17341
+    },
+    {
+      "path": "src/features/prototype/structured/structuredPrototypeSnapping.ts",
+      "hash": "sha256:a05675de0f17136ba4ebb281036050f8b3bfd477533906ea257463121adf8ec6",
+      "byteSize": 38346
+    },
+    {
+      "path": "src/features/prototype/structured/structuredPrototypeSnapWorkerProtocol.ts",
+      "hash": "sha256:003f19ce1b9b2fe26ec2c36fcf4459db265f25bad3b0bbb272be5f4bc41d80cf",
+      "byteSize": 10014
+    },
+    {
+      "path": "src/features/prototype/structured/structuredPrototypeSpacingSnapping.ts",
+      "hash": "sha256:13f4e60afc358f529bbfe2a9878d2bac42054b0d3197ed98af359ac3457e3823",
+      "byteSize": 21092
+    },
+    {
+      "path": "src/features/prototype/structured/types.ts",
+      "hash": "sha256:69eabc4d41e4c54ff80a8ebee4c4333797702144c8b043978be24ddda6ac55c5",
+      "byteSize": 32278
+    },
+    {
+      "path": "src/lib/utils.tsx",
+      "hash": "sha256:8ec3e0ee231db89ce05e5e191635ad65a22c14da6e3397a133adee5e65091e94",
+      "byteSize": 3079
+    },
+    {
+      "path": "scripts/prototype-snap-worker.ts",
+      "hash": "sha256:34d2ddcf9e923d2e8d33003a99403e1591ca1d24c728df271bbc79ff209bd2ea",
+      "byteSize": 2885
+    }
+  ]
+}

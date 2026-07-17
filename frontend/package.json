@@ -12,6 +12,7 @@
     "lint": "eslint .",
     "build:prototype-runtime-worker": "node scripts/build-prototype-runtime-worker.mjs",
     "build:prototype-renderer-worker": "node scripts/build-prototype-renderer-worker.mjs",
+    "build:prototype-snap-worker": "node scripts/build-prototype-snap-worker.mjs",
     "format": "prettier --write 'src/**/*.{ts,tsx}' 'tests/**/*.{ts,tsx}' 'scripts/**/*.{ts,mjs}'",
     "format:check": "prettier --check 'src/**/*.{ts,tsx}' 'tests/**/*.{ts,tsx}' 'scripts/**/*.{ts,mjs}'"
   },

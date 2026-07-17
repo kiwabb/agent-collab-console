@@ -24,6 +24,7 @@ from app.application.project_command import (
 )
 from app.application.worktree_claude_hooks import inject_worktree_claude_hooks
 from app.domain.models import CodexIssue, CodexTask, Project
+from app.domain.structured_prototype_generation import PrototypeGenerationSourceSnapshot
 
 
 class WorktreeError(RuntimeError):
@@ -74,6 +75,9 @@ class AgentMergeSummary(TypedDict):
 
 
 _SAFE_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+_PROTOTYPE_BRANCH_RE = re.compile(r"^prototype/([0-9a-f]{20})$")
+_PROTOTYPE_WORKTREE_DIR_RE = re.compile(r"^prototype-([0-9a-f]{20})$")
+_GENERATION_SNAPSHOT_REF_PREFIX = "refs/agent-collab/prototype-generation/"
 logger = logging.getLogger(__name__)
 
 
@@ -419,6 +423,7 @@ class WorktreeManager:
         scope_id: str,
         *,
         source_paths: tuple[str, ...] = (),
+        source_snapshot: PrototypeGenerationSourceSnapshot | None = None,
     ) -> tuple[str, str, str]:
         """Create an isolated worktree for one prototype UI engineer task.
 
@@ -438,13 +443,43 @@ class WorktreeManager:
                     await self._cleanup_path(project.repo_path, str(worktree))
                 await self.git.delete_branch(project.repo_path, branch)
 
-                project_prefix = await self.git.repository_prefix(project.repo_path)
-                if source_paths:
+                if source_snapshot is not None:
+                    if source_paths:
+                        raise WorktreeError(
+                            "committed prototype generation snapshots cannot overlay source paths"
+                        )
+                    try:
+                        await self.git.verify_committed_head_snapshot(
+                            project.repo_path,
+                            snapshot_ref=source_snapshot.source_snapshot_ref,
+                            repository_object_format=source_snapshot.repository_object_format,
+                            worktree_base_commit=source_snapshot.worktree_base_commit,
+                            repository_project_prefix=(
+                                source_snapshot.repository_project_prefix
+                            ),
+                            repository_tree_object_id=(
+                                source_snapshot.repository_tree_object_id
+                            ),
+                            source_file_exclusion_policy=(
+                                source_snapshot.source_file_exclusion_policy
+                            ),
+                            excluded_sensitive_file_count=(
+                                source_snapshot.excluded_sensitive_file_count
+                            ),
+                        )
+                    except GitError as exc:
+                        raise WorktreeError(str(exc)) from exc
+                    project_prefix = source_snapshot.repository_project_prefix
+                    base_revision = source_snapshot.worktree_base_commit
+                    untracked: list[str] = []
+                else:
+                    project_prefix = await self.git.repository_prefix(project.repo_path)
+                if source_snapshot is None and source_paths:
                     base_revision = await self.git.working_tree_snapshot_revision(
                         project.repo_path
                     )
                     untracked = await self.git.list_untracked_files(project.repo_path)
-                else:
+                elif source_snapshot is None:
                     base_revision = await self.git.head_commit(project.repo_path)
                     untracked = []
                 await self.git.create_worktree(
@@ -456,6 +491,23 @@ class WorktreeManager:
                 project_worktree = worktree / project_prefix if project_prefix else worktree
                 try:
                     project_worktree.mkdir(parents=True, exist_ok=True)
+                    if source_snapshot is not None:
+                        excluded_paths = await self.git.generation_excluded_checkout_paths(
+                            project.repo_path,
+                            commit=source_snapshot.worktree_base_commit,
+                            project_prefix=source_snapshot.repository_project_prefix,
+                            exclusion_policy=(
+                                source_snapshot.source_file_exclusion_policy
+                            ),
+                        )
+                        if len(excluded_paths) != source_snapshot.excluded_sensitive_file_count:
+                            raise WorktreeError(
+                                "prototype generation sensitive-file exclusion changed"
+                            )
+                        self._remove_prototype_generation_excluded_paths(
+                            worktree,
+                            excluded_paths,
+                        )
                     for relative_path in untracked:
                         if self._skip_prototype_ui_engineer_snapshot_path(relative_path):
                             continue
@@ -473,16 +525,32 @@ class WorktreeManager:
                             project_worktree,
                             relative_path,
                         )
-                    if project_prefix:
+                    if project_prefix and source_snapshot is None:
                         base_revision = await self.git.initialize_snapshot_repository(
                             project_worktree
                         )
-                    await inject_worktree_claude_hooks(project_worktree)
                 except (OSError, WorktreeError):
                     await self._cleanup_path(project.repo_path, str(worktree))
                     await self.git.delete_branch(project.repo_path, branch)
                     raise
                 return branch, str(project_worktree), base_revision
+
+    @staticmethod
+    def _remove_prototype_generation_excluded_paths(
+        worktree: Path,
+        relative_paths: tuple[str, ...],
+    ) -> None:
+        root = worktree.resolve()
+        for relative_text in relative_paths:
+            relative = Path(relative_text)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise WorktreeError("prototype generation excluded path is unsafe")
+            target = root / relative
+            if target.is_symlink() or target.is_file():
+                target.unlink()
+                continue
+            if target.exists():
+                raise WorktreeError("prototype generation excluded path is not a file")
 
     async def cleanup_prototype_ui_engineer_worktree(
         self,
@@ -499,6 +567,74 @@ class WorktreeManager:
             if not branch.startswith("prototype/"):
                 raise WorktreeError("refusing to delete a non-prototype branch")
             await self.git.delete_branch(project.repo_path, branch)
+
+    async def cleanup_stale_prototype_generation_resources(
+        self,
+        project: Project,
+        *,
+        owned_snapshot_job_ids: frozenset[str],
+    ) -> None:
+        """Remove only generator-owned item resources and orphaned snapshot refs."""
+        project_lock = await self._lock_for(f"prototype-project:{project.id}")
+        async with project_lock:
+            managed_parent = _worktree_path(project, "prototype", "placeholder").parent.resolve()
+            protected_branches: set[str] = set()
+            worktree_entries = await self.git.list_worktrees(project.repo_path)
+            registered_paths = {Path(entry.path).resolve() for entry in worktree_entries}
+            for entry in worktree_entries:
+                branch = entry.branch
+                if branch is None:
+                    continue
+                match = _PROTOTYPE_BRANCH_RE.fullmatch(branch)
+                if match is None:
+                    continue
+                key = match.group(1)
+                expected_path = (managed_parent / f"prototype-{key}").resolve()
+                actual_path = Path(entry.path).resolve()
+                if actual_path != expected_path or actual_path.parent != managed_parent:
+                    protected_branches.add(branch)
+                    logger.warning(
+                        "Preserving prototype branch attached to an unmanaged worktree: "
+                        "project_id=%s branch=%s path=%s",
+                        project.id,
+                        branch,
+                        entry.path,
+                    )
+                    continue
+                await self._cleanup_path(project.repo_path, entry.path)
+                await self.git.delete_branch(project.repo_path, branch)
+
+            if managed_parent.is_dir():
+                for path in managed_parent.iterdir():
+                    match = _PROTOTYPE_WORKTREE_DIR_RE.fullmatch(path.name)
+                    if match is None or path.is_symlink() or not path.is_dir():
+                        continue
+                    resolved_path = path.resolve()
+                    if (
+                        resolved_path.parent != managed_parent
+                        or resolved_path in registered_paths
+                    ):
+                        continue
+                    key = match.group(1)
+                    await self._cleanup_path(project.repo_path, str(resolved_path))
+                    await self.git.delete_branch(project.repo_path, f"prototype/{key}")
+
+            for branch in await self.git.list_branch_names(project.repo_path, "prototype/"):
+                if _PROTOTYPE_BRANCH_RE.fullmatch(branch) is None or branch in protected_branches:
+                    continue
+                await self.git.delete_branch(project.repo_path, branch)
+
+            for snapshot_ref, object_id in await self.git.list_generation_snapshot_refs(
+                project.repo_path
+            ):
+                job_id = snapshot_ref.removeprefix(_GENERATION_SNAPSHOT_REF_PREFIX)
+                if job_id in owned_snapshot_job_ids:
+                    continue
+                await self.git.delete_generation_snapshot_ref(
+                    project.repo_path,
+                    snapshot_ref=snapshot_ref,
+                    expected_object_id=object_id,
+                )
 
     @staticmethod
     def _skip_prototype_ui_engineer_snapshot_path(relative_path: str) -> bool:

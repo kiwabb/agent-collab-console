@@ -6,6 +6,7 @@ import {
   acceptStructuredPrototypeGenerationCandidate,
   confirmStructuredPrototypeGenerationBlueprint,
   createStructuredPrototypeGenerationJob,
+  deleteProjectStructuredPrototype,
   getCurrentStructuredPrototypeDraft,
   getCurrentStructuredPrototypeGenerationJob,
   getStructuredPrototypeGenerationJob,
@@ -14,16 +15,34 @@ import { useI18n } from "@/providers/I18nProvider";
 
 import {
   isStructuredPrototypeGenerationActive,
+  nextStructuredPrototypeGenerationPollFailureCount,
   structuredPrototypeGenerationBrief,
 } from "./structuredPrototypeGenerationState";
+import {
+  reconcilePendingPrototypeGenerationOperation,
+  type ReconciledPrototypeGenerationOperation,
+} from "./structuredPrototypeAsyncRecovery";
+import {
+  beginStructuredPrototypePendingOperation,
+  clearStructuredPrototypeProjectStorage,
+  finishStructuredPrototypePendingOperation,
+  isStructuredPrototypeGenerationPendingOperation,
+  loadStructuredPrototypePendingOperation,
+  readStructuredPrototypePendingLockState,
+  STRUCTURED_PROTOTYPE_DELETE_REQUEST_KEY,
+  STRUCTURED_PROTOTYPE_GENERATION_START_REQUEST_KEY,
+  structuredPrototypeGenerationAcceptRequestKey,
+  structuredPrototypeGenerationConfirmRequestKey,
+  type StructuredPrototypePendingOperation,
+} from "./structuredPrototypeStorage";
 import type { StructuredPrototypeDraft, StructuredPrototypeGenerationJob } from "./types";
 
 const POLL_INTERVAL_MS = 2_000;
-const MAX_POLL_ATTEMPTS = 300;
+const MAX_CONSECUTIVE_POLL_FAILURES = 300;
 
 interface Options {
   projectId: string;
-  onAccepted: (draft: StructuredPrototypeDraft) => Promise<void>;
+  onAccepted: (draft: StructuredPrototypeDraft) => Promise<boolean>;
 }
 
 interface StructuredPrototypeGenerationController {
@@ -35,6 +54,7 @@ interface StructuredPrototypeGenerationController {
   confirm: () => Promise<boolean>;
   accept: () => Promise<boolean>;
   enterAccepted: () => Promise<boolean>;
+  deleteAll: () => Promise<boolean>;
   retry: () => Promise<void>;
 }
 
@@ -53,35 +73,79 @@ export function useStructuredPrototypeGeneration({
   const { t } = useI18n();
   const mountedRef = useRef(true);
   const refreshRef = useRef<Promise<void> | null>(null);
-  const pollAttemptsRef = useRef<{ jobId: string; count: number } | null>(null);
+  const pollFailuresRef = useRef<{ jobId: string; failures: number } | null>(null);
 
   const recordError = useCallback((context: string, cause: unknown) => {
     console.error(`${context}:`, cause);
     if (mountedRef.current) setError(errorMessage(cause));
   }, []);
 
+  const reportGenerationFailure = useCallback(
+    (context: string, cause: unknown): false => {
+      const pending = readStructuredPrototypePendingLockState(
+        projectId,
+        isStructuredPrototypeGenerationPendingOperation,
+      );
+      const reported = pending.storageError ?? cause;
+      recordError(context, reported);
+      if (mountedRef.current) {
+        setLoading(false);
+        setMutating(pending.locked);
+      }
+      return false;
+    },
+    [projectId, recordError],
+  );
+
   const retry = useCallback(async () => {
     if (refreshRef.current) return refreshRef.current;
+    pollFailuresRef.current = null;
     const inFlight = (async () => {
       if (mountedRef.current) {
         setLoading(true);
         setError(null);
       }
       try {
+        const pending = loadStructuredPrototypePendingOperation(projectId);
+        if (pending !== null && isStructuredPrototypeGenerationPendingOperation(pending)) {
+          if (mountedRef.current) setMutating(true);
+          const reconciled = await reconcilePendingPrototypeGenerationOperation(pending);
+          switch (reconciled.kind) {
+            case "start":
+            case "confirm":
+              if (mountedRef.current) setJob(reconciled.job);
+              break;
+            case "accept":
+              if (!(await onAccepted(reconciled.draft))) {
+                throw new Error("accepted generation runtime recovery failed");
+              }
+              if (mountedRef.current) setJob(reconciled.job);
+              break;
+            case "delete":
+              clearStructuredPrototypeProjectStorage(projectId);
+              pollFailuresRef.current = null;
+              if (mountedRef.current) setJob(null);
+              break;
+          }
+          if (!mountedRef.current) return;
+          setMutating(false);
+          setLoading(false);
+          setError(null);
+          return;
+        }
         const current = await getCurrentStructuredPrototypeGenerationJob(projectId);
         if (!mountedRef.current) return;
         setJob(current);
         setLoading(false);
       } catch (cause) {
-        recordError("structured prototype generation recovery failed", cause);
-        if (mountedRef.current) setLoading(false);
+        reportGenerationFailure("structured prototype generation recovery failed", cause);
       }
     })().finally(() => {
       refreshRef.current = null;
     });
     refreshRef.current = inFlight;
     return inFlight;
-  }, [projectId, recordError]);
+  }, [onAccepted, projectId, reportGenerationFailure]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -95,30 +159,35 @@ export function useStructuredPrototypeGeneration({
     if (!job || !isStructuredPrototypeGenerationActive(job.status)) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    if (pollAttemptsRef.current?.jobId !== job.id) {
-      pollAttemptsRef.current = { jobId: job.id, count: 0 };
+    if (pollFailuresRef.current?.jobId !== job.id) {
+      pollFailuresRef.current = { jobId: job.id, failures: 0 };
     }
     const poll = async () => {
-      const attempts = pollAttemptsRef.current;
-      if (!attempts || attempts.jobId !== job.id) return;
-      attempts.count += 1;
+      const pollState = pollFailuresRef.current;
+      if (!pollState || pollState.jobId !== job.id) return;
       try {
         const next = await getStructuredPrototypeGenerationJob(job.id);
         if (cancelled) return;
+        pollState.failures = nextStructuredPrototypeGenerationPollFailureCount(
+          pollState.failures,
+          "success",
+        );
         setJob(next);
         setError(null);
         if (isStructuredPrototypeGenerationActive(next.status)) {
-          if (attempts.count >= MAX_POLL_ATTEMPTS) {
-            setError(t("prototype.structured.generation.pollExhausted"));
-            return;
-          }
           timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
         }
       } catch (cause) {
         if (cancelled) return;
+        pollState.failures = nextStructuredPrototypeGenerationPollFailureCount(
+          pollState.failures,
+          "failure",
+        );
         recordError("structured prototype generation polling failed", cause);
-        if (attempts.count < MAX_POLL_ATTEMPTS) {
+        if (pollState.failures < MAX_CONSECUTIVE_POLL_FAILURES) {
           timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
+        } else {
+          setError(t("prototype.structured.generation.pollExhausted"));
         }
       }
     };
@@ -134,46 +203,119 @@ export function useStructuredPrototypeGeneration({
       if (mutating) return false;
       setMutating(true);
       setError(null);
+      let descriptor: StructuredPrototypePendingOperation;
       try {
-        const created = await createStructuredPrototypeGenerationJob(projectId, {
+        descriptor = beginStructuredPrototypePendingOperation(projectId, {
+          operationKind: "generation_job",
+          resourceKind: "project",
+          resourceId: projectId,
+          requestKey: STRUCTURED_PROTOTYPE_GENERATION_START_REQUEST_KEY,
+        });
+      } catch (cause) {
+        return reportGenerationFailure(
+          "structured prototype generation start persistence failed",
+          cause,
+        );
+      }
+      let created: StructuredPrototypeGenerationJob;
+      try {
+        const response = await createStructuredPrototypeGenerationJob(projectId, {
           contractVersion: 1,
-          clientRequestId: crypto.randomUUID(),
+          clientRequestId: descriptor.clientRequestId,
           mode: "requirements",
           brief: structuredPrototypeGenerationBrief(brief),
         });
-        if (!mountedRef.current) return false;
-        setJob(created);
-        setMutating(false);
-        return true;
+        const current = await getCurrentStructuredPrototypeGenerationJob(projectId);
+        if (current === null || current.id !== response.id) {
+          throw new Error("created generation job is not the project current job");
+        }
+        finishStructuredPrototypePendingOperation(projectId, descriptor.clientRequestId);
+        created = current;
       } catch (cause) {
-        recordError("structured prototype generation start failed", cause);
-        if (mountedRef.current) setMutating(false);
-        return false;
+        let reconciled: ReconciledPrototypeGenerationOperation;
+        try {
+          reconciled = await reconcilePendingPrototypeGenerationOperation(descriptor);
+        } catch (recoveryError) {
+          return reportGenerationFailure(
+            "structured prototype generation start recovery failed",
+            recoveryError,
+          );
+        }
+        if (reconciled.kind !== "start") {
+          return reportGenerationFailure(
+            "structured prototype generation start recovery failed",
+            new Error("generation start recovered an incompatible operation"),
+          );
+        }
+        created = reconciled.job;
       }
+      if (!mountedRef.current) return false;
+      setJob(created);
+      setMutating(false);
+      return true;
     },
-    [mutating, projectId, recordError],
+    [mutating, projectId, reportGenerationFailure],
   );
 
   const confirm = useCallback(async (): Promise<boolean> => {
     if (!job?.canConfirm || !job.blueprintHash || mutating) return false;
+    const requestKey = structuredPrototypeGenerationConfirmRequestKey(
+      job.id,
+      job.blueprintVersion,
+      job.blueprintHash,
+    );
     setMutating(true);
     setError(null);
+    let descriptor: StructuredPrototypePendingOperation;
     try {
-      const confirmed = await confirmStructuredPrototypeGenerationBlueprint(job.id, {
+      descriptor = beginStructuredPrototypePendingOperation(projectId, {
+        operationKind: "generation_job",
+        resourceKind: "generation_job",
+        resourceId: job.id,
+        requestKey,
+      });
+    } catch (cause) {
+      return reportGenerationFailure(
+        "structured prototype blueprint confirmation persistence failed",
+        cause,
+      );
+    }
+    let confirmed: StructuredPrototypeGenerationJob;
+    try {
+      await confirmStructuredPrototypeGenerationBlueprint(job.id, {
         contractVersion: 1,
-        clientRequestId: crypto.randomUUID(),
+        clientRequestId: descriptor.clientRequestId,
+        expectedBlueprintVersion: job.blueprintVersion,
         expectedBlueprintHash: job.blueprintHash,
       });
-      if (!mountedRef.current) return false;
-      setJob(confirmed);
-      setMutating(false);
-      return true;
+      confirmed = await getStructuredPrototypeGenerationJob(job.id);
+      if (confirmed.status === "awaiting_confirmation" || confirmed.canConfirm) {
+        throw new Error("generation blueprint confirmation is not reflected in the job");
+      }
+      finishStructuredPrototypePendingOperation(projectId, descriptor.clientRequestId);
     } catch (cause) {
-      recordError("structured prototype blueprint confirmation failed", cause);
-      if (mountedRef.current) setMutating(false);
-      return false;
+      let reconciled: ReconciledPrototypeGenerationOperation;
+      try {
+        reconciled = await reconcilePendingPrototypeGenerationOperation(descriptor);
+      } catch (recoveryError) {
+        return reportGenerationFailure(
+          "structured prototype blueprint confirmation recovery failed",
+          recoveryError,
+        );
+      }
+      if (reconciled.kind !== "confirm") {
+        return reportGenerationFailure(
+          "structured prototype blueprint confirmation recovery failed",
+          new Error("generation confirmation recovered an incompatible operation"),
+        );
+      }
+      confirmed = reconciled.job;
     }
-  }, [job, mutating, recordError]);
+    if (!mountedRef.current) return false;
+    setJob(confirmed);
+    setMutating(false);
+    return true;
+  }, [job, mutating, projectId, reportGenerationFailure]);
 
   const enterAccepted = useCallback(async (): Promise<boolean> => {
     if (mutating) return false;
@@ -182,7 +324,9 @@ export function useStructuredPrototypeGeneration({
     try {
       const draft = await getCurrentStructuredPrototypeDraft(projectId, crypto.randomUUID());
       if (!draft) throw new Error("accepted generation has no current project draft");
-      await onAccepted(draft);
+      if (!(await onAccepted(draft))) {
+        throw new Error("accepted generation runtime recovery failed");
+      }
       if (!mountedRef.current) return false;
       setMutating(false);
       return true;
@@ -194,33 +338,158 @@ export function useStructuredPrototypeGeneration({
   }, [mutating, onAccepted, projectId, recordError]);
 
   const accept = useCallback(async (): Promise<boolean> => {
-    if (!job?.canAccept || !job.candidateObjectHash || !job.previewOutputHash || mutating) {
+    if (
+      !job?.canAccept ||
+      !job.candidateObjectHash ||
+      !job.previewOutputHash ||
+      !job.sourceFingerprint ||
+      mutating
+    ) {
       return false;
     }
+    const requestKey = structuredPrototypeGenerationAcceptRequestKey(
+      job.id,
+      job.candidateObjectHash,
+      job.previewOutputHash,
+      job.sourceFingerprint,
+    );
     setMutating(true);
     setError(null);
+    let descriptor: StructuredPrototypePendingOperation;
+    try {
+      descriptor = beginStructuredPrototypePendingOperation(projectId, {
+        operationKind: "create_document",
+        resourceKind: "generation_job",
+        resourceId: job.id,
+        requestKey,
+      });
+    } catch (cause) {
+      return reportGenerationFailure(
+        "structured prototype generation acceptance persistence failed",
+        cause,
+      );
+    }
+    let acceptedJob: StructuredPrototypeGenerationJob;
+    let draft: StructuredPrototypeDraft;
     try {
       const accepted = await acceptStructuredPrototypeGenerationCandidate(job.id, {
         contractVersion: 1,
-        clientRequestId: crypto.randomUUID(),
+        clientRequestId: descriptor.clientRequestId,
         expectedCandidateObjectHash: job.candidateObjectHash,
         expectedPreviewOutputHash: job.previewOutputHash,
+        expectedSourceFingerprint: job.sourceFingerprint,
       });
-      const draft = await getCurrentStructuredPrototypeDraft(projectId, crypto.randomUUID());
-      if (!draft || draft.draftId !== accepted.draftId) {
+      const [currentDraft, currentJob] = await Promise.all([
+        getCurrentStructuredPrototypeDraft(projectId, crypto.randomUUID()),
+        getStructuredPrototypeGenerationJob(job.id),
+      ]);
+      if (
+        !currentDraft ||
+        currentDraft.draftId !== accepted.draftId ||
+        currentJob.status !== "accepted" ||
+        currentJob.documentId !== currentDraft.documentId
+      ) {
         throw new Error("accepted generation draft does not match the project current draft");
       }
-      await onAccepted(draft);
-      if (!mountedRef.current) return false;
-      setJob(accepted.job);
-      setMutating(false);
-      return true;
+      finishStructuredPrototypePendingOperation(projectId, descriptor.clientRequestId);
+      acceptedJob = currentJob;
+      draft = currentDraft;
     } catch (cause) {
-      recordError("structured prototype generation acceptance failed", cause);
-      if (mountedRef.current) setMutating(false);
-      return false;
+      let reconciled: ReconciledPrototypeGenerationOperation;
+      try {
+        reconciled = await reconcilePendingPrototypeGenerationOperation(descriptor);
+      } catch (recoveryError) {
+        return reportGenerationFailure(
+          "structured prototype generation acceptance recovery failed",
+          recoveryError,
+        );
+      }
+      if (reconciled.kind !== "accept") {
+        return reportGenerationFailure(
+          "structured prototype generation acceptance recovery failed",
+          new Error("generation acceptance recovered an incompatible operation"),
+        );
+      }
+      acceptedJob = reconciled.job;
+      draft = reconciled.draft;
     }
-  }, [job, mutating, onAccepted, projectId, recordError]);
+    try {
+      if (!(await onAccepted(draft))) {
+        throw new Error("accepted generation runtime recovery failed");
+      }
+    } catch (cause) {
+      return reportGenerationFailure(
+        "structured prototype generation accepted draft recovery failed",
+        cause,
+      );
+    }
+    if (!mountedRef.current) return false;
+    setJob(acceptedJob);
+    setMutating(false);
+    return true;
+  }, [job, mutating, onAccepted, projectId, reportGenerationFailure]);
 
-  return { job, loading, mutating, error, start, confirm, accept, enterAccepted, retry };
+  const deleteAll = useCallback(async (): Promise<boolean> => {
+    if (mutating || (job && isStructuredPrototypeGenerationActive(job.status))) return false;
+    setMutating(true);
+    setError(null);
+    let descriptor: StructuredPrototypePendingOperation;
+    try {
+      descriptor = beginStructuredPrototypePendingOperation(projectId, {
+        operationKind: "delete_project_prototype",
+        resourceKind: "project_prototype",
+        resourceId: projectId,
+        contextId: "generation",
+        requestKey: STRUCTURED_PROTOTYPE_DELETE_REQUEST_KEY,
+      });
+    } catch (cause) {
+      return reportGenerationFailure("structured prototype deletion persistence failed", cause);
+    }
+    try {
+      await deleteProjectStructuredPrototype(projectId, descriptor.clientRequestId);
+      const [draft, currentJob] = await Promise.all([
+        getCurrentStructuredPrototypeDraft(projectId, crypto.randomUUID()),
+        getCurrentStructuredPrototypeGenerationJob(projectId),
+      ]);
+      if (draft !== null || currentJob !== null) {
+        throw new Error("deleted prototype still has a current draft or generation job");
+      }
+      finishStructuredPrototypePendingOperation(projectId, descriptor.clientRequestId);
+    } catch (cause) {
+      let reconciled: ReconciledPrototypeGenerationOperation;
+      try {
+        reconciled = await reconcilePendingPrototypeGenerationOperation(descriptor);
+      } catch (recoveryError) {
+        return reportGenerationFailure(
+          "structured prototype deletion recovery failed",
+          recoveryError,
+        );
+      }
+      if (reconciled.kind !== "delete") {
+        return reportGenerationFailure(
+          "structured prototype deletion recovery failed",
+          new Error("generation deletion recovered an incompatible operation"),
+        );
+      }
+    }
+    clearStructuredPrototypeProjectStorage(projectId);
+    if (!mountedRef.current) return false;
+    pollFailuresRef.current = null;
+    setJob(null);
+    setMutating(false);
+    return true;
+  }, [job, mutating, projectId, reportGenerationFailure]);
+
+  return {
+    job,
+    loading,
+    mutating,
+    error,
+    start,
+    confirm,
+    accept,
+    enterAccepted,
+    deleteAll,
+    retry,
+  };
 }

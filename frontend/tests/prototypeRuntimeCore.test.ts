@@ -11,7 +11,7 @@ import {
   procurementApprovalEventBatches,
   runProcurementApprovalScenario,
   selectedRequestRef,
-} from "../src/features/prototype/runtime/procurementFixture";
+} from "./fixtures/procurementRuntimeFixture";
 import {
   applyRuntimeEventBatch,
   createInitialRuntimeState,
@@ -19,6 +19,7 @@ import {
   RUNTIME_CORE_VERSION,
   RuntimeCoreError,
   validateRuntimeDefinition,
+  validateRuntimeState,
   XSTATE_KERNEL_VERSION,
 } from "../src/features/prototype/runtime/runtimeCore";
 import {
@@ -57,6 +58,34 @@ function requireResult(results: RuntimeTransitionResult[], index: number): Runti
   assert.ok(result, `transition result ${index} must exist`);
   return result;
 }
+
+describe("flow layout runtime isolation", () => {
+  it("preserves initial runtime state and view-model hashes", async () => {
+    const sessionId = "flow-layout-runtime-isolation";
+    const baselineState = createInitialRuntimeState(
+      PROCUREMENT_RUNTIME_DEFINITION,
+      PROCUREMENT_IDS.scenarios.happyPath,
+      sessionId,
+    );
+    const definitionWithLayout: RuntimeDefinition = {
+      ...PROCUREMENT_RUNTIME_DEFINITION,
+      flowLayout: {
+        nodes: [{ nodeId: PROCUREMENT_IDS.pages.create, x: 420, y: -120 }],
+      },
+    };
+    const layoutState = createInitialRuntimeState(
+      definitionWithLayout,
+      PROCUREMENT_IDS.scenarios.happyPath,
+      sessionId,
+    );
+
+    assert.equal(await hashRuntimeValue(layoutState), await hashRuntimeValue(baselineState));
+    assert.equal(
+      await hashRuntimeValue(deriveRuntimeViewModel(definitionWithLayout, layoutState)),
+      await hashRuntimeValue(deriveRuntimeViewModel(PROCUREMENT_RUNTIME_DEFINITION, baselineState)),
+    );
+  });
+});
 
 function requireEntity(state: PrototypeRuntimeState): RuntimeEntity {
   const set = state.entitySets.find(
@@ -173,6 +202,57 @@ describe("prototype runtime core", () => {
     );
   });
 
+  it("applies click and submit rules from one field-flushed Button batch in event order", async () => {
+    const definition: RuntimeDefinition = {
+      ...PROCUREMENT_RUNTIME_DEFINITION,
+      rules: [
+        {
+          id: "rule-click-before-submit",
+          key: "click-before-submit",
+          enabled: true,
+          trigger: {
+            kind: "nodeEvent",
+            nodeId: PROCUREMENT_IDS.nodes.submitRequest,
+            event: "click",
+          },
+          guard: null,
+          effects: [{ kind: "notify", level: "info", message: "click received" }],
+          guardFalseEffects: [],
+        },
+        ...PROCUREMENT_RUNTIME_DEFINITION.rules,
+      ],
+    };
+    const baseEvents = requireBatch(procurementApprovalEventBatches(), 0).events;
+    const firstField = baseEvents[0];
+    const secondField = baseEvents[1];
+    assert.ok(firstField?.kind === "fieldValueCommitted");
+    assert.ok(secondField?.kind === "fieldValueCommitted");
+
+    const result = await applyRuntimeEventBatch(definition, initialState("multi-event-session"), {
+      clientEventId: "event-click-and-submit",
+      expectedSequenceNo: 0,
+      events: [
+        firstField,
+        secondField,
+        {
+          kind: "nodeActivated",
+          nodeId: PROCUREMENT_IDS.nodes.submitRequest,
+          event: "click",
+        },
+        {
+          kind: "nodeActivated",
+          nodeId: PROCUREMENT_IDS.nodes.submitRequest,
+          event: "submit",
+        },
+      ],
+    });
+
+    assert.equal(result.report.effects[0]?.effectKind, "notify");
+    assert.equal(result.report.effects[0]?.eventIndex, 2);
+    assert.ok(result.report.effects.slice(1).every((effect) => effect.eventIndex === 3));
+    assert.equal(result.state.entitySets[0]?.entities.length, 1);
+  });
+
   it("shows the approve action only after switching to the manager role", async () => {
     const submitted = await submitValidRequest("role-switch-session");
     assert.equal(
@@ -235,7 +315,7 @@ describe("prototype runtime core", () => {
   it("matches the pinned XState 5.32.4 compatibility fixture", async () => {
     const results = await runProcurementApprovalScenario("compatibility-runtime-session", true);
 
-    assert.equal(RUNTIME_CORE_VERSION, "0.1.0-spike");
+    assert.equal(RUNTIME_CORE_VERSION, "0.2.0-spike");
     assert.equal(XSTATE_KERNEL_VERSION, "5.32.4");
     assert.deepEqual(
       results.map((result) => ({
@@ -245,17 +325,17 @@ describe("prototype runtime core", () => {
       })),
       [
         {
-          stateHash: "sha256:dc52aef9d3b808020a4eee0156d53fe83d280dafacbcf22024b86d4b14d46194",
+          stateHash: "sha256:f7eb738c805681198cd30fb38584dc1e35f0ee3455b4e6e2f8211ff8d07c3e12",
           viewModelHash: "sha256:8a08372298a0bffdc8540c54e5f00f83baeda4e17f6c02337cf27cb478dfcb6c",
           entityId: "d1a600e6-855f-5ad0-8b8b-56e87a48de90",
         },
         {
-          stateHash: "sha256:0f746c88f7b4aa7226047f6ac7e3f6c08d4f031a8e40a1d70c555e074af4be54",
+          stateHash: "sha256:54313544292c2fa496a0877499337b4bd359680b1bc668320f6e001fa8462061",
           viewModelHash: "sha256:9bbcc45f6f923ece4e461f3ec96af5e6a6a9a4201a46e0d229effa8fc0d7fd43",
           entityId: "d1a600e6-855f-5ad0-8b8b-56e87a48de90",
         },
         {
-          stateHash: "sha256:fdfa2274b2a58f387a527cabd5517e7b5d33cdb5373c168d3e6d5a79da66ff4c",
+          stateHash: "sha256:a2bbff2041ae041f31701277b637e21767b5b8a86c48fd645879934ad4c64e7f",
           viewModelHash: "sha256:83ad5001aa21d47d77b6e521263fd8754d040305dee8f89bfd20612b693e7646",
           entityId: "d1a600e6-855f-5ad0-8b8b-56e87a48de90",
         },
@@ -335,6 +415,143 @@ describe("prototype runtime core", () => {
     assert.deepEqual(validateRuntimeDefinition(invalidDefinition), [
       "view binding binding-invalid-event-ref cannot reference the current event entity",
     ]);
+  });
+
+  it("rejects duplicate view-binding targets for one runtime node", () => {
+    const first = PROCUREMENT_RUNTIME_DEFINITION.viewBindings[0];
+    assert.ok(first);
+    const invalidDefinition: RuntimeDefinition = {
+      ...PROCUREMENT_RUNTIME_DEFINITION,
+      viewBindings: [
+        ...PROCUREMENT_RUNTIME_DEFINITION.viewBindings,
+        { ...first, id: "binding-duplicate-node-target" },
+      ],
+    };
+
+    assert.ok(
+      validateRuntimeDefinition(invalidDefinition).includes(
+        `view binding node targets contains duplicate id ${first.nodeId}:${first.target}`,
+      ),
+    );
+  });
+
+  it("validates entity-reference variable schemas in definitions and replayed state", () => {
+    const otherSchemaId = "schema-other";
+    const definition: RuntimeDefinition = {
+      ...PROCUREMENT_RUNTIME_DEFINITION,
+      entitySchemas: [
+        ...PROCUREMENT_RUNTIME_DEFINITION.entitySchemas,
+        { id: otherSchemaId, key: "other", fields: [] },
+      ],
+      variables: PROCUREMENT_RUNTIME_DEFINITION.variables.map((variable) => ({
+        ...variable,
+        defaultValue: {
+          type: "entityRef",
+          schemaId: otherSchemaId,
+          entityId: "other-default",
+        },
+      })),
+      scenarios: PROCUREMENT_RUNTIME_DEFINITION.scenarios.map((scenario) => ({
+        ...scenario,
+        initialVariables: [
+          {
+            variableId: PROCUREMENT_IDS.variables.selectedRequest,
+            value: { type: "entityRef", schemaId: otherSchemaId, entityId: "other-initial" },
+          },
+        ],
+      })),
+    };
+
+    assert.deepEqual(validateRuntimeDefinition(definition), [
+      `variable ${PROCUREMENT_IDS.variables.selectedRequest} default entity schema does not match its definition`,
+      `scenario ${PROCUREMENT_IDS.scenarios.happyPath} variable ${PROCUREMENT_IDS.variables.selectedRequest} entity schema does not match its definition`,
+    ]);
+
+    const createMismatch: RuntimeDefinition = {
+      ...PROCUREMENT_RUNTIME_DEFINITION,
+      entitySchemas: [
+        ...PROCUREMENT_RUNTIME_DEFINITION.entitySchemas,
+        { id: otherSchemaId, key: "other", fields: [] },
+      ],
+      variables: PROCUREMENT_RUNTIME_DEFINITION.variables.map((variable) => ({
+        ...variable,
+        entitySchemaId: otherSchemaId,
+      })),
+    };
+    assert.ok(
+      validateRuntimeDefinition(createMismatch).includes(
+        `rule ${PROCUREMENT_IDS.rules.submit} create-entity result variable does not match schema ${PROCUREMENT_IDS.schema.request}`,
+      ),
+    );
+
+    const state = initialState("wrong-schema-replay");
+    const wrongState: PrototypeRuntimeState = {
+      ...state,
+      variableValues: [
+        {
+          variableId: PROCUREMENT_IDS.variables.selectedRequest,
+          value: { type: "entityRef", schemaId: otherSchemaId, entityId: "other-state" },
+        },
+      ],
+    };
+    assert.ok(
+      validateRuntimeState(PROCUREMENT_RUNTIME_DEFINITION, wrongState).includes(
+        `runtime variable ${PROCUREMENT_IDS.variables.selectedRequest} entity schema does not match its definition`,
+      ),
+    );
+  });
+
+  it("rejects an event entity from another schema before writing the variable", async () => {
+    const otherSchemaId = "schema-other";
+    const otherEntityId = "entity-other";
+    const definition: RuntimeDefinition = {
+      ...PROCUREMENT_RUNTIME_DEFINITION,
+      entitySchemas: [
+        ...PROCUREMENT_RUNTIME_DEFINITION.entitySchemas,
+        { id: otherSchemaId, key: "other", fields: [] },
+      ],
+      viewBindings: PROCUREMENT_RUNTIME_DEFINITION.viewBindings.map((binding) =>
+        binding.target === "tableRows"
+          ? { ...binding, schemaId: otherSchemaId, sortFieldId: null }
+          : binding,
+      ),
+      scenarios: PROCUREMENT_RUNTIME_DEFINITION.scenarios.map((scenario) => ({
+        ...scenario,
+        entityFixtures: [
+          {
+            schemaId: otherSchemaId,
+            entities: [{ id: otherEntityId, schemaId: otherSchemaId, fields: [] }],
+          },
+        ],
+      })),
+    };
+    const state = createInitialRuntimeState(
+      definition,
+      PROCUREMENT_IDS.scenarios.happyPath,
+      "wrong-event-schema",
+    );
+
+    await assert.rejects(
+      () =>
+        applyRuntimeEventBatch(definition, state, {
+          clientEventId: "wrong-event-schema",
+          expectedSequenceNo: 0,
+          events: [
+            {
+              kind: "tableRowActivated",
+              nodeId: PROCUREMENT_IDS.nodes.requestTable,
+              entityRef: {
+                type: "entityRef",
+                schemaId: otherSchemaId,
+                entityId: otherEntityId,
+              },
+            },
+          ],
+        }),
+      (error: unknown) =>
+        error instanceof RuntimeCoreError &&
+        error.code === "runtime_variable_entity_schema_mismatch",
+    );
   });
 
   it("round-trips exact runtime state and rejects malformed or extended state", () => {

@@ -18,6 +18,7 @@ from app.application.structured_prototype_generation_service import (
 )
 from app.domain.structured_prototype_generation import (
     PrototypeDocumentGenerationAcceptResult,
+    PrototypeDocumentGenerationConfirmResult,
     PrototypeDocumentGenerationItemRecord,
     PrototypeDocumentGenerationSnapshot,
 )
@@ -70,16 +71,16 @@ class CreateGenerationJobRequestV1(StrictRequestModel):
 class ConfirmGenerationBlueprintRequestV1(StrictRequestModel):
     contract_version: Literal[1]
     client_request_id: Annotated[str, Field(min_length=36, max_length=36)]
+    expected_blueprint_version: Annotated[int, Field(ge=1)]
     expected_blueprint_hash: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
 
 
 class AcceptGenerationCandidateRequestV1(StrictRequestModel):
     contract_version: Literal[1]
     client_request_id: Annotated[str, Field(min_length=36, max_length=36)]
-    expected_candidate_object_hash: Annotated[
-        str, Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    ]
+    expected_candidate_object_hash: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
     expected_preview_output_hash: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    expected_source_fingerprint: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
 
 
 class GenerationItemResponseV1(StrictResponseModel):
@@ -88,6 +89,7 @@ class GenerationItemResponseV1(StrictResponseModel):
     kind: Literal["blueprint", "foundation", "page"]
     item_key: str
     page_key: str | None
+    item_ordinal: int
     status: Literal["pending", "generating", "validating", "done", "failed", "interrupted"]
     phase: str
     task_kind: str
@@ -122,6 +124,20 @@ class GenerationJobResponseV1(StrictResponseModel):
         "cancelled",
     ]
     operation_id: str
+    source_policy: Literal["committed_head_v1"] | None
+    source_snapshot_object_hash: str | None
+    source_fingerprint: str | None
+    source_snapshot_ref: str | None
+    repository_object_format: str | None
+    worktree_base_commit: str | None
+    repository_project_prefix: str | None
+    repository_tree_object_id: str | None
+    working_tree_dirty: bool | None
+    excluded_tracked_change_count: int | None
+    excluded_untracked_count: int | None
+    source_file_exclusion_policy: Literal["dotenv_checkout_filter_v1"] | None
+    excluded_sensitive_file_count: int | None
+    excluded_status_hash: str | None
     blueprint_version: int
     blueprint_hash: str | None
     blueprint: GenerationBlueprintV1 | None
@@ -147,8 +163,17 @@ class GenerationJobResponseV1(StrictResponseModel):
     preview_path: str | None
 
 
+class GenerationConfirmResponseV1(StrictResponseModel):
+    contract_version: Literal[1]
+    operation_id: str
+    correlation_id: str
+    job: GenerationJobResponseV1
+
+
 class GenerationAcceptResponseV1(StrictResponseModel):
     contract_version: Literal[1]
+    operation_id: str
+    correlation_id: str
     job: GenerationJobResponseV1
     document_id: str
     draft_id: str
@@ -176,7 +201,9 @@ router = APIRouter(prefix="/api")
 async def structured_prototype_generation_mcp(request: Request) -> Response:
     service = structured_prototype_generation_mcp_service
     if service is None:
-        return JSONResponse(status_code=503, content={"error": "prototype generation MCP unavailable"})
+        return JSONResponse(
+            status_code=503, content={"error": "prototype generation MCP unavailable"}
+        )
     try:
         payload = await request.json()
     except json.JSONDecodeError:
@@ -244,7 +271,7 @@ async def get_generation_job(job_id: str) -> Response:
 
 @router.post(
     "/prototype-document-generation-jobs/{job_id}/confirm",
-    response_model=GenerationJobResponseV1,
+    response_model=GenerationConfirmResponseV1,
     status_code=202,
 )
 async def confirm_generation_blueprint(
@@ -252,12 +279,13 @@ async def confirm_generation_blueprint(
     body: ConfirmGenerationBlueprintRequestV1,
 ) -> Response:
     try:
-        snapshot = await _require_service().confirm_blueprint(
+        result = await _require_service().confirm_blueprint(
             job_id=job_id,
             client_request_id=body.client_request_id,
+            expected_blueprint_version=body.expected_blueprint_version,
             expected_blueprint_hash=body.expected_blueprint_hash,
         )
-        response = await _job_response(snapshot)
+        response = await _confirm_response(result)
     except StructuredPrototypeGenerationServiceError as exc:
         return _service_failure(exc)
     return JSONResponse(status_code=202, content=response.model_dump(mode="json", by_alias=True))
@@ -277,6 +305,7 @@ async def accept_generation_candidate(
             client_request_id=body.client_request_id,
             expected_candidate_object_hash=body.expected_candidate_object_hash,
             expected_preview_output_hash=body.expected_preview_output_hash,
+            expected_source_fingerprint=body.expected_source_fingerprint,
         )
         response = await _accept_response(result)
     except StructuredPrototypeGenerationServiceError as exc:
@@ -287,6 +316,7 @@ async def accept_generation_candidate(
 @router.get("/prototype-document-generation-jobs/{job_id}/preview/{relative_path:path}")
 async def read_generation_preview(job_id: str, relative_path: str) -> Response:
     media_types = {
+        "document.json": "application/json; charset=utf-8",
         "index.html": "text/html; charset=utf-8",
         "runtime.js": "text/javascript; charset=utf-8",
         "styles.css": "text/css; charset=utf-8",
@@ -319,6 +349,20 @@ async def _job_response(snapshot: PrototypeDocumentGenerationSnapshot) -> Genera
         project_id=job.project_id,
         status=job.status,
         operation_id=job.operation_id,
+        source_policy=job.source_policy,
+        source_snapshot_object_hash=job.source_snapshot_object_hash,
+        source_fingerprint=job.source_fingerprint,
+        source_snapshot_ref=job.source_snapshot_ref,
+        repository_object_format=job.repository_object_format,
+        worktree_base_commit=job.worktree_base_commit,
+        repository_project_prefix=job.repository_project_prefix,
+        repository_tree_object_id=job.repository_tree_object_id,
+        working_tree_dirty=job.working_tree_dirty,
+        excluded_tracked_change_count=job.excluded_tracked_change_count,
+        excluded_untracked_count=job.excluded_untracked_count,
+        source_file_exclusion_policy=job.source_file_exclusion_policy,
+        excluded_sensitive_file_count=job.excluded_sensitive_file_count,
+        excluded_status_hash=job.excluded_status_hash,
         blueprint_version=job.blueprint_version,
         blueprint_hash=job.blueprint_hash,
         blueprint=blueprint,
@@ -349,6 +393,7 @@ def _item_response(item: PrototypeDocumentGenerationItemRecord) -> GenerationIte
         kind=item.kind,
         item_key=item.item_key,
         page_key=item.page_key,
+        item_ordinal=item.item_ordinal,
         status=item.status,
         phase=item.phase,
         task_kind=item.task_kind,
@@ -370,12 +415,25 @@ async def _accept_response(
 ) -> GenerationAcceptResponseV1:
     return GenerationAcceptResponseV1(
         contract_version=GENERATION_HTTP_CONTRACT_VERSION,
+        operation_id=result.operation_id,
+        correlation_id=result.correlation_id,
         job=await _job_response(result.snapshot),
         document_id=result.document.id,
         draft_id=result.draft.id,
         checkpoint_id=result.checkpoint.id,
         head_sequence_no=result.draft.head_sequence_no,
         document_hash=result.draft.head_document_hash,
+    )
+
+
+async def _confirm_response(
+    result: PrototypeDocumentGenerationConfirmResult,
+) -> GenerationConfirmResponseV1:
+    return GenerationConfirmResponseV1(
+        contract_version=GENERATION_HTTP_CONTRACT_VERSION,
+        operation_id=result.operation_id,
+        correlation_id=result.correlation_id,
+        job=await _job_response(result.snapshot),
     )
 
 
@@ -395,6 +453,8 @@ def _service_failure(exc: StructuredPrototypeGenerationServiceError) -> JSONResp
         "generation_job_conflict",
         "generation_candidate_conflict",
         "blueprint_conflict",
+        "generation_confirm_in_progress",
+        "generation_accept_in_progress",
     }:
         status = 409
     elif exc.code.endswith("_invalid"):

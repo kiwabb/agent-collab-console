@@ -61,11 +61,9 @@ def _descriptor(server_id: str = "example") -> McpServerDescriptor:
 
 def _json_keys(value: object) -> set[str]:
     if isinstance(value, dict):
-        return {
-            key.lower()
-            for key, child in value.items()
-            if isinstance(key, str)
-        } | set().union(*(_json_keys(child) for child in value.values()))
+        return {key.lower() for key, child in value.items() if isinstance(key, str)} | set().union(
+            *(_json_keys(child) for child in value.values())
+        )
     if isinstance(value, list):
         return set().union(*(_json_keys(child) for child in value))
     return set()
@@ -155,10 +153,11 @@ def test_mcp_catalog_endpoint_lists_framework_owned_servers(client) -> None:
     assert {tool["id"] for tool in servers["structured-prototype-ai"]["tools"]} == {
         "submit_prototype_assistant_outcome"
     }
-    assert {
-        tool["id"] for tool in servers["structured-prototype-generation"]["tools"]
-    } == {
+    assert {tool["id"] for tool in servers["structured-prototype-generation"]["tools"]} == {
         "get_generation_submission_context",
+        "list_project_files",
+        "search_project_text",
+        "read_project_file",
         "finalize_prototype_blueprint",
         "finalize_prototype_foundation",
         "finalize_prototype_page",

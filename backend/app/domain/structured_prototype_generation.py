@@ -8,6 +8,8 @@ from app.domain.structured_prototype import (
     PrototypeCheckpointRecord,
     PrototypeDocumentRecord,
     PrototypeDraftRecord,
+    PrototypeOperation,
+    PrototypeOperationStep,
 )
 
 PrototypeDocumentGenerationJobStatus = Literal[
@@ -41,6 +43,41 @@ PrototypeDocumentGenerationItemStatus = Literal[
     "failed",
     "interrupted",
 ]
+PrototypeGenerationSourcePolicy = Literal["committed_head_v1"]
+PrototypeGenerationSourceFileExclusionPolicy = Literal["dotenv_checkout_filter_v1"]
+
+
+@dataclass(frozen=True, slots=True)
+class PrototypeGenerationCommittedHeadCapture:
+    snapshot_ref: str
+    repository_object_format: str
+    worktree_base_commit: str
+    repository_project_prefix: str
+    repository_tree_object_id: str
+    source_file_exclusion_policy: PrototypeGenerationSourceFileExclusionPolicy
+    working_tree_dirty: bool
+    excluded_tracked_change_count: int
+    excluded_untracked_count: int
+    excluded_sensitive_file_count: int
+    excluded_status_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class PrototypeGenerationSourceSnapshot:
+    source_policy: PrototypeGenerationSourcePolicy
+    source_snapshot_object_hash: str
+    source_fingerprint: str
+    source_snapshot_ref: str
+    repository_object_format: str
+    worktree_base_commit: str
+    repository_project_prefix: str
+    repository_tree_object_id: str
+    source_file_exclusion_policy: PrototypeGenerationSourceFileExclusionPolicy
+    working_tree_dirty: bool
+    excluded_tracked_change_count: int
+    excluded_untracked_count: int
+    excluded_sensitive_file_count: int
+    excluded_status_hash: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +109,21 @@ class PrototypeDocumentGenerationJobRecord:
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+    # Nullable only for rows created before committed_head_v1 was introduced.
+    source_policy: PrototypeGenerationSourcePolicy | None = None
+    source_snapshot_object_hash: str | None = None
+    source_fingerprint: str | None = None
+    source_snapshot_ref: str | None = None
+    repository_object_format: str | None = None
+    worktree_base_commit: str | None = None
+    repository_project_prefix: str | None = None
+    repository_tree_object_id: str | None = None
+    working_tree_dirty: bool | None = None
+    excluded_tracked_change_count: int | None = None
+    excluded_untracked_count: int | None = None
+    source_file_exclusion_policy: PrototypeGenerationSourceFileExclusionPolicy | None = None
+    excluded_sensitive_file_count: int | None = None
+    excluded_status_hash: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +154,7 @@ class PrototypeDocumentGenerationItemRecord:
     kind: PrototypeDocumentGenerationItemKind
     item_key: str
     page_key: str | None
+    item_ordinal: int
     status: PrototypeDocumentGenerationItemStatus
     phase: str
     attempt: int
@@ -142,8 +195,35 @@ class PrototypeDocumentGenerationRunCreateResult:
 
 
 @dataclass(frozen=True, slots=True)
+class PrototypeDocumentGenerationConfirmResult:
+    operation_id: str
+    correlation_id: str
+    snapshot: PrototypeDocumentGenerationSnapshot
+
+
+@dataclass(frozen=True, slots=True)
 class PrototypeDocumentGenerationAcceptResult:
+    operation_id: str
+    correlation_id: str
     snapshot: PrototypeDocumentGenerationSnapshot
     document: PrototypeDocumentRecord
     draft: PrototypeDraftRecord
     checkpoint: PrototypeCheckpointRecord
+
+
+@dataclass(frozen=True, slots=True)
+class PrototypeGenerationRestartOperationTarget:
+    operation: PrototypeOperation
+    active_step: PrototypeOperationStep | None
+    next_step_ordinal: int
+    next_event_no: int
+
+
+@dataclass(frozen=True, slots=True)
+class PrototypeGenerationRestartRecoveryScope:
+    fingerprint: str
+    operations: tuple[PrototypeGenerationRestartOperationTarget, ...]
+    affected_root_count: int
+    active_job_count: int
+    active_run_count: int
+    active_item_count: int

@@ -102,6 +102,7 @@ module = [
     "app.adapters.prototype_render_artifact_store",
     "app.adapters.prototype_renderer_worker",
     "app.adapters.prototype_runtime_worker",
+    "app.adapters.prototype_snap_worker",
     "app.adapters.structured_prototype_store",
     "app.adapters.sqlite_store",
     "app.domain",

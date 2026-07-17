@@ -1,104 +1,99 @@
 import type {
   RuntimeEntity,
+  RuntimeEvent,
+  RuntimeNodeTrigger,
+  TableRowsViewBinding,
   RuntimeValue,
   RuntimeViewModel,
   RuntimeViewProperty,
 } from "../runtime/types";
-import type { StructuredPrototypeDocument, StructuredPrototypeNode } from "./types";
+import type {
+  StructuredPrototypeDocument,
+  StructuredPrototypeFormNode,
+  StructuredPrototypeInputNode,
+  StructuredPrototypeNode,
+} from "./types";
+import { isStructuredPrototypeContainerNode } from "./structuredPrototypeNodes";
 
-export interface ProcurementRuntimeBindings {
-  scenarioId: string;
-  formId: string;
-  titleFormFieldId: string;
-  amountFormFieldId: string;
-  titleInputNodeId: string;
-  amountInputNodeId: string;
-  submitNodeId: string;
-  requestTableNodeId: string;
-  approveNodeId: string;
-  requestSchemaId: string;
-  titleEntityFieldId: string;
-  amountEntityFieldId: string;
-  statusEntityFieldId: string;
+const RUNTIME_NODE_TRIGGER_EVENT_ORDER = [
+  "click",
+  "submit",
+  "rowActivated",
+] as const satisfies readonly RuntimeNodeTrigger["event"][];
+
+export function defaultRuntimeScenarioId(document: StructuredPrototypeDocument): string {
+  const scenario = document.runtime.scenarios[0];
+  if (scenario === undefined) throw new Error("structured prototype has no runtime scenario");
+  return scenario.id;
 }
 
-function collectStructuredPrototypeNodes(
-  node: StructuredPrototypeNode,
-  target: StructuredPrototypeNode[],
-): void {
-  target.push(node);
-  if (node.type !== "Stack" && node.type !== "Form") return;
-  for (const child of node.children) collectStructuredPrototypeNodes(child, target);
-}
-
-export function deriveProcurementRuntimeBindings(
+export function runtimeNodeTriggerEvents(
   document: StructuredPrototypeDocument,
-): ProcurementRuntimeBindings | null {
-  const runtime = document.runtime;
-  const scenario = runtime.scenarios.find(
-    (candidate) => candidate.key === "purchase-approval-happy-path",
+  nodeId: string,
+): RuntimeNodeTrigger["event"][] {
+  const events = new Set(
+    document.runtime.rules
+      .filter((rule) => rule.enabled && rule.trigger.nodeId === nodeId)
+      .map((rule) => rule.trigger.event),
   );
-  const form = runtime.forms.find((candidate) => candidate.key === "create-purchase-request");
-  const schema = runtime.entitySchemas.find((candidate) => candidate.key === "purchase-request");
-  const submitRule = runtime.rules.find((candidate) => candidate.key === "submit-request");
-  const selectRule = runtime.rules.find((candidate) => candidate.key === "select-request");
-  const approveRule = runtime.rules.find((candidate) => candidate.key === "approve-request");
-  const titleFormField = form?.fields.find((candidate) => candidate.key === "title");
-  const amountFormField = form?.fields.find((candidate) => candidate.key === "amount");
-  const titleEntityField = schema?.fields.find((candidate) => candidate.key === "title");
-  const amountEntityField = schema?.fields.find((candidate) => candidate.key === "amount");
-  const statusEntityField = schema?.fields.find((candidate) => candidate.key === "status");
-  if (
-    !scenario ||
-    !form ||
-    !schema ||
-    !submitRule ||
-    submitRule.trigger.event !== "submit" ||
-    !selectRule ||
-    selectRule.trigger.event !== "rowActivated" ||
-    !approveRule ||
-    approveRule.trigger.event !== "click" ||
-    !titleFormField ||
-    titleFormField.valueType !== "string" ||
-    !amountFormField ||
-    amountFormField.valueType !== "integer" ||
-    !titleEntityField ||
-    !amountEntityField ||
-    !statusEntityField
-  ) {
-    return null;
-  }
+  return RUNTIME_NODE_TRIGGER_EVENT_ORDER.filter((event) => events.has(event));
+}
 
-  const nodes: StructuredPrototypeNode[] = [];
-  for (const page of document.pages) collectStructuredPrototypeNodes(page.root, nodes);
-  const formNode = nodes.find((node) => node.type === "Form" && node.formDefinitionId === form.id);
-  if (!formNode || formNode.type !== "Form") return null;
-  const formNodes: StructuredPrototypeNode[] = [];
-  collectStructuredPrototypeNodes(formNode, formNodes);
-  const inputs = formNodes.filter((node) => node.type === "Input");
-  const titleInputs = inputs.filter((node) => node.type === "Input" && node.inputType === "text");
-  const amountInputs = inputs.filter(
-    (node) => node.type === "Input" && node.inputType === "number",
+export function runtimeNodeActivationEvents(
+  document: StructuredPrototypeDocument,
+  nodeId: string,
+): Extract<RuntimeEvent, { kind: "nodeActivated" }>[] {
+  return runtimeNodeTriggerEvents(document, nodeId).flatMap((event) =>
+    event === "rowActivated" ? [] : [{ kind: "nodeActivated", nodeId, event }],
   );
-  const titleInput = titleInputs.length === 1 ? titleInputs[0] : null;
-  const amountInput = amountInputs.length === 1 ? amountInputs[0] : null;
-  if (!titleInput || !amountInput) return null;
+}
 
-  return {
-    scenarioId: scenario.id,
-    formId: form.id,
-    titleFormFieldId: titleFormField.id,
-    amountFormFieldId: amountFormField.id,
-    titleInputNodeId: titleInput.id,
-    amountInputNodeId: amountInput.id,
-    submitNodeId: submitRule.trigger.nodeId,
-    requestTableNodeId: selectRule.trigger.nodeId,
-    approveNodeId: approveRule.trigger.nodeId,
-    requestSchemaId: schema.id,
-    titleEntityFieldId: titleEntityField.id,
-    amountEntityFieldId: amountEntityField.id,
-    statusEntityFieldId: statusEntityField.id,
+export function runtimeTableRowsBinding(
+  document: StructuredPrototypeDocument,
+  nodeId: string,
+): TableRowsViewBinding | null {
+  const binding = document.runtime.viewBindings.find(
+    (candidate) => candidate.nodeId === nodeId && candidate.target === "tableRows",
+  );
+  return binding?.target === "tableRows" ? binding : null;
+}
+
+export function findStructuredPrototypeFormForNode(
+  document: StructuredPrototypeDocument,
+  nodeId: string,
+): StructuredPrototypeFormNode | null {
+  const visit = (
+    node: StructuredPrototypeNode,
+    containingForm: StructuredPrototypeFormNode | null,
+  ): StructuredPrototypeFormNode | null | undefined => {
+    const nextForm = node.type === "Form" ? node : containingForm;
+    if (node.id === nodeId) return nextForm;
+    if (!isStructuredPrototypeContainerNode(node)) return undefined;
+    for (const child of node.children) {
+      const found = visit(child, nextForm);
+      if (found !== undefined) return found;
+    }
+    return undefined;
   };
+  for (const page of document.pages) {
+    const found = visit(page.root, null);
+    if (found !== undefined) return found;
+  }
+  return null;
+}
+
+export function structuredPrototypeInputNodes(
+  node: StructuredPrototypeNode,
+): StructuredPrototypeInputNode[] {
+  const result: StructuredPrototypeInputNode[] = [];
+  const visit = (candidate: StructuredPrototypeNode) => {
+    if (candidate.type === "Input") result.push(candidate);
+    if (isStructuredPrototypeContainerNode(candidate)) {
+      for (const child of candidate.children) visit(child);
+    }
+  };
+  visit(node);
+  return result;
 }
 
 export function findStructuredPrototypeNode(
@@ -106,7 +101,7 @@ export function findStructuredPrototypeNode(
   nodeId: string,
 ): StructuredPrototypeNode | null {
   if (node.id === nodeId) return node;
-  if (node.type !== "Stack" && node.type !== "Form") return null;
+  if (!isStructuredPrototypeContainerNode(node)) return null;
   for (const child of node.children) {
     const found = findStructuredPrototypeNode(child, nodeId);
     if (found) return found;
@@ -165,7 +160,11 @@ export function runtimeValueText(value: RuntimeValue): string {
   }
 }
 
-export function runtimeEntityFieldText(entity: RuntimeEntity, fieldId: string): string {
+export function runtimeEntityFieldText(entity: RuntimeEntity, fieldId: string | null): string {
+  if (fieldId === null) throw new Error("runtime table column has no schema field binding");
   const field = entity.fields.find((candidate) => candidate.fieldId === fieldId);
-  return field ? runtimeValueText(field.value) : "";
+  if (field === undefined) {
+    throw new Error(`runtime entity ${entity.id} has no value for table field ${fieldId}`);
+  }
+  return runtimeValueText(field.value);
 }

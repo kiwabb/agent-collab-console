@@ -17,9 +17,12 @@ Every recorder:
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from app.application.audit import categories as cat
 from app.application.audit.writer import default_sink
@@ -27,6 +30,33 @@ from app.domain.ports import AuditSink
 from app.json_safety import JsonObject, object_dict
 
 logger = logging.getLogger(__name__)
+
+_REDACTION_MARKER = "[REDACTED]"
+_MCP_CONFIG_REDACTION_MARKER = "<mcp config redacted>"
+_SENSITIVE_MCP_KEY_FRAGMENTS = frozenset(
+    {"api_key", "authorization", "token", "password", "secret"}
+)
+_MCP_SECRET_CONTAINER_KEYS = frozenset({"env", "headers"})
+_MCP_FAILURE_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+_MCP_FAILURE_ISSUE_PATH_RE = re.compile(
+    r"(?:\$|[A-Za-z_][A-Za-z0-9_-]*(?:\.(?:[A-Za-z_][A-Za-z0-9_-]*|[0-9]+))*)\Z"
+)
+_MCP_FAILURE_ISSUE_TYPE_RE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+_MCP_FAILURE_ISSUE_LIMIT = 20
+_MCP_FAILURE_ISSUE_PATH_MAX_LENGTH = 256
+_MCP_EXTRA_FIELD_PATH = "__extra__"
+
+
+@dataclass(frozen=True, slots=True)
+class McpValidationIssueEvidence:
+    path: str
+    issue_type: str
+
+
+@dataclass(frozen=True, slots=True)
+class McpCallFailureEvidence:
+    code: str
+    issues: tuple[McpValidationIssueEvidence, ...] = ()
 
 
 def _sink(sink: AuditSink | None) -> AuditSink:
@@ -41,6 +71,80 @@ def _sink(sink: AuditSink | None) -> AuditSink:
 
 def _audit_optional_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _safe_mcp_failure_payload(evidence: McpCallFailureEvidence) -> JsonObject:
+    code = evidence.code if _MCP_FAILURE_CODE_RE.fullmatch(evidence.code) else "unknown_error"
+    issues: list[JsonObject] = []
+    for issue in evidence.issues:
+        path = issue.path
+        if issue.issue_type == "extra_forbidden" and not (
+            path == _MCP_EXTRA_FIELD_PATH or path.endswith(f".{_MCP_EXTRA_FIELD_PATH}")
+        ):
+            path = _MCP_EXTRA_FIELD_PATH
+        if len(path) > _MCP_FAILURE_ISSUE_PATH_MAX_LENGTH:
+            continue
+        if not _MCP_FAILURE_ISSUE_PATH_RE.fullmatch(path):
+            continue
+        if not _MCP_FAILURE_ISSUE_TYPE_RE.fullmatch(issue.issue_type):
+            continue
+        issues.append({"path": path, "type": issue.issue_type})
+        if len(issues) == _MCP_FAILURE_ISSUE_LIMIT:
+            break
+    return {"code": code, "issues": issues}
+
+
+def _redact_mcp_config_value(value: object, *, redact_all: bool = False) -> object:
+    if isinstance(value, dict):
+        redacted: dict[str, object] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            lowered = key_text.lower()
+            if redact_all or any(fragment in lowered for fragment in _SENSITIVE_MCP_KEY_FRAGMENTS):
+                redacted[key_text] = _REDACTION_MARKER
+            else:
+                redacted[key_text] = _redact_mcp_config_value(
+                    item,
+                    redact_all=lowered in _MCP_SECRET_CONTAINER_KEYS,
+                )
+        return redacted
+    if isinstance(value, list):
+        if redact_all:
+            return [_REDACTION_MARKER for _ in value]
+        return [_redact_mcp_config_value(item) for item in value]
+    return _REDACTION_MARKER if redact_all else value
+
+
+def _redact_mcp_config(raw_config: str) -> str:
+    try:
+        parsed = json.loads(raw_config)
+    except json.JSONDecodeError:
+        return _MCP_CONFIG_REDACTION_MARKER
+    if not isinstance(parsed, dict):
+        return _MCP_CONFIG_REDACTION_MARKER
+    return json.dumps(
+        _redact_mcp_config_value(parsed),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _redact_cli_argv(cmd: list[str]) -> list[str]:
+    argv = [str(arg) for arg in cmd]
+    mcp_config_value_indexes: set[int] = set()
+    for index, arg in enumerate(argv):
+        if arg == "--mcp-config" and index + 1 < len(argv):
+            mcp_config_value_indexes.add(index + 1)
+            argv[index + 1] = _redact_mcp_config(argv[index + 1])
+        elif arg.startswith("--mcp-config="):
+            _, raw_config = arg.split("=", 1)
+            argv[index] = f"--mcp-config={_redact_mcp_config(raw_config)}"
+
+    # Claude may append a prompt as the final positional argument. Do not
+    # mistake a trailing --mcp-config value for that prompt.
+    if argv and not argv[-1].startswith("-") and len(argv) - 1 not in mcp_config_value_indexes:
+        argv[-1] = "<prompt redacted>"
+    return argv
 
 
 # --- generic EventBus event ------------------------------------------------
@@ -94,10 +198,7 @@ def _event_inline_value(value: object) -> object:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_event_inline_value(item) for item in list(value)[:20]]
     if isinstance(value, Mapping):
-        return {
-            str(key): _event_inline_value(nested)
-            for key, nested in list(value.items())[:20]
-        }
+        return {str(key): _event_inline_value(nested) for key, nested in list(value.items())[:20]}
     text = str(value)
     return text if len(text) <= 1000 else text[:1000] + "…[trimmed]"
 
@@ -132,9 +233,17 @@ def record_event(
         conductor_task_id = payload.get("conductor_task_id")
         execution_process_id = payload.get("execution_process_id")
         resolved_execution_process_id = _audit_optional_str(execution_process_id)
-        resolved_trace_id = trace_id or _audit_optional_str(payload.get("trace_id")) or resolved_execution_process_id
-        resolved_span_id = span_id or _audit_optional_str(payload.get("span_id")) or _audit_optional_str(task_id)
-        resolved_parent_span_id = parent_span_id or _audit_optional_str(payload.get("parent_span_id"))
+        resolved_trace_id = (
+            trace_id
+            or _audit_optional_str(payload.get("trace_id"))
+            or resolved_execution_process_id
+        )
+        resolved_span_id = (
+            span_id or _audit_optional_str(payload.get("span_id")) or _audit_optional_str(task_id)
+        )
+        resolved_parent_span_id = parent_span_id or _audit_optional_str(
+            payload.get("parent_span_id")
+        )
         # Trim before enqueue: keep the type + a bounded payload preview so a
         # large nested blob never travels through the queue in full.
         preview = str(payload)
@@ -300,17 +409,13 @@ def record_cli_spawn(
 ) -> None:
     """Record a CLI subprocess launch into the cli_spawn category.
 
-    Best-effort + fire-and-forget. Captures the full argv with the trailing
-    prompt argument redacted (the prompt can be large/sensitive and is already
-    persisted as the role artifact). cwd/model/provider/resume id and pid round
-    out HOW the agent process was launched.
+    Best-effort + fire-and-forget. Captures structural argv with the trailing
+    prompt and MCP config credentials redacted. MCP server identity and endpoint
+    remain visible. cwd/model/provider/resume id and pid round out HOW the agent
+    process was launched.
     """
     try:
-        # Redact a trailing non-flag arg (the prompt text appended by
-        # _build_claude_command). Everything else is structural flags.
-        argv = [str(a) for a in cmd]
-        if argv and not argv[-1].startswith("-"):
-            argv = [*argv[:-1], "<prompt redacted>"]
+        argv = _redact_cli_argv(cmd)
         _sink(sink).record(
             cat.CATEGORY_CLI_SPAWN,
             actor="claude",
@@ -343,10 +448,19 @@ def record_mcp_call(
     task_id: str | None,
     started: float,
     is_error: bool,
+    failure_evidence: McpCallFailureEvidence | None = None,
     sink: AuditSink | None = None,
 ) -> None:
-    """Record one MCP tool outcome without retaining arguments or output."""
+    """Record one MCP outcome without retaining arguments, output, or credentials."""
     try:
+        payload: JsonObject = {
+            "transport": "mcp",
+            "server_id": server_id,
+            "tool_id": tool_id,
+            "scope_id": scope_id,
+        }
+        if is_error and failure_evidence is not None:
+            payload["failure"] = _safe_mcp_failure_payload(failure_evidence)
         _sink(sink).record(
             cat.CATEGORY_TOOL_RESULT,
             actor=f"mcp:{server_id}",
@@ -354,12 +468,7 @@ def record_mcp_call(
             correlation_id=scope_id,
             status="error" if is_error else "ok",
             duration_ms=int((time.monotonic() - started) * 1000),
-            payload={
-                "transport": "mcp",
-                "server_id": server_id,
-                "tool_id": tool_id,
-                "scope_id": scope_id,
-            },
+            payload=payload,
             error="MCP tool returned an error" if is_error else None,
         )
     except Exception:  # noqa: BLE001, RUF100

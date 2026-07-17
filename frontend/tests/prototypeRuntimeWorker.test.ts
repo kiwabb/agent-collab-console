@@ -5,7 +5,7 @@ import {
   PROCUREMENT_IDS,
   PROCUREMENT_RUNTIME_DEFINITION,
   procurementApprovalEventBatches,
-} from "../src/features/prototype/runtime/procurementFixture";
+} from "./fixtures/procurementRuntimeFixture";
 import { createInitialRuntimeState } from "../src/features/prototype/runtime/runtimeCore";
 import { parseRuntimeDefinition } from "../src/features/prototype/runtime/runtimeInputCodec";
 import {
@@ -84,7 +84,7 @@ describe("prototype runtime worker protocol", () => {
     assert.equal(replayed.result.transitions.length, 3);
     assert.equal(
       replayed.result.final.stateHash,
-      "sha256:fdfa2274b2a58f387a527cabd5517e7b5d33cdb5373c168d3e6d5a79da66ff4c",
+      "sha256:a2bbff2041ae041f31701277b637e21767b5b8a86c48fd645879934ad4c64e7f",
     );
     assert.equal(
       replayed.result.final.viewModelHash,
@@ -107,6 +107,24 @@ describe("prototype runtime worker protocol", () => {
         }),
       /runtimeDefinition contains unknown field unexpected/u,
     );
+    const variable = PROCUREMENT_RUNTIME_DEFINITION.variables[0];
+    assert.ok(variable, "procurement runtime variable must exist");
+    assert.throws(
+      () =>
+        parseRuntimeDefinition({
+          ...PROCUREMENT_RUNTIME_DEFINITION,
+          variables: [
+            {
+              id: variable.id,
+              key: variable.key,
+              valueType: variable.valueType,
+              nullable: variable.nullable,
+              defaultValue: variable.defaultValue,
+            },
+          ],
+        }),
+      /runtimeDefinition\.variables\[0\] is missing field entitySchemaId/u,
+    );
     const batch = procurementApprovalEventBatches()[0];
     assert.ok(batch, "procurement submit batch must exist");
     const firstEvent = batch.events[0];
@@ -124,6 +142,124 @@ describe("prototype runtime worker protocol", () => {
           },
         }),
       /runtimeEventBatch.events\[0\] contains unknown field unexpected/u,
+    );
+  });
+
+  it("parses optional canonical runtime flow layouts without changing legacy definitions", () => {
+    const legacyDefinition = parseRuntimeDefinition(PROCUREMENT_RUNTIME_DEFINITION);
+    assert.equal(Object.hasOwn(legacyDefinition, "flowLayout"), false);
+
+    const flowLayout = {
+      nodes: [
+        { nodeId: "page-create", x: -32_768, y: 32_768 },
+        { nodeId: "rule-submit", x: 0, y: 120 },
+      ],
+    };
+    const definition = parseRuntimeDefinition({
+      ...PROCUREMENT_RUNTIME_DEFINITION,
+      flowLayout,
+    });
+    assert.deepEqual(definition.flowLayout, flowLayout);
+  });
+
+  it("rejects malformed and non-canonical runtime flow layouts", () => {
+    assert.throws(
+      () =>
+        parseRuntimeDefinition({
+          ...PROCUREMENT_RUNTIME_DEFINITION,
+          flowLayout: { nodes: [], unexpected: true },
+        }),
+      /runtimeDefinition\.flowLayout contains unknown field unexpected/u,
+    );
+    assert.throws(
+      () =>
+        parseRuntimeDefinition({
+          ...PROCUREMENT_RUNTIME_DEFINITION,
+          flowLayout: {},
+        }),
+      /runtimeDefinition\.flowLayout is missing field nodes/u,
+    );
+    assert.throws(
+      () =>
+        parseRuntimeDefinition({
+          ...PROCUREMENT_RUNTIME_DEFINITION,
+          flowLayout: {
+            nodes: [{ nodeId: "page-create", x: 0, y: 0, unexpected: true }],
+          },
+        }),
+      /runtimeDefinition\.flowLayout\.nodes\[0\] contains unknown field unexpected/u,
+    );
+    assert.throws(
+      () =>
+        parseRuntimeDefinition({
+          ...PROCUREMENT_RUNTIME_DEFINITION,
+          flowLayout: { nodes: [{ nodeId: "page-create", x: 0 }] },
+        }),
+      /runtimeDefinition\.flowLayout\.nodes\[0\] is missing field y/u,
+    );
+    assert.throws(
+      () =>
+        parseRuntimeDefinition({
+          ...PROCUREMENT_RUNTIME_DEFINITION,
+          flowLayout: { nodes: [{ nodeId: "", x: 0, y: 0 }] },
+        }),
+      /runtimeDefinition\.flowLayout\.nodes\[0\]\.nodeId must not be empty/u,
+    );
+    assert.throws(
+      () =>
+        parseRuntimeDefinition({
+          ...PROCUREMENT_RUNTIME_DEFINITION,
+          flowLayout: { nodes: [{ nodeId: "page-create", x: 32_769, y: 0 }] },
+        }),
+      /runtimeDefinition\.flowLayout\.nodes\[0\]\.x must be between -32768 and 32768/u,
+    );
+    assert.throws(
+      () =>
+        parseRuntimeDefinition({
+          ...PROCUREMENT_RUNTIME_DEFINITION,
+          flowLayout: { nodes: [{ nodeId: "page-create", x: 0.5, y: 0 }] },
+        }),
+      /runtimeDefinition\.flowLayout\.nodes\[0\]\.x must be a safe integer/u,
+    );
+    assert.throws(
+      () =>
+        parseRuntimeDefinition({
+          ...PROCUREMENT_RUNTIME_DEFINITION,
+          flowLayout: {
+            nodes: [
+              { nodeId: "rule-submit", x: 0, y: 0 },
+              { nodeId: "page-create", x: 0, y: 0 },
+            ],
+          },
+        }),
+      /runtimeDefinition\.flowLayout\.nodes must use canonical nodeId order/u,
+    );
+    assert.throws(
+      () =>
+        parseRuntimeDefinition({
+          ...PROCUREMENT_RUNTIME_DEFINITION,
+          flowLayout: {
+            nodes: [
+              { nodeId: "page-create", x: 0, y: 0 },
+              { nodeId: "page-create", x: 1, y: 1 },
+            ],
+          },
+        }),
+      /runtimeDefinition\.flowLayout\.nodes contains duplicate nodeId page-create/u,
+    );
+    assert.throws(
+      () =>
+        parseRuntimeDefinition({
+          ...PROCUREMENT_RUNTIME_DEFINITION,
+          flowLayout: {
+            nodes: Array.from({ length: 301 }, (_, index) => ({
+              nodeId: `node-${String(index).padStart(3, "0")}`,
+              x: 0,
+              y: 0,
+            })),
+          },
+        }),
+      /runtimeDefinition\.flowLayout\.nodes exceeds the maximum length of 300/u,
     );
   });
 

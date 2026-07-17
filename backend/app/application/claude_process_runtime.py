@@ -126,7 +126,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             )
 
         if wait and evt:
-            timeout_s = timeouts.process_max_timeout_s()
+            timeout_s = entry.max_timeout_seconds or timeouts.process_max_timeout_s()
             try:
                 await asyncio.wait_for(evt.wait(), timeout=timeout_s)
             except asyncio.TimeoutError:  # noqa: UP041
@@ -222,11 +222,17 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             env_overrides
             and ("ANTHROPIC_BASE_URL" in env_overrides or "ANTHROPIC_API_KEY" in env_overrides)
         )
+        restricted_prototype_task = task is not None and task.role == "prototype_ui_engineer"
         cmd = self._build_claude_command(
             effective_resume_id,
             resume_message_id=resume_message_id,
             model=model,
-            setting_sources="project,local" if runtime_catalog_controls_api else None,
+            setting_sources=(
+                "project,local"
+                if runtime_catalog_controls_api and not restricted_prototype_task
+                else None
+            ),
+            permission_mode="dontAsk" if restricted_prototype_task else "bypassPermissions",
         )
 
         env = os.environ.copy()
@@ -271,11 +277,10 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             limit=4 * 1024 * 1024,
         )
 
-        # Audit the CLI spawn (PR2): the full launched command line + cwd +
-        # model/provider + resume id. Best-effort fire-and-forget. The trailing
-        # prompt arg is redacted (it can be large and carry sensitive context;
-        # the prompt is already persisted as the task/role artifact elsewhere) —
-        # the audit row captures HOW the process was launched, not the prompt.
+        # Audit the CLI spawn (PR2): structural argv + cwd + model/provider +
+        # resume id. Best-effort fire-and-forget. Prompt text and MCP config
+        # credentials are redacted; the row captures HOW the process was
+        # launched without retaining task content or capabilities.
         self._audit_cli_spawn(
             cmd=cmd,
             cwd=effective_cwd,
@@ -302,6 +307,11 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
             resume_session_id=effective_resume_id,
             resume_message_id=resume_message_id,
             pending_waiters=[waiter] if waiter else [],
+            max_timeout_seconds=(
+                timeouts.prototype_ui_engineer_process_max_timeout_s()
+                if task is not None and task.role == "prototype_ui_engineer"
+                else timeouts.process_max_timeout_s()
+            ),
         )
 
         entry.output_task = asyncio.create_task(self._reader_loop(workspace_id, entry, task_id))
@@ -327,8 +337,8 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         """Record a CLI subprocess launch into the unified audit_log.
 
         Thin forwarding shell over `audit.record_cli_spawn` — the shaping
-        (trailing-prompt redaction, payload layout) lives in the audit package
-        now. Kept as a static method so existing tests call it directly.
+        (prompt/MCP credential redaction, payload layout) lives in the audit
+        package now. Kept as a static method so existing tests call it directly.
         """
         from app.application import audit
 
@@ -357,6 +367,7 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         agent: str | None = None,
         approval_mode: bool = False,
         setting_sources: str | None = None,
+        permission_mode: str = "bypassPermissions",
     ) -> list[str]:
         base = list(self._claude_cmd)
 
@@ -393,9 +404,9 @@ class ClaudeProcessRuntime(BaseProcessRuntime):
         # Clean up any existing permission flags to avoid duplicates/conflicts
         base = [arg for arg in base if not arg.startswith("--permission-mode=")]
         base = [arg for arg in base if not arg.startswith("--permission-prompt-tool=")]
-        # Always enable correct permission bypass for automated background tasks
+        # Background tasks use one explicit permission mode selected by their runtime profile.
         base.append("--permission-prompt-tool=stdio")
-        base.append("--permission-mode=bypassPermissions")
+        base.append(f"--permission-mode={permission_mode}")
 
         if not approval_mode:  # noqa: SIM102
             if "--disallowedTools=AskUserQuestion" not in " ".join(base):

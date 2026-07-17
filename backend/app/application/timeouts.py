@@ -67,6 +67,9 @@ DEFAULT_CODEX_DATA_DIR = tempfile.gettempdir()
 DEFAULT_CLAUDE_CMD = "claude -p --output-format=stream-json --verbose"
 DEFAULT_PROCESS_IDLE_TIMEOUT_S = 180
 DEFAULT_PROCESS_MAX_TIMEOUT_S = 1800
+DEFAULT_PROTOTYPE_UI_ENGINEER_PROCESS_MAX_TIMEOUT_S = 3600
+DEFAULT_PROTOTYPE_SNAP_WORKER_ATTEST_TIMEOUT_S = 5.0
+DEFAULT_PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S = 60.0
 DEFAULT_WORKFLOW_ORCHESTRATOR_LLM_ENABLED = True
 DEFAULT_WORKFLOW_ORCHESTRATOR_TIMEOUT_S = 28.0
 DEFAULT_WORKFLOW_ORCHESTRATOR_MAX_TOKENS = 8192
@@ -83,6 +86,7 @@ DEFAULT_STALL_THRESHOLD_S = 900
 DEFAULT_STALL_INTERVAL_S = 30
 DEFAULT_STALL_COOLDOWN_S = 900
 DEFAULT_MAX_PARALLEL_DISPATCH_PER_BATCH = 4
+DEFAULT_STRUCTURED_PROTOTYPE_PAGE_GENERATION_CONCURRENCY = 2
 DEFAULT_CONDUCTOR_MAX_DISPATCHES_PER_ROLE = 4
 DEFAULT_ISSUE_BUDGET_USD = 25.0
 DEFAULT_BUDGET_SOFT_WARN_RATIO = 0.8
@@ -307,6 +311,29 @@ def process_max_timeout_s() -> int:
     return _env_int("PROCESS_MAX_TIMEOUT", DEFAULT_PROCESS_MAX_TIMEOUT_S)
 
 
+def prototype_ui_engineer_process_max_timeout_s() -> int:
+    return _env_int(
+        "PROTOTYPE_UI_ENGINEER_PROCESS_MAX_TIMEOUT",
+        DEFAULT_PROTOTYPE_UI_ENGINEER_PROCESS_MAX_TIMEOUT_S,
+    )
+
+
+def prototype_snap_worker_attest_timeout_s() -> float:
+    value = _env_float(
+        "PROTOTYPE_SNAP_WORKER_ATTEST_TIMEOUT_S",
+        DEFAULT_PROTOTYPE_SNAP_WORKER_ATTEST_TIMEOUT_S,
+    )
+    return value if value > 0 else DEFAULT_PROTOTYPE_SNAP_WORKER_ATTEST_TIMEOUT_S
+
+
+def prototype_snap_worker_attest_many_timeout_s() -> float:
+    value = _env_float(
+        "PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S",
+        DEFAULT_PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S,
+    )
+    return value if value > 0 else DEFAULT_PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S
+
+
 def workflow_orchestrator_executor_id() -> str | None:
     return _env_str("WORKFLOW_ORCHESTRATOR_EXECUTOR_ID")
 
@@ -414,6 +441,16 @@ def stall_cooldown_s() -> int:
 def max_parallel_dispatch_per_batch() -> int:
     return max(
         1, _env_int("MAX_PARALLEL_DISPATCH_PER_BATCH", DEFAULT_MAX_PARALLEL_DISPATCH_PER_BATCH)
+    )
+
+
+def structured_prototype_page_generation_concurrency() -> int:
+    return max(
+        1,
+        _env_int(
+            "STRUCTURED_PROTOTYPE_PAGE_GENERATION_CONCURRENCY",
+            DEFAULT_STRUCTURED_PROTOTYPE_PAGE_GENERATION_CONCURRENCY,
+        ),
     )
 
 
@@ -676,6 +713,18 @@ def check_invariants() -> list[str]:
         ("CONDUCTOR_MAX_DISPATCHES_PER_ROLE", conductor_max_dispatches_per_role()),
         ("PROCESS_IDLE_TIMEOUT", process_idle_timeout_s()),
         ("PROCESS_MAX_TIMEOUT", process_max_timeout_s()),
+        (
+            "PROTOTYPE_UI_ENGINEER_PROCESS_MAX_TIMEOUT",
+            prototype_ui_engineer_process_max_timeout_s(),
+        ),
+        (
+            "PROTOTYPE_SNAP_WORKER_ATTEST_TIMEOUT_S",
+            prototype_snap_worker_attest_timeout_s(),
+        ),
+        (
+            "PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S",
+            prototype_snap_worker_attest_many_timeout_s(),
+        ),
         ("WORKFLOW_ORCHESTRATOR_TIMEOUT", workflow_orchestrator_timeout_s()),
         ("WORKFLOW_ORCHESTRATOR_MAX_TOKENS", workflow_orchestrator_max_tokens()),
         ("CONDUCTOR_LLM_TIMEOUT", conductor_llm_timeout_s()),
@@ -685,6 +734,10 @@ def check_invariants() -> list[str]:
         ("CODEX_STALL_INTERVAL_S", stall_interval_s()),
         ("CODEX_STALL_COOLDOWN_S", stall_cooldown_s()),
         ("MAX_PARALLEL_DISPATCH_PER_BATCH", max_parallel_dispatch_per_batch()),
+        (
+            "STRUCTURED_PROTOTYPE_PAGE_GENERATION_CONCURRENCY",
+            structured_prototype_page_generation_concurrency(),
+        ),
         ("EST_COST_PER_AGENT_USD", est_cost_per_agent_usd()),
         ("MAX_CONCURRENT_INSTANCES_PER_ROLE", max_concurrent_instances_per_role()),
         ("ROLE_SLOT_WAIT_S", role_slot_wait_s()),

@@ -6,6 +6,9 @@ export type RuntimeSchemaId = string;
 export type RuntimeFormId = string;
 export type RuntimeFieldId = string;
 
+export const RUNTIME_FLOW_LAYOUT_NODE_LIMIT = 300;
+export const RUNTIME_FLOW_COORDINATE_LIMIT = 32_768;
+
 export interface NullRuntimeValue {
   type: "null";
 }
@@ -57,6 +60,7 @@ export interface RuntimeVariableDefinition {
   key: string;
   valueType: RuntimeValueType;
   nullable: boolean;
+  entitySchemaId: RuntimeSchemaId | null;
   defaultValue: RuntimeValue;
 }
 
@@ -308,6 +312,16 @@ export interface RuntimeScenario {
   allowSimulatedRoleSwitch: boolean;
 }
 
+export interface RuntimeFlowNodePosition {
+  nodeId: string;
+  x: number;
+  y: number;
+}
+
+export interface RuntimeFlowLayout {
+  nodes: RuntimeFlowNodePosition[];
+}
+
 export interface RuntimeDefinition {
   runtimeSchemaVersion: 1;
   pageIds: RuntimePageId[];
@@ -318,6 +332,7 @@ export interface RuntimeDefinition {
   viewBindings: RuntimeViewBinding[];
   rules: RuntimeBehaviorRule[];
   scenarios: RuntimeScenario[];
+  flowLayout?: RuntimeFlowLayout;
 }
 
 export interface FieldValueCommittedEvent {

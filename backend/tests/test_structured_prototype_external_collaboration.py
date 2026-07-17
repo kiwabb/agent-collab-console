@@ -23,6 +23,7 @@ from app.application.structured_prototype_ai_runtime import (
 )
 from app.application.structured_prototype_ai_service import StructuredPrototypeAiService
 from app.application.structured_prototype_contracts import (
+    GridNodeV1,
     NewPrototypeDocumentV1,
     StackNodeV1,
     TextNodeV1,
@@ -57,6 +58,41 @@ class _RuntimeMustNotRun:
 def _new_document() -> NewPrototypeDocumentV1:
     payload = procurement_document_payload()
     payload.pop("id")
+    pages = payload["pages"]
+    assert isinstance(pages, list)
+    list_page = pages[0]
+    assert isinstance(list_page, dict)
+    root = list_page["root"]
+    assert isinstance(root, dict)
+    children = root["children"]
+    assert isinstance(children, list)
+    title = children.pop(0)
+    children.insert(
+        0,
+        {
+            "id": fixture_id("external-title-grid"),
+            "name": "列表标题网格",
+            "visibility": "visible",
+            "layoutItem": {
+                "width": {"unit": "auto", "value": None},
+                "minWidth": None,
+                "maxWidth": None,
+                "height": {"unit": "auto", "value": None},
+                "minHeight": None,
+                "maxHeight": None,
+                "grow": 0,
+                "shrink": 1,
+                "alignSelf": "stretch",
+            },
+            "responsive": [],
+            "type": "Grid",
+            "columns": 1,
+            "gap": 8,
+            "padding": {"top": 0, "right": 0, "bottom": 0, "left": 0},
+            "columnOverrides": [{"minWidth": 768, "columns": 2}],
+            "children": [title],
+        },
+    )
     return NewPrototypeDocumentV1.model_validate(
         payload,
         strict=True,
@@ -175,10 +211,23 @@ async def test_external_proposal_uses_the_studio_preview_and_apply_pipeline(
             ),
         )
         assert context.revision.document_hash == draft.head_document_hash
+        assert {
+            "reorderNavigationItem",
+            "addBehaviorRule",
+            "replaceBehaviorRule",
+            "removeBehaviorRule",
+        } <= set(context.supported_command_kinds)
         assert context.context["selectedNodes"]
         command_schema = context.context["commandBatchSchema"]
         assert isinstance(command_schema, dict)
         assert "SetNodePropertyCommandV1" in command_schema["$defs"]
+        assert "StackLayoutUpdateV1" in command_schema["$defs"]
+        assert "GridLayoutUpdateV1" in command_schema["$defs"]
+        assert "FormLayoutUpdateV1" in command_schema["$defs"]
+        assert "ResponsiveLayoutUpdateV1" in command_schema["$defs"]
+        assert "AddBehaviorRuleCommandV1" in command_schema["$defs"]
+        assert "ReplaceBehaviorRuleCommandV1" in command_schema["$defs"]
+        assert "RemoveBehaviorRuleCommandV1" in command_schema["$defs"]
         document_slice = await collaboration.get_document_slice(
             pairing,
             GetDocumentSliceV1.model_validate(
@@ -225,7 +274,9 @@ async def test_external_proposal_uses_the_studio_preview_and_apply_pipeline(
         assert applied.run.status == "applied"
         root = applied.draft_result.state.document.pages[0].root
         assert isinstance(root, StackNodeV1)
-        title = root.children[0]
+        title_grid = root.children[0]
+        assert isinstance(title_grid, GridNodeV1)
+        title = title_grid.children[0]
         assert isinstance(title, TextNodeV1)
         assert title.content == "全部采购申请"
         status = await collaboration.get_proposal_status(

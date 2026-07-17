@@ -12,11 +12,13 @@ interface Props {
   projectId: string;
   project: Project | null;
   children: React.ReactNode;
+  layout?: "default" | "workspace";
 }
 
-export function ProjectShell({ projectId, project, children }: Props) {
+export function ProjectShell({ projectId, project, children, layout = "default" }: Props) {
   const { t } = useI18n();
   const pathname = usePathname();
+  const isWorkspaceLayout = layout === "workspace";
   const conductorHref = `/projects/${projectId}/conductor`;
   const prototypesHref = `/projects/${projectId}/prototypes`;
   const envConfigHref = `/projects/${projectId}/env`;
@@ -29,31 +31,65 @@ export function ProjectShell({ projectId, project, children }: Props) {
   ];
 
   return (
-    <div className="min-h-full">
+    <div className={cn("min-h-full", isWorkspaceLayout && "flex h-full min-h-0 flex-col")}>
       <div className="relative overflow-hidden border-b border-border-subtle">
+        {!isWorkspaceLayout && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 opacity-[0.35]"
+            style={{
+              background:
+                "radial-gradient(900px 300px at 12% -10%, rgba(230,149,82,0.30), transparent 60%), radial-gradient(700px 240px at 90% -10%, rgba(96,165,250,0.18), transparent 60%)",
+            }}
+          />
+        )}
         <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 opacity-[0.35]"
-          style={{
-            background:
-              "radial-gradient(900px 300px at 12% -10%, rgba(230,149,82,0.30), transparent 60%), radial-gradient(700px 240px at 90% -10%, rgba(96,165,250,0.18), transparent 60%)",
-          }}
-        />
-        <div className="relative mx-auto max-w-[1280px] px-4 pb-4 pt-7 sm:px-6 lg:px-8">
-          <div className="mb-4 flex items-center gap-3">
-            <span className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand to-brand-strong shadow-lg shadow-brand/30">
+          className={cn(
+            "relative mx-auto",
+            isWorkspaceLayout
+              ? "flex min-h-14 w-full max-w-none items-center gap-4 px-3 sm:px-4"
+              : "max-w-[1280px] px-4 pb-4 pt-7 sm:px-6 lg:px-8",
+          )}
+        >
+          <div
+            className={cn(
+              "flex min-w-0 items-center gap-3",
+              isWorkspaceLayout ? "shrink-0" : "mb-4",
+            )}
+          >
+            <span
+              className={cn(
+                "flex items-center justify-center bg-gradient-to-br from-brand to-brand-strong",
+                isWorkspaceLayout
+                  ? "size-8 rounded-md"
+                  : "size-9 rounded-xl shadow-lg shadow-brand/30",
+              )}
+            >
               <Folder size={18} className="text-black" />
             </span>
             <div className="min-w-0 flex-1">
-              <h1 className="truncate text-2xl font-bold tracking-tight">
+              <h1
+                className={cn(
+                  "truncate font-bold",
+                  isWorkspaceLayout ? "max-w-48 text-sm" : "text-2xl tracking-tight",
+                )}
+              >
                 {project?.name ?? t("workspace.projectPage.titleFallback")}
               </h1>
-              <p className="text-xs text-text-muted [overflow-wrap:anywhere]">
-                {project?.repo_path}
-              </p>
+              {!isWorkspaceLayout && (
+                <p className="text-xs text-text-muted [overflow-wrap:anywhere]">
+                  {project?.repo_path}
+                </p>
+              )}
             </div>
           </div>
-          <nav className="flex flex-wrap gap-2" aria-label="Project sections">
+          <nav
+            className={cn(
+              "flex",
+              isWorkspaceLayout ? "min-w-0 flex-1 self-stretch overflow-x-auto" : "flex-wrap gap-2",
+            )}
+            aria-label="Project sections"
+          >
             {navItems.map((item) => {
               const active =
                 item.href === workspacesHref
@@ -66,10 +102,20 @@ export function ProjectShell({ projectId, project, children }: Props) {
                   href={item.href}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "inline-flex min-h-11 items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition-colors",
-                    active
-                      ? "border-brand bg-brand/15 text-foreground shadow-[0_8px_24px_rgba(230,149,82,0.12)]"
-                      : "border-border-subtle bg-surface-raised/70 text-text-muted hover:text-foreground",
+                    "inline-flex shrink-0 items-center gap-2 text-sm font-semibold transition-colors",
+                    isWorkspaceLayout
+                      ? cn(
+                          "min-h-14 border-b-2 px-3",
+                          active
+                            ? "border-brand text-foreground"
+                            : "border-transparent text-text-muted hover:border-border-strong hover:text-foreground",
+                        )
+                      : cn(
+                          "min-h-11 rounded-full border px-4 py-2",
+                          active
+                            ? "border-brand bg-brand/15 text-foreground shadow-[0_8px_24px_rgba(230,149,82,0.12)]"
+                            : "border-border-subtle bg-surface-raised/70 text-text-muted hover:text-foreground",
+                        ),
                   )}
                 >
                   <Icon size={14} />
@@ -80,7 +126,15 @@ export function ProjectShell({ projectId, project, children }: Props) {
           </nav>
         </div>
       </div>
-      <div className="mx-auto max-w-[1280px] space-y-5 px-4 py-6 sm:px-6 lg:px-8">{children}</div>
+      <div
+        className={cn(
+          isWorkspaceLayout
+            ? "min-h-0 flex-1"
+            : "mx-auto max-w-[1280px] space-y-5 px-4 py-6 sm:px-6 lg:px-8",
+        )}
+      >
+        {children}
+      </div>
     </div>
   );
 }

@@ -3267,7 +3267,7 @@ async function deterministicUuidV5(namespace, name) {
 }
 
 // src/features/prototype/runtime/runtimeCore.ts
-var RUNTIME_CORE_VERSION = "0.1.0-spike";
+var RUNTIME_CORE_VERSION = "0.2.0-spike";
 var XSTATE_KERNEL_VERSION = "5.32.4";
 var RUNTIME_ENTITY_NAMESPACE = "1af0c23d-70d2-5fd5-aad8-3f1eafbb10a1";
 var RuntimeCoreError = class extends Error {
@@ -3307,6 +3307,9 @@ function valueMatchesType(value, expected, nullable) {
   }
   return value.type === expected;
 }
+function entityRefMatchesSchema(value, entitySchemaId) {
+  return value.type !== "entityRef" || value.schemaId === entitySchemaId;
+}
 function valueExpressionUsesEventEntityRef(expression) {
   switch (expression.kind) {
     case "eventEntityRef":
@@ -3338,6 +3341,10 @@ function validateRuntimeDefinition(definition) {
     ...assertUniqueIds(definition.entitySchemas, "entitySchemas"),
     ...assertUniqueIds(definition.forms, "forms"),
     ...assertUniqueIds(definition.viewBindings, "viewBindings"),
+    ...assertUniqueValues(
+      definition.viewBindings.map((binding) => `${binding.nodeId}:${binding.target}`),
+      "view binding node targets"
+    ),
     ...assertUniqueIds(definition.rules, "rules"),
     ...assertUniqueIds(definition.scenarios, "scenarios")
   ];
@@ -3345,8 +3352,21 @@ function validateRuntimeDefinition(definition) {
   const pageIds = new Set(definition.pageIds);
   const schemaIds = new Set(definition.entitySchemas.map((schema) => schema.id));
   for (const variable of definition.variables) {
+    if (variable.valueType === "entityRef") {
+      if (variable.entitySchemaId === null) {
+        errors.push(`variable ${variable.id} entityRef type requires an entity schema`);
+      } else if (!schemaIds.has(variable.entitySchemaId)) {
+        errors.push(
+          `variable ${variable.id} references unknown entity schema ${variable.entitySchemaId}`
+        );
+      }
+    } else if (variable.entitySchemaId !== null) {
+      errors.push(`variable ${variable.id} non-entityRef type cannot declare an entity schema`);
+    }
     if (!valueMatchesType(variable.defaultValue, variable.valueType, variable.nullable)) {
       errors.push(`variable ${variable.id} default value does not match ${variable.valueType}`);
+    } else if (!entityRefMatchesSchema(variable.defaultValue, variable.entitySchemaId)) {
+      errors.push(`variable ${variable.id} default entity schema does not match its definition`);
     }
   }
   for (const scenario of definition.scenarios) {
@@ -3374,6 +3394,10 @@ function validateRuntimeDefinition(definition) {
         errors.push(
           `scenario ${scenario.id} variable ${value.variableId} does not match ${variable.valueType}`
         );
+      } else if (!entityRefMatchesSchema(value.value, variable.entitySchemaId)) {
+        errors.push(
+          `scenario ${scenario.id} variable ${value.variableId} entity schema does not match its definition`
+        );
       }
     }
     for (const fixture of scenario.entityFixtures) {
@@ -3385,6 +3409,19 @@ function validateRuntimeDefinition(definition) {
   for (const rule of definition.rules) {
     if (rule.effects.length === 0) {
       errors.push(`rule ${rule.id} has no effects`);
+    }
+    for (const effect of [...rule.effects, ...rule.guardFalseEffects]) {
+      if (effect.kind !== "createEntity") {
+        continue;
+      }
+      const resultVariable = definition.variables.find(
+        (variable) => variable.id === effect.resultVariableId
+      );
+      if (resultVariable === void 0 || resultVariable.valueType !== "entityRef" || resultVariable.entitySchemaId !== effect.schemaId) {
+        errors.push(
+          `rule ${rule.id} create-entity result variable does not match schema ${effect.schemaId}`
+        );
+      }
     }
   }
   for (const binding of definition.viewBindings) {
@@ -3461,6 +3498,10 @@ function validateRuntimeState(definition, state) {
       errors.push(`runtime state contains unknown variable ${entry.variableId}`);
     } else if (!valueMatchesType(entry.value, variable.valueType, variable.nullable)) {
       errors.push(`runtime variable ${entry.variableId} does not match ${variable.valueType}`);
+    } else if (!entityRefMatchesSchema(entry.value, variable.entitySchemaId)) {
+      errors.push(
+        `runtime variable ${entry.variableId} entity schema does not match its definition`
+      );
     }
   }
   errors.push(
@@ -3787,7 +3828,24 @@ function evaluatePredicate(definition, state, predicate, event) {
     }
   }
 }
-function replaceVariableValue(state, variableId, value) {
+function replaceVariableValue(definition, state, variableId, value) {
+  const variable = requireItem(
+    definition.variables.find((candidate) => candidate.id === variableId),
+    "runtime_variable_definition_missing",
+    `Unknown variable definition ${variableId}`
+  );
+  if (!valueMatchesType(value, variable.valueType, variable.nullable)) {
+    throw new RuntimeCoreError(
+      "runtime_variable_type_mismatch",
+      `Variable ${variableId} requires ${variable.valueType}`
+    );
+  }
+  if (!entityRefMatchesSchema(value, variable.entitySchemaId)) {
+    throw new RuntimeCoreError(
+      "runtime_variable_entity_schema_mismatch",
+      `Variable ${variableId} requires entity schema ${variable.entitySchemaId}`
+    );
+  }
   let replaced = false;
   const variableValues = state.variableValues.map((entry) => {
     if (entry.variableId !== variableId) {
@@ -3825,6 +3883,7 @@ function applyEffect(definition, state, event, effect, eventIndex, branch, effec
     case "setVariable":
       return {
         state: replaceVariableValue(
+          definition,
           state,
           effect.variableId,
           evaluateValueExpression(state, effect.value, event)
@@ -3870,7 +3929,7 @@ function applyEffect(definition, state, event, effect, eventIndex, branch, effec
         entities: [...set.entities, { id: entityId, schemaId: effect.schemaId, fields }]
       });
       return {
-        state: replaceVariableValue(withEntity, effect.resultVariableId, {
+        state: replaceVariableValue(definition, withEntity, effect.resultVariableId, {
           type: "entityRef",
           schemaId: effect.schemaId,
           entityId
@@ -4623,6 +4682,10 @@ function parsePrototypeRuntimeStateJson(input) {
   return parsePrototypeRuntimeState(decoded);
 }
 
+// src/features/prototype/runtime/types.ts
+var RUNTIME_FLOW_LAYOUT_NODE_LIMIT = 300;
+var RUNTIME_FLOW_COORDINATE_LIMIT = 32768;
+
 // src/features/prototype/runtime/runtimeInputCodec.ts
 var MAX_EXPRESSION_DEPTH = 32;
 var RuntimeInputCodecError = class extends Error {
@@ -4697,6 +4760,15 @@ function requireLiteral2(value, allowed, path) {
 function requireNullableSafeInteger(value, path) {
   return value === null ? null : requireSafeInteger2(value, path);
 }
+function requireFlowLayoutCoordinate(value, path) {
+  const parsed = requireSafeInteger2(value, path);
+  if (parsed < -RUNTIME_FLOW_COORDINATE_LIMIT || parsed > RUNTIME_FLOW_COORDINATE_LIMIT) {
+    throw new RuntimeInputCodecError(
+      `${path} must be between ${-RUNTIME_FLOW_COORDINATE_LIMIT} and ${RUNTIME_FLOW_COORDINATE_LIMIT}`
+    );
+  }
+  return parsed;
+}
 function requireDepth(depth, path) {
   if (depth > MAX_EXPRESSION_DEPTH) {
     throw new RuntimeInputCodecError(`${path} exceeds the maximum expression depth`);
@@ -4713,7 +4785,11 @@ function parseRole(value, path) {
 }
 function parseVariable(value, path) {
   const record = requireRecord2(value, path);
-  requireExactKeys2(record, ["id", "key", "valueType", "nullable", "defaultValue"], path);
+  requireExactKeys2(
+    record,
+    ["id", "key", "valueType", "nullable", "entitySchemaId", "defaultValue"],
+    path
+  );
   return {
     id: requireNonEmptyString(record["id"], `${path}.id`),
     key: requireNonEmptyString(record["key"], `${path}.key`),
@@ -4723,6 +4799,7 @@ function parseVariable(value, path) {
       `${path}.valueType`
     ),
     nullable: requireBoolean2(record["nullable"], `${path}.nullable`),
+    entitySchemaId: record["entitySchemaId"] === null ? null : requireNonEmptyString(record["entitySchemaId"], `${path}.entitySchemaId`),
     defaultValue: parseRuntimeValue(record["defaultValue"], `${path}.defaultValue`)
   };
 }
@@ -5074,8 +5151,44 @@ function parseScenario(value, path) {
     )
   };
 }
+function parseFlowLayout(value, path) {
+  const record = requireRecord2(value, path);
+  requireExactKeys2(record, ["nodes"], path);
+  const rawNodes = requireArray2(record["nodes"], `${path}.nodes`);
+  if (rawNodes.length > RUNTIME_FLOW_LAYOUT_NODE_LIMIT) {
+    throw new RuntimeInputCodecError(
+      `${path}.nodes exceeds the maximum length of ${RUNTIME_FLOW_LAYOUT_NODE_LIMIT}`
+    );
+  }
+  const nodes = rawNodes.map((value2, index) => {
+    const nodePath = `${path}.nodes[${index}]`;
+    const node = requireRecord2(value2, nodePath);
+    requireExactKeys2(node, ["nodeId", "x", "y"], nodePath);
+    return {
+      nodeId: requireNonEmptyString(node["nodeId"], `${nodePath}.nodeId`),
+      x: requireFlowLayoutCoordinate(node["x"], `${nodePath}.x`),
+      y: requireFlowLayoutCoordinate(node["y"], `${nodePath}.y`)
+    };
+  });
+  const seenNodeIds = /* @__PURE__ */ new Set();
+  for (const node of nodes) {
+    if (seenNodeIds.has(node.nodeId)) {
+      throw new RuntimeInputCodecError(`${path}.nodes contains duplicate nodeId ${node.nodeId}`);
+    }
+    seenNodeIds.add(node.nodeId);
+  }
+  for (let index = 1; index < nodes.length; index += 1) {
+    const previous = nodes[index - 1];
+    const current = nodes[index];
+    if (previous !== void 0 && current !== void 0 && current.nodeId < previous.nodeId) {
+      throw new RuntimeInputCodecError(`${path}.nodes must use canonical nodeId order`);
+    }
+  }
+  return { nodes };
+}
 function parseRuntimeDefinition(value) {
   const record = requireRecord2(value, "runtimeDefinition");
+  const hasFlowLayout = Object.hasOwn(record, "flowLayout");
   requireExactKeys2(
     record,
     [
@@ -5087,7 +5200,8 @@ function parseRuntimeDefinition(value) {
       "forms",
       "viewBindings",
       "rules",
-      "scenarios"
+      "scenarios",
+      ...hasFlowLayout ? ["flowLayout"] : []
     ],
     "runtimeDefinition"
   );
@@ -5119,7 +5233,8 @@ function parseRuntimeDefinition(value) {
     ),
     scenarios: requireArray2(record["scenarios"], "runtimeDefinition.scenarios").map(
       (scenario, index) => parseScenario(scenario, `runtimeDefinition.scenarios[${index}]`)
-    )
+    ),
+    ...hasFlowLayout ? { flowLayout: parseFlowLayout(record["flowLayout"], "runtimeDefinition.flowLayout") } : {}
   };
 }
 function parseEntityRef(value, path) {
@@ -5184,7 +5299,7 @@ function parseRuntimeEventBatch(value, path = "runtimeEventBatch") {
 }
 
 // src/features/prototype/runtime/runtimeBuildIdentity.ts
-var RUNTIME_CORE_SOURCE_HASH = "sha256:a004c5b10a2e55c277debd7f615a0bf2666ba5c20c9ff50182881fedf309d204";
+var RUNTIME_CORE_SOURCE_HASH = "sha256:2ea354a6f2e11b0511fffb3da8ac434cd5ea4d5a70c77546ec5daf2d19f5097a";
 
 // src/features/prototype/runtime/runtimeWorkerProtocol.ts
 var RUNTIME_WORKER_PROTOCOL_VERSION = "prototype-runtime-worker/v1";

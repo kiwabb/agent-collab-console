@@ -1,4 +1,5 @@
 import { parseEntitySet, parseRuntimeValue, parseVariableValue } from "./runtimeStateCodec";
+import { RUNTIME_FLOW_COORDINATE_LIMIT, RUNTIME_FLOW_LAYOUT_NODE_LIMIT } from "./types";
 import type {
   EntityFieldValueExpression,
   EntityRefRuntimeValue,
@@ -118,6 +119,16 @@ function requireNullableSafeInteger(value: unknown, path: string): number | null
   return value === null ? null : requireSafeInteger(value, path);
 }
 
+function requireFlowLayoutCoordinate(value: unknown, path: string): number {
+  const parsed = requireSafeInteger(value, path);
+  if (parsed < -RUNTIME_FLOW_COORDINATE_LIMIT || parsed > RUNTIME_FLOW_COORDINATE_LIMIT) {
+    throw new RuntimeInputCodecError(
+      `${path} must be between ${-RUNTIME_FLOW_COORDINATE_LIMIT} and ${RUNTIME_FLOW_COORDINATE_LIMIT}`,
+    );
+  }
+  return parsed;
+}
+
 function requireDepth(depth: number, path: string): void {
   if (depth > MAX_EXPRESSION_DEPTH) {
     throw new RuntimeInputCodecError(`${path} exceeds the maximum expression depth`);
@@ -136,7 +147,11 @@ function parseRole(value: unknown, path: string): RuntimeRoleDefinition {
 
 function parseVariable(value: unknown, path: string): RuntimeVariableDefinition {
   const record = requireRecord(value, path);
-  requireExactKeys(record, ["id", "key", "valueType", "nullable", "defaultValue"], path);
+  requireExactKeys(
+    record,
+    ["id", "key", "valueType", "nullable", "entitySchemaId", "defaultValue"],
+    path,
+  );
   return {
     id: requireNonEmptyString(record["id"], `${path}.id`),
     key: requireNonEmptyString(record["key"], `${path}.key`),
@@ -146,6 +161,10 @@ function parseVariable(value: unknown, path: string): RuntimeVariableDefinition 
       `${path}.valueType`,
     ),
     nullable: requireBoolean(record["nullable"], `${path}.nullable`),
+    entitySchemaId:
+      record["entitySchemaId"] === null
+        ? null
+        : requireNonEmptyString(record["entitySchemaId"], `${path}.entitySchemaId`),
     defaultValue: parseRuntimeValue(record["defaultValue"], `${path}.defaultValue`),
   };
 }
@@ -513,8 +532,49 @@ function parseScenario(value: unknown, path: string): RuntimeScenario {
   };
 }
 
+function parseFlowLayout(
+  value: unknown,
+  path: string,
+): NonNullable<RuntimeDefinition["flowLayout"]> {
+  const record = requireRecord(value, path);
+  requireExactKeys(record, ["nodes"], path);
+  const rawNodes = requireArray(record["nodes"], `${path}.nodes`);
+  if (rawNodes.length > RUNTIME_FLOW_LAYOUT_NODE_LIMIT) {
+    throw new RuntimeInputCodecError(
+      `${path}.nodes exceeds the maximum length of ${RUNTIME_FLOW_LAYOUT_NODE_LIMIT}`,
+    );
+  }
+  const nodes = rawNodes.map((value, index) => {
+    const nodePath = `${path}.nodes[${index}]`;
+    const node = requireRecord(value, nodePath);
+    requireExactKeys(node, ["nodeId", "x", "y"], nodePath);
+    return {
+      nodeId: requireNonEmptyString(node["nodeId"], `${nodePath}.nodeId`),
+      x: requireFlowLayoutCoordinate(node["x"], `${nodePath}.x`),
+      y: requireFlowLayoutCoordinate(node["y"], `${nodePath}.y`),
+    };
+  });
+
+  const seenNodeIds = new Set<string>();
+  for (const node of nodes) {
+    if (seenNodeIds.has(node.nodeId)) {
+      throw new RuntimeInputCodecError(`${path}.nodes contains duplicate nodeId ${node.nodeId}`);
+    }
+    seenNodeIds.add(node.nodeId);
+  }
+  for (let index = 1; index < nodes.length; index += 1) {
+    const previous = nodes[index - 1];
+    const current = nodes[index];
+    if (previous !== undefined && current !== undefined && current.nodeId < previous.nodeId) {
+      throw new RuntimeInputCodecError(`${path}.nodes must use canonical nodeId order`);
+    }
+  }
+  return { nodes };
+}
+
 export function parseRuntimeDefinition(value: unknown): RuntimeDefinition {
   const record = requireRecord(value, "runtimeDefinition");
+  const hasFlowLayout = Object.hasOwn(record, "flowLayout");
   requireExactKeys(
     record,
     [
@@ -527,6 +587,7 @@ export function parseRuntimeDefinition(value: unknown): RuntimeDefinition {
       "viewBindings",
       "rules",
       "scenarios",
+      ...(hasFlowLayout ? ["flowLayout"] : []),
     ],
     "runtimeDefinition",
   );
@@ -559,6 +620,9 @@ export function parseRuntimeDefinition(value: unknown): RuntimeDefinition {
     scenarios: requireArray(record["scenarios"], "runtimeDefinition.scenarios").map(
       (scenario, index) => parseScenario(scenario, `runtimeDefinition.scenarios[${index}]`),
     ),
+    ...(hasFlowLayout
+      ? { flowLayout: parseFlowLayout(record["flowLayout"], "runtimeDefinition.flowLayout") }
+      : {}),
   };
 }
 

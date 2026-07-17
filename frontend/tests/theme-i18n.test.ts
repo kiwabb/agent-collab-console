@@ -33,3 +33,22 @@ test("runtime dictionaries expose the same translation keys in both locales", ()
 
   assert.deepEqual(enKeys, zhKeys);
 });
+
+test("structured prototype form feedback is domain neutral in both locales", () => {
+  const values = [
+    getDictionaryValue("zh-CN", "prototype.structured.form.selectionRequired"),
+    getDictionaryValue("zh-CN", "prototype.structured.form.invalid"),
+    getDictionaryValue("en-US", "prototype.structured.form.selectionRequired"),
+    getDictionaryValue("en-US", "prototype.structured.form.invalid"),
+  ];
+
+  assert.deepEqual(values, [
+    "请先选择要插入的表单",
+    "请检查表单中的必填项和字段格式",
+    "Select a form before inserting it",
+    "Review the required fields and field formats",
+  ]);
+  for (const value of values) {
+    assert.doesNotMatch(value, /申请事项|金额|request title|amount/iu);
+  }
+});

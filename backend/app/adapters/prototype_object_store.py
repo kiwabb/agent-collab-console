@@ -169,19 +169,11 @@ def _fsync_directory(directory: Path) -> None:
 class PrototypeObjectStore:
     def __init__(self, data_root: Path) -> None:
         self._data_root = data_root
-        self._compressor = zstandard.ZstdCompressor(
-            level=ZSTD_COMPRESSION_LEVEL,
-            write_checksum=True,
-            write_content_size=True,
-            write_dict_id=False,
-            threads=0,
-        )
-        self._decompressor = zstandard.ZstdDecompressor()
 
     def write_json(self, project_id: str, value: object) -> PrototypeObjectDescriptor:
         canonical_bytes = canonical_json_bytes(value)
         content_hash = _sha256(canonical_bytes)
-        storage_bytes = self._compressor.compress(canonical_bytes)
+        storage_bytes = self._compress(canonical_bytes)
         paths = self._paths(project_id, content_hash)
         temp_path = paths.tmp / f"{uuid4()}.partial"
 
@@ -336,9 +328,24 @@ class PrototypeObjectStore:
             ) from exc
         return True
 
-    def _decompress(self, payload: bytes, *, max_output_size: int, code: str) -> bytes:
+    @staticmethod
+    def _compress(payload: bytes) -> bytes:
+        compressor = zstandard.ZstdCompressor(
+            level=ZSTD_COMPRESSION_LEVEL,
+            write_checksum=True,
+            write_content_size=True,
+            write_dict_id=False,
+            threads=0,
+        )
+        return compressor.compress(payload)
+
+    @staticmethod
+    def _decompress(payload: bytes, *, max_output_size: int, code: str) -> bytes:
         try:
-            return self._decompressor.decompress(payload, max_output_size=max_output_size)
+            return zstandard.ZstdDecompressor().decompress(
+                payload,
+                max_output_size=max_output_size,
+            )
         except zstandard.ZstdError as exc:
             raise PrototypeObjectStoreError(
                 code,

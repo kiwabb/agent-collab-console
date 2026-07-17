@@ -82,7 +82,7 @@ async def test_node_worker_initializes_applies_and_replays_with_verified_identit
     state: object = json.loads(transitioned.state_json)
     state_record = object_dict_or_none(state)
 
-    assert identity.runtime_core_version == "0.1.0-spike"
+    assert identity.runtime_core_version == "0.2.0-spike"
     assert identity.state_machine_kernel_version == "5.32.4"
     assert identity.runtime_core_source_hash.startswith("sha256:")
     assert identity.runtime_core_bundle_hash.startswith("sha256:")

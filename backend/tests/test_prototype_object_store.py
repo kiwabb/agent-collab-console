@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from app.adapters.prototype_object_store import (
     PrototypeObjectStoreError,
     canonical_json_bytes,
 )
+from app.domain.structured_prototype import PrototypeObjectDescriptor
 
 
 def test_canonical_json_is_stable_across_key_order_and_unicode_keys() -> None:
@@ -77,6 +80,53 @@ def test_different_projects_do_not_share_storage_paths(tmp_path: Path) -> None:
 
     assert first.content_hash == second.content_hash
     assert first.storage_key != second.storage_key
+
+
+def test_same_store_supports_concurrent_writes_and_reads(tmp_path: Path) -> None:
+    store = PrototypeObjectStore(tmp_path / "data")
+    values = tuple(
+        {
+            "worker": index,
+            "payload": f"prototype-payload-{index}-" * 32,
+        }
+        for index in range(6)
+    )
+    descriptors = tuple(store.write_json("project-1", value) for value in values)
+    start = threading.Barrier(12)
+
+    def write_many(worker: int) -> tuple[tuple[int, PrototypeObjectDescriptor], ...]:
+        start.wait()
+        return tuple(
+            (
+                index,
+                store.write_json("project-1", values[index]),
+            )
+            for offset in range(24)
+            for index in ((worker + offset) % len(values),)
+        )
+
+    def read_many(worker: int) -> tuple[tuple[int, bytes], ...]:
+        start.wait()
+        return tuple(
+            (
+                index,
+                store.read_canonical_bytes(descriptors[index]),
+            )
+            for offset in range(48)
+            for index in ((worker + offset) % len(descriptors),)
+        )
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        write_futures = tuple(executor.submit(write_many, worker) for worker in range(6))
+        read_futures = tuple(executor.submit(read_many, worker) for worker in range(6))
+
+        write_results = tuple(result for future in write_futures for result in future.result())
+        read_results = tuple(result for future in read_futures for result in future.result())
+
+    for index, descriptor in write_results:
+        assert descriptor == descriptors[index]
+    for index, canonical_bytes in read_results:
+        assert canonical_bytes == canonical_json_bytes(values[index])
 
 
 def test_existing_corrupt_object_is_not_overwritten(tmp_path: Path) -> None:

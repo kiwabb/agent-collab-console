@@ -1,4 +1,10 @@
-import type { RuntimeDefinition, RuntimeEvent, RuntimeTransitionOutcome } from "../runtime/types";
+import type {
+  RuntimeBehaviorRule,
+  RuntimeDefinition,
+  RuntimeEvent,
+  RuntimeTransitionOutcome,
+  RuntimeValue,
+} from "../runtime/types";
 
 export type StructuredPrototypeRecordingKind =
   "studio_preview" | "recorded_review" | "shared_preview";
@@ -7,6 +13,44 @@ export interface StructuredPrototypeLength {
   unit: "px" | "percent" | "rem" | "auto";
   value: string | null;
 }
+
+export interface StructuredPrototypeFreeformPosition {
+  x: string;
+  y: string;
+}
+
+interface StructuredPrototypeFreeformGridCommon {
+  id: string;
+  version: 1;
+  visible: boolean;
+  snapEnabled: boolean;
+  origin: StructuredPrototypeFreeformPosition;
+}
+
+export interface StructuredPrototypeSquareGrid extends StructuredPrototypeFreeformGridCommon {
+  type: "square";
+  params: {
+    size: string;
+    colorTokenKey: string;
+    opacity: string;
+  };
+}
+
+export interface StructuredPrototypeAxisGrid extends StructuredPrototypeFreeformGridCommon {
+  type: "columns" | "rows";
+  params: {
+    count: number;
+    itemSize: string | null;
+    gutter: string;
+    margin: string;
+    alignment: "stretch" | "start" | "center" | "end";
+    colorTokenKey: string;
+    opacity: string;
+  };
+}
+
+export type StructuredPrototypeFreeformGrid =
+  StructuredPrototypeSquareGrid | StructuredPrototypeAxisGrid;
 
 export interface StructuredPrototypeLayoutItem {
   width: StructuredPrototypeLength;
@@ -18,6 +62,7 @@ export interface StructuredPrototypeLayoutItem {
   grow: number;
   shrink: number;
   alignSelf: "auto" | "start" | "center" | "end" | "stretch";
+  position?: StructuredPrototypeFreeformPosition;
 }
 
 export interface StructuredPrototypeLayoutUpdate {
@@ -30,11 +75,12 @@ export interface StructuredPrototypeLayoutUpdate {
   grow?: number;
   shrink?: number;
   alignSelf?: "auto" | "start" | "center" | "end" | "stretch";
+  position?: StructuredPrototypeFreeformPosition | null;
 }
 
 export interface StructuredPrototypeResponsiveOverride {
   breakpoint: "sm" | "md" | "lg";
-  layoutItem: StructuredPrototypeLayoutUpdate;
+  layoutItem: Omit<StructuredPrototypeLayoutUpdate, "position">;
 }
 
 export interface StructuredPrototypePadding {
@@ -62,11 +108,32 @@ export interface StructuredPrototypeStackNode extends StructuredPrototypeNodeCom
   children: StructuredPrototypeNode[];
 }
 
+export interface StructuredPrototypeGridColumnOverride {
+  minWidth: number;
+  columns: number;
+}
+
+export interface StructuredPrototypeGridNode extends StructuredPrototypeNodeCommon {
+  type: "Grid";
+  columns: number;
+  gap: number;
+  padding: StructuredPrototypePadding;
+  columnOverrides: StructuredPrototypeGridColumnOverride[];
+  children: StructuredPrototypeNode[];
+}
+
 export interface StructuredPrototypeFormNode extends StructuredPrototypeNodeCommon {
   type: "Form";
   formDefinitionId: string;
   gap: number;
   padding: StructuredPrototypePadding;
+  children: StructuredPrototypeNode[];
+}
+
+export interface StructuredPrototypeFreeformNode extends StructuredPrototypeNodeCommon {
+  type: "Freeform";
+  /** Empty grids are omitted from canonical JSON to preserve legacy document hashes. */
+  grids?: StructuredPrototypeFreeformGrid[];
   children: StructuredPrototypeNode[];
 }
 
@@ -85,6 +152,8 @@ export interface StructuredPrototypeInputNode extends StructuredPrototypeNodeCom
   inputType: "text" | "number" | "email";
   required: boolean;
   disabled: boolean;
+  formDefinitionId: string | null;
+  formFieldId: string | null;
 }
 
 export interface StructuredPrototypeButtonNode extends StructuredPrototypeNodeCommon {
@@ -99,6 +168,7 @@ export interface StructuredPrototypeButtonNode extends StructuredPrototypeNodeCo
 export interface StructuredPrototypeTableColumn {
   key: string;
   label: string;
+  fieldId: string | null;
 }
 
 export interface StructuredPrototypeTableCell {
@@ -120,7 +190,9 @@ export interface StructuredPrototypeTableNode extends StructuredPrototypeNodeCom
 
 export type StructuredPrototypeNode =
   | StructuredPrototypeStackNode
+  | StructuredPrototypeGridNode
   | StructuredPrototypeFormNode
+  | StructuredPrototypeFreeformNode
   | StructuredPrototypeTextNode
   | StructuredPrototypeInputNode
   | StructuredPrototypeButtonNode
@@ -135,6 +207,27 @@ export interface StructuredPrototypePage {
   root: StructuredPrototypeNode;
 }
 
+interface StructuredPrototypeShellCommon {
+  title: string;
+  accentColorTokenKey: string;
+  navigationBackgroundColorTokenKey: string;
+  contentBackgroundColorTokenKey: string;
+  surfaceColorTokenKey: string;
+}
+
+export interface StructuredPrototypeSidebarShell extends StructuredPrototypeShellCommon {
+  kind: "sidebar";
+  navigationWidth: number;
+  expandedMinWidth: number;
+}
+
+export interface StructuredPrototypeTopbarShell extends StructuredPrototypeShellCommon {
+  kind: "topbar";
+}
+
+export type StructuredPrototypeShell =
+  StructuredPrototypeSidebarShell | StructuredPrototypeTopbarShell;
+
 export interface StructuredPrototypeDocument {
   schemaVersion: 1;
   id: string;
@@ -143,6 +236,7 @@ export interface StructuredPrototypeDocument {
   settings: {
     defaultViewport: "desktop" | "tablet" | "mobile";
     theme: "light" | "dark" | "system";
+    shell: StructuredPrototypeShell;
   };
   tokens: {
     colors: Array<{ key: string; value: string }>;
@@ -193,11 +287,26 @@ export interface NewStructuredPrototypeStackNode extends NewStructuredPrototypeN
   children: NewStructuredPrototypeNode[];
 }
 
+export interface NewStructuredPrototypeGridNode extends NewStructuredPrototypeNodeCommon {
+  type: "Grid";
+  columns: number;
+  gap: number;
+  padding: StructuredPrototypePadding;
+  columnOverrides: StructuredPrototypeGridColumnOverride[];
+  children: NewStructuredPrototypeNode[];
+}
+
 export interface NewStructuredPrototypeFormNode extends NewStructuredPrototypeNodeCommon {
   type: "Form";
   formDefinitionId: string;
   gap: number;
   padding: StructuredPrototypePadding;
+  children: NewStructuredPrototypeNode[];
+}
+
+export interface NewStructuredPrototypeFreeformNode extends NewStructuredPrototypeNodeCommon {
+  type: "Freeform";
+  grids?: StructuredPrototypeFreeformGrid[];
   children: NewStructuredPrototypeNode[];
 }
 
@@ -216,6 +325,8 @@ export interface NewStructuredPrototypeInputNode extends NewStructuredPrototypeN
   inputType: "text" | "number" | "email";
   required: boolean;
   disabled: boolean;
+  formDefinitionId: string | null;
+  formFieldId: string | null;
 }
 
 export interface NewStructuredPrototypeButtonNode extends NewStructuredPrototypeNodeCommon {
@@ -236,7 +347,9 @@ export interface NewStructuredPrototypeTableNode extends NewStructuredPrototypeN
 
 export type NewStructuredPrototypeNode =
   | NewStructuredPrototypeStackNode
+  | NewStructuredPrototypeGridNode
   | NewStructuredPrototypeFormNode
+  | NewStructuredPrototypeFreeformNode
   | NewStructuredPrototypeTextNode
   | NewStructuredPrototypeInputNode
   | NewStructuredPrototypeButtonNode
@@ -244,6 +357,8 @@ export type NewStructuredPrototypeNode =
 
 export type StructuredPrototypeNodeRef =
   { kind: "existing"; nodeId: string } | { kind: "new"; newNodeKey: string };
+
+export type StructuredPrototypeBehaviorRuleDefinition = Omit<RuntimeBehaviorRule, "id">;
 
 export type StructuredPrototypeNodePropertyUpdate =
   | { kind: "textContent"; content: string }
@@ -259,6 +374,34 @@ export type StructuredPrototypeNodePropertyUpdate =
       kind: "tableData";
       columns: StructuredPrototypeTableColumn[];
       rows: StructuredPrototypeTableRow[];
+    }
+  | {
+      kind: "stackLayout";
+      direction: StructuredPrototypeStackNode["direction"];
+      gap: number;
+      align: StructuredPrototypeStackNode["align"];
+      justify: StructuredPrototypeStackNode["justify"];
+      padding: StructuredPrototypePadding;
+    }
+  | {
+      kind: "gridLayout";
+      columns: number;
+      gap: number;
+      padding: StructuredPrototypePadding;
+      columnOverrides: StructuredPrototypeGridColumnOverride[];
+    }
+  | {
+      kind: "formLayout";
+      gap: number;
+      padding: StructuredPrototypePadding;
+    }
+  | {
+      kind: "freeformGrids";
+      grids: StructuredPrototypeFreeformGrid[];
+    }
+  | {
+      kind: "responsiveLayout";
+      responsive: StructuredPrototypeResponsiveOverride[];
     }
   | { kind: "visibility"; visibility: "visible" | "hidden" };
 
@@ -276,6 +419,7 @@ export type StructuredPrototypeCommand =
       targetParent: StructuredPrototypeNodeRef;
       targetSlot: null;
       targetIndex: number;
+      targetPosition?: StructuredPrototypeFreeformPosition;
     }
   | { kind: "removeNode"; nodeId: string }
   | {
@@ -288,12 +432,130 @@ export type StructuredPrototypeCommand =
       node: StructuredPrototypeNodeRef;
       update: StructuredPrototypeLayoutUpdate;
     }
-  | { kind: "reorderPage"; pageId: string; targetIndex: number };
+  | { kind: "reorderPage"; pageId: string; targetIndex: number }
+  | { kind: "reorderNavigationItem"; itemId: string; targetIndex: number }
+  | {
+      kind: "setRuntimeFlowNodePosition";
+      flowNodeId: string;
+      x: number;
+      y: number;
+    }
+  | {
+      kind: "setRuntimeEntityField";
+      scenarioId: string;
+      schemaId: string;
+      entityId: string;
+      fieldId: string;
+      value: RuntimeValue;
+    }
+  | {
+      kind: "addBehaviorRule";
+      newRuleKey: string;
+      definition: StructuredPrototypeBehaviorRuleDefinition;
+    }
+  | {
+      kind: "replaceBehaviorRule";
+      ruleId: string;
+      definition: StructuredPrototypeBehaviorRuleDefinition;
+    }
+  | { kind: "removeBehaviorRule"; ruleId: string };
+
+export type StructuredPrototypeFreeformMoveEvidenceAxis = "x" | "y";
+export type StructuredPrototypeFreeformMoveEvidenceWinner =
+  "raw" | "alignment" | "spacing" | "grid";
+export type StructuredPrototypeFreeformMoveEvidenceCandidateOutcome =
+  "winner" | "farther" | "tiePriority" | "crossAxisInvalid";
+
+export interface StructuredPrototypeFreeformMoveEvidencePoint {
+  x: string;
+  y: string;
+}
+
+export interface StructuredPrototypeFreeformMoveEvidenceBounds extends StructuredPrototypeFreeformMoveEvidencePoint {
+  width: string;
+  height: string;
+}
+
+export interface StructuredPrototypeFreeformMoveEvidenceSibling extends StructuredPrototypeFreeformMoveEvidenceBounds {
+  nodeId: string;
+}
+
+interface StructuredPrototypeFreeformMoveEvidenceCandidateCommon {
+  axis: StructuredPrototypeFreeformMoveEvidenceAxis;
+  position: string;
+  correction: string;
+  distance: string;
+  sortKey: string;
+  outcome: StructuredPrototypeFreeformMoveEvidenceCandidateOutcome;
+}
+
+export interface StructuredPrototypeFreeformMoveAlignmentEvidenceCandidate extends StructuredPrototypeFreeformMoveEvidenceCandidateCommon {
+  source: "alignment";
+  coordinate: string;
+  movingAnchor: "left" | "center" | "right" | "top" | "middle" | "bottom";
+  targetAnchor: "left" | "center" | "right" | "top" | "middle" | "bottom";
+  targetKind: "container" | "sibling";
+  targetNodeId: string | null;
+}
+
+export interface StructuredPrototypeFreeformMoveSpacingEvidenceCandidate extends StructuredPrototypeFreeformMoveEvidenceCandidateCommon {
+  source: "spacing";
+  placement: "before" | "between" | "after";
+  gap: string;
+  referenceNodeIds: [string, string];
+}
+
+export interface StructuredPrototypeFreeformMoveGridEvidenceCandidate extends StructuredPrototypeFreeformMoveEvidenceCandidateCommon {
+  source: "grid";
+  gridId: string;
+  gridType: StructuredPrototypeFreeformGrid["type"];
+  gridLineIndex: number;
+  coordinate: string;
+  movingAnchor: "left" | "center" | "right" | "top" | "middle" | "bottom";
+}
+
+export type StructuredPrototypeFreeformMoveEvidenceCandidate =
+  | StructuredPrototypeFreeformMoveAlignmentEvidenceCandidate
+  | StructuredPrototypeFreeformMoveSpacingEvidenceCandidate
+  | StructuredPrototypeFreeformMoveGridEvidenceCandidate;
+
+export interface StructuredPrototypeFreeformMoveEvidence {
+  evidenceVersion: 2;
+  kind: "freeformMove";
+  snapSolverVersion: "structured-prototype-freeform-snap/v1";
+  snapSolverSourceHash: string;
+  documentId: string;
+  draftId: string;
+  freeformId: string;
+  baseHeadSequenceNo: number;
+  baseDocumentHash: string;
+  selectedNodeIds: string[];
+  grids: StructuredPrototypeFreeformGrid[];
+  gridListHash: string;
+  gridSnappingEnabled: boolean;
+  previewScale: string;
+  clientThreshold: "6";
+  selectionBounds: StructuredPrototypeFreeformMoveEvidenceBounds;
+  directSiblings: StructuredPrototypeFreeformMoveEvidenceSibling[];
+  containerSize: { width: string; height: string };
+  requestedDelta: StructuredPrototypeFreeformMoveEvidencePoint;
+  rawPosition: StructuredPrototypeFreeformMoveEvidencePoint;
+  finalPosition: StructuredPrototypeFreeformMoveEvidencePoint;
+  correction: StructuredPrototypeFreeformMoveEvidencePoint;
+  bypassSnapping: boolean;
+  axisWinners: {
+    x: StructuredPrototypeFreeformMoveEvidenceWinner;
+    y: StructuredPrototypeFreeformMoveEvidenceWinner;
+  };
+  candidates: StructuredPrototypeFreeformMoveEvidenceCandidate[];
+  terminalReason: "pointerup";
+}
 
 export interface StructuredPrototypeCommandBatch {
   commandContractVersion: 1;
   commands: StructuredPrototypeCommand[];
   summary: string;
+  evidence?: StructuredPrototypeFreeformMoveEvidence;
 }
 
 export interface StructuredPrototypeDraft {
@@ -304,7 +566,16 @@ export interface StructuredPrototypeDraft {
   draftId: string;
   headSequenceNo: number;
   documentHash: string;
+  canUndo: boolean;
+  canRedo: boolean;
   document: StructuredPrototypeDocument;
+}
+
+export interface DeleteStructuredPrototypeResult {
+  contractVersion: 1;
+  operationId: string;
+  correlationId: string;
+  deleted: boolean;
 }
 
 export interface AppliedStructuredPrototypeCommands extends StructuredPrototypeDraft {
@@ -321,6 +592,7 @@ export interface StructuredPrototypeRuntimeSession {
   documentId: string;
   sourceKind: "draft" | "ai_preview" | "published_revision";
   sourceId: string;
+  pinnedDocumentObjectHash: string;
   status: "active" | "completed" | "interrupted" | "corrupt";
   recordingKind: StructuredPrototypeRecordingKind;
   headSequenceNo: number;
@@ -334,6 +606,8 @@ export interface StructuredPrototypeRuntimeSession {
   checkpointId: string;
   checkpointSequenceNo: number;
   replayedEventBatchIds: string[];
+  replacesSessionId: string | null;
+  resetManifestHash: string | null;
 }
 
 export interface AppliedStructuredPrototypeRuntimeEvents extends StructuredPrototypeRuntimeSession {
@@ -355,12 +629,33 @@ export interface ApplyStructuredPrototypeCommandsRequest {
   batch: StructuredPrototypeCommandBatch;
 }
 
+export interface MutateStructuredPrototypeHistoryRequest {
+  contractVersion: 1;
+  clientRequestId: string;
+  expectedHeadSequenceNo: number;
+  expectedDocumentHash: string;
+}
+
 export interface CreateStructuredPrototypeRuntimeSessionRequest {
   contractVersion: 1;
   clientRequestId: string;
   scenarioId: string;
   recordingKind: StructuredPrototypeRecordingKind;
   actorSubjectId: string | null;
+}
+
+export interface ResetStructuredPrototypeRuntimeSessionRequest {
+  contractVersion: 1;
+  clientRequestId: string;
+  causeOperationId: string | null;
+  expectedOldHeadSequenceNo: number;
+  expectedOldStateHash: string;
+  expectedOldViewModelHash: string;
+  expectedOldRuntimeCoreBundleHash: string;
+  targetDraftId: string;
+  expectedTargetHeadSequenceNo: number;
+  expectedTargetDocumentHash: string;
+  scenarioId: string;
 }
 
 export interface ApplyStructuredPrototypeRuntimeEventsRequest {
@@ -424,11 +719,125 @@ export type StructuredPrototypeGenerationJobStatus =
   | "interrupted"
   | "cancelled";
 
+export type StructuredPrototypeGenerationRuntimeValue =
+  | { type: "null" }
+  | { type: "boolean"; value: boolean }
+  | { type: "integer"; value: number }
+  | { type: "string"; value: string }
+  | { type: "enum"; value: string };
+
+export type StructuredPrototypeGenerationEntityRefExpression =
+  { kind: "variable"; variableKey: string } | { kind: "eventEntityRef" };
+
+export type StructuredPrototypeGenerationExpression =
+  | { kind: "literal"; value: StructuredPrototypeGenerationRuntimeValue }
+  | { kind: "variable"; variableKey: string }
+  | { kind: "formField"; formKey: string; fieldKey: string }
+  | { kind: "eventEntityRef" }
+  | {
+      kind: "entityField";
+      entityRef: StructuredPrototypeGenerationEntityRefExpression;
+      schemaKey: string;
+      fieldKey: string;
+      fallback: StructuredPrototypeGenerationRuntimeValue;
+    };
+
+export type StructuredPrototypeGenerationPredicate =
+  | { kind: "all"; items: StructuredPrototypeGenerationPredicate[] }
+  | { kind: "roleIs"; roleKey: string }
+  | { kind: "formValid"; formKey: string }
+  | {
+      kind: "compare";
+      operator: "eq" | "ne";
+      left: StructuredPrototypeGenerationExpression;
+      right: StructuredPrototypeGenerationExpression;
+    };
+
+interface StructuredPrototypeGenerationFieldAssignment {
+  fieldKey: string;
+  value: StructuredPrototypeGenerationExpression;
+}
+
+export type StructuredPrototypeGenerationEffect =
+  | {
+      kind: "setVariable";
+      variableKey: string;
+      value: StructuredPrototypeGenerationExpression;
+    }
+  | { kind: "validateForm"; formKey: string }
+  | {
+      kind: "createEntity";
+      schemaKey: string;
+      resultVariableKey: string;
+      values: StructuredPrototypeGenerationFieldAssignment[];
+    }
+  | {
+      kind: "updateEntity";
+      schemaKey: string;
+      entityRef: StructuredPrototypeGenerationEntityRefExpression;
+      updates: StructuredPrototypeGenerationFieldAssignment[];
+    }
+  | { kind: "navigate"; targetPageKey: string }
+  | {
+      kind: "notify";
+      level: "info" | "success" | "warning" | "error";
+      message: string;
+    };
+
+export type StructuredPrototypeGenerationViewBindingIntent =
+  | {
+      key: string;
+      pageKey: string;
+      target: "textContent";
+      value: StructuredPrototypeGenerationExpression;
+    }
+  | {
+      key: string;
+      pageKey: string;
+      target: "visibility";
+      predicate: StructuredPrototypeGenerationPredicate;
+    }
+  | {
+      key: string;
+      pageKey: string;
+      target: "tableRows";
+      schemaKey: string;
+      sortFieldKey: string | null;
+      sortDirection: "asc" | "desc";
+    };
+
+export type StructuredPrototypeGenerationScenarioStep =
+  | {
+      kind: "commitFormField";
+      pageKey: string;
+      formKey: string;
+      fieldKey: string;
+      value: Extract<StructuredPrototypeGenerationRuntimeValue, { type: "string" | "integer" }>;
+      expectedOutcome: "applied" | "guard_false" | "validation_failed";
+    }
+  | {
+      kind: "activateBehavior";
+      behaviorIntentKey: string;
+      expectedOutcome: "applied" | "guard_false" | "validation_failed";
+    }
+  | {
+      kind: "activateEntityBehavior";
+      behaviorIntentKey: string;
+      schemaKey: string;
+      entityKey: string;
+      expectedOutcome: "applied" | "guard_false" | "validation_failed";
+    }
+  | {
+      kind: "switchRole";
+      roleKey: string;
+      expectedOutcome: "applied" | "guard_false" | "validation_failed";
+    };
+
 export interface StructuredPrototypeGenerationBlueprint {
-  contractVersion: 1;
+  contractVersion: 3;
   documentTitle: string;
   productIntent: string;
-  outputLocale: "zh-CN";
+  outputLocale: "zh-CN" | "en-US";
   foundationIntent: {
     visualLanguage: string;
     density: "compact" | "comfortable";
@@ -445,14 +854,82 @@ export interface StructuredPrototypeGenerationBlueprint {
   flowIntents: Array<{
     key: string;
     sourcePageKey: string;
-    sourceNodeKey: string;
-    event: "click" | "submit" | "rowActivated";
+    behaviorIntentKey: string;
     targetPageKey: string;
   }>;
-  roleIntents: string[];
-  entityIntents: string[];
-  formIntents: string[];
-  scenarioIntents: string[];
+  roleIntents: Array<{ key: string; label: string }>;
+  entityIntents: Array<{
+    key: string;
+    fields: Array<{
+      key: string;
+      valueType: "boolean" | "integer" | "string" | "enum";
+      nullable: boolean;
+    }>;
+  }>;
+  variableIntents: Array<{
+    key: string;
+    valueType: "null" | "boolean" | "integer" | "string" | "enum" | "entityRef";
+    nullable: boolean;
+    entitySchemaKey: string | null;
+    defaultValue: StructuredPrototypeGenerationRuntimeValue;
+  }>;
+  formIntents: Array<{
+    key: string;
+    pageKey: string;
+    fields: Array<{
+      key: string;
+      valueType: "string" | "integer";
+      initialValue: Extract<
+        StructuredPrototypeGenerationRuntimeValue,
+        { type: "string" | "integer" }
+      >;
+      required: boolean;
+      minInteger: number | null;
+    }>;
+  }>;
+  viewBindingIntents: StructuredPrototypeGenerationViewBindingIntent[];
+  behaviorIntents: Array<{
+    key: string;
+    sourcePageKey: string;
+    guard: StructuredPrototypeGenerationPredicate | null;
+    effects: StructuredPrototypeGenerationEffect[];
+    guardFalseEffects: StructuredPrototypeGenerationEffect[];
+  }>;
+  scenarioIntents: Array<{
+    key: string;
+    actorRoleKey: string;
+    startPageKey: string;
+    initialVariables: Array<{
+      variableKey: string;
+      value: StructuredPrototypeGenerationRuntimeValue;
+    }>;
+    entityFixtures: Array<{
+      schemaKey: string;
+      entities: Array<{
+        key: string;
+        fields: Array<{
+          fieldKey: string;
+          value: StructuredPrototypeGenerationRuntimeValue;
+        }>;
+      }>;
+    }>;
+    allowSimulatedRoleSwitch: boolean;
+    scriptedSteps: StructuredPrototypeGenerationScenarioStep[];
+    milestones: Array<{
+      afterStep: number;
+      currentPageKey: string | null;
+      variableValues: Array<{
+        variableKey: string;
+        value: StructuredPrototypeGenerationRuntimeValue;
+      }>;
+      entityFieldValues: Array<{
+        schemaKey: string;
+        entityKey: string;
+        fieldKey: string;
+        value: StructuredPrototypeGenerationRuntimeValue;
+      }>;
+    }>;
+  }>;
   startPageKeys: string[];
 }
 
@@ -462,6 +939,7 @@ export interface StructuredPrototypeGenerationItem {
   kind: "blueprint" | "foundation" | "page";
   itemKey: string;
   pageKey: string | null;
+  itemOrdinal: number;
   status: "pending" | "generating" | "validating" | "done" | "failed" | "interrupted";
   phase: string;
   taskKind: string;
@@ -483,6 +961,20 @@ export interface StructuredPrototypeGenerationJob {
   projectId: string;
   status: StructuredPrototypeGenerationJobStatus;
   operationId: string;
+  sourcePolicy: "committed_head_v1" | null;
+  sourceSnapshotObjectHash: string | null;
+  sourceFingerprint: string | null;
+  sourceSnapshotRef: string | null;
+  repositoryObjectFormat: string | null;
+  worktreeBaseCommit: string | null;
+  repositoryProjectPrefix: string | null;
+  repositoryTreeObjectId: string | null;
+  workingTreeDirty: boolean | null;
+  excludedTrackedChangeCount: number | null;
+  excludedUntrackedCount: number | null;
+  sourceFileExclusionPolicy: "dotenv_checkout_filter_v1" | null;
+  excludedSensitiveFileCount: number | null;
+  excludedStatusHash: string | null;
   blueprintVersion: number;
   blueprintHash: string | null;
   blueprint: StructuredPrototypeGenerationBlueprint | null;
@@ -510,12 +1002,21 @@ export interface StructuredPrototypeGenerationJob {
 
 export interface StructuredPrototypeGenerationAcceptResult {
   contractVersion: 1;
+  operationId: string;
+  correlationId: string;
   job: StructuredPrototypeGenerationJob;
   documentId: string;
   draftId: string;
   checkpointId: string;
   headSequenceNo: number;
   documentHash: string;
+}
+
+export interface StructuredPrototypeGenerationConfirmResult {
+  contractVersion: 1;
+  operationId: string;
+  correlationId: string;
+  job: StructuredPrototypeGenerationJob;
 }
 
 export type PrototypeAiEditRunStatus =

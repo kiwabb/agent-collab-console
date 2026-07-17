@@ -389,6 +389,12 @@ class PrototypeRenderArtifactStore:
         descriptor: PrototypeRenderBundleDescriptor,
         manifest: dict[str, object],
     ) -> None:
+        files = manifest.get("files")
+        if not isinstance(files, list):
+            raise PrototypeRenderArtifactStoreError(
+                "render_artifact_manifest_invalid",
+                "prototype render artifact file manifest is invalid",
+            )
         expected = (
             1,
             descriptor.project_id,
@@ -398,6 +404,7 @@ class PrototypeRenderArtifactStore:
             descriptor.output_hash,
             descriptor.output_manifest_hash,
             descriptor.visual_preflight_report_hash,
+            descriptor.file_count,
         )
         actual = (
             manifest.get("contractVersion"),
@@ -408,6 +415,7 @@ class PrototypeRenderArtifactStore:
             manifest.get("outputHash"),
             manifest.get("outputManifestHash"),
             manifest.get("visualPreflightReportHash"),
+            len(files),
         )
         if actual != expected:
             raise PrototypeRenderArtifactStoreError(

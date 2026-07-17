@@ -10,15 +10,19 @@ injection and accidental injection of git options.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 import shutil
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal, TypedDict
 
 from app.domain.models import GitBranch
+from app.domain.structured_prototype_generation import (
+    PrototypeGenerationCommittedHeadCapture,
+)
 
 
 class GitError(RuntimeError):
@@ -28,6 +32,15 @@ class GitError(RuntimeError):
 # Branch names: standard git ref characters plus a few safe punctuation marks.
 # Disallows leading dash so the value can never be interpreted as a flag.
 _BRANCH_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
+_GENERATION_SNAPSHOT_REF_PREFIX = "refs/agent-collab/prototype-generation/"
+_GENERATION_SNAPSHOT_REF_RE = re.compile(
+    r"^refs/agent-collab/prototype-generation/"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+_GIT_OBJECT_ID_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+_DOTENV_EXAMPLE_NAMES = frozenset({".env.example", ".env.sample", ".env.template"})
+# `--full-name` changes output paths, but only this pathspec expands a nested cwd to the repo root.
+_REPOSITORY_TOPLEVEL_PATHSPEC = ":(top)"
 
 # Remote names are narrower than branch names (no slashes).
 _REMOTE_RE = re.compile(r"^(?!-)[A-Za-z0-9._-]+$")
@@ -84,6 +97,13 @@ class DiffShortstat(TypedDict):
     files: int
     insertions: int
     deletions: int
+
+
+@dataclass(frozen=True, slots=True)
+class GitWorktreeEntry:
+    path: str
+    head: str | None
+    branch: str | None
 
 
 class GitService:
@@ -705,6 +725,283 @@ class GitService:
         result = await self._run(["rev-parse", "HEAD"], cwd=worktree_path)
         return result.stdout.strip()
 
+    async def capture_committed_head_snapshot(
+        self,
+        repo_path: str | Path,
+        job_id: str,
+    ) -> PrototypeGenerationCommittedHeadCapture:
+        """Pin and describe the committed project tree while excluding local edits."""
+        _validate_path(repo_path)
+        snapshot_ref = f"{_GENERATION_SNAPSHOT_REF_PREFIX}{job_id}"
+        if _GENERATION_SNAPSHOT_REF_RE.fullmatch(snapshot_ref) is None:
+            raise GitError("invalid prototype generation snapshot ref")
+
+        head_before = await self.head_commit(repo_path)
+        object_format_result = await self._run(
+            ["rev-parse", "--show-object-format"],
+            cwd=repo_path,
+        )
+        object_format = object_format_result.stdout.strip()
+        if object_format not in {"sha1", "sha256"}:
+            raise GitError("git returned an unsupported object format")
+        if _GIT_OBJECT_ID_RE.fullmatch(head_before) is None:
+            raise GitError("git returned an invalid HEAD object ID")
+        project_prefix = await self.repository_prefix(repo_path)
+        tree_object_id = await self._resolve_project_tree(
+            repo_path,
+            commit=head_before,
+            project_prefix=project_prefix,
+        )
+        tracked = await self._run(
+            ["status", "--porcelain=v1", "--untracked-files=no"],
+            cwd=repo_path,
+        )
+        untracked = await self._run(
+            [
+                "ls-files",
+                "--full-name",
+                "--others",
+                "--exclude-standard",
+                "-z",
+                "--",
+                _REPOSITORY_TOPLEVEL_PATHSPEC,
+            ],
+            cwd=repo_path,
+        )
+        tracked_change_count = sum(1 for line in tracked.stdout.splitlines() if line)
+        untracked_count = sum(1 for path in untracked.stdout.split("\0") if path)
+        excluded_sensitive_paths = await self.generation_excluded_checkout_paths(
+            repo_path,
+            commit=head_before,
+            project_prefix=project_prefix,
+            exclusion_policy="dotenv_checkout_filter_v1",
+        )
+        status_hash = "sha256:" + hashlib.sha256(
+            (
+                "tracked\0"
+                + tracked.stdout
+                + "\0untracked\0"
+                + untracked.stdout
+                + "\0sensitive\0"
+                + "\0".join(excluded_sensitive_paths)
+            ).encode("utf-8")
+        ).hexdigest()
+
+        head_after = await self.head_commit(repo_path)
+        if head_after != head_before:
+            raise GitError("project HEAD changed while capturing generation source")
+        await self._create_generation_snapshot_ref(
+            repo_path,
+            snapshot_ref=snapshot_ref,
+            commit=head_before,
+            object_format=object_format,
+        )
+        return PrototypeGenerationCommittedHeadCapture(
+            snapshot_ref=snapshot_ref,
+            repository_object_format=object_format,
+            worktree_base_commit=head_before,
+            repository_project_prefix=project_prefix,
+            repository_tree_object_id=tree_object_id,
+            source_file_exclusion_policy="dotenv_checkout_filter_v1",
+            working_tree_dirty=tracked_change_count > 0 or untracked_count > 0,
+            excluded_tracked_change_count=tracked_change_count,
+            excluded_untracked_count=untracked_count,
+            excluded_sensitive_file_count=len(excluded_sensitive_paths),
+            excluded_status_hash=status_hash,
+        )
+
+    async def verify_committed_head_snapshot(
+        self,
+        repo_path: str | Path,
+        *,
+        snapshot_ref: str,
+        repository_object_format: str,
+        worktree_base_commit: str,
+        repository_project_prefix: str,
+        repository_tree_object_id: str,
+        source_file_exclusion_policy: str,
+        excluded_sensitive_file_count: int,
+    ) -> None:
+        """Fail closed unless the hidden ref still pins the recorded project tree."""
+        _validate_path(repo_path)
+        if _GENERATION_SNAPSHOT_REF_RE.fullmatch(snapshot_ref) is None:
+            raise GitError("invalid prototype generation snapshot ref")
+        if repository_object_format not in {"sha1", "sha256"}:
+            raise GitError("unsupported prototype generation object format")
+        if (
+            _GIT_OBJECT_ID_RE.fullmatch(worktree_base_commit) is None
+            or _GIT_OBJECT_ID_RE.fullmatch(repository_tree_object_id) is None
+        ):
+            raise GitError("invalid prototype generation Git object ID")
+        current_format = (
+            await self._run(["rev-parse", "--show-object-format"], cwd=repo_path)
+        ).stdout.strip()
+        if current_format != repository_object_format:
+            raise GitError("prototype generation repository object format changed")
+        current_prefix = await self.repository_prefix(repo_path)
+        if current_prefix != repository_project_prefix:
+            raise GitError("prototype generation project repository prefix changed")
+        excluded_sensitive_paths = await self.generation_excluded_checkout_paths(
+            repo_path,
+            commit=worktree_base_commit,
+            project_prefix=repository_project_prefix,
+            exclusion_policy=source_file_exclusion_policy,
+        )
+        if len(excluded_sensitive_paths) != excluded_sensitive_file_count:
+            raise GitError("prototype generation sensitive-file exclusion changed")
+        ref_result = await self._run(
+            ["rev-parse", "--verify", snapshot_ref],
+            cwd=repo_path,
+            check=False,
+        )
+        if ref_result.returncode != 0 or ref_result.stdout.strip() != worktree_base_commit:
+            raise GitError("prototype generation snapshot ref is missing or changed")
+        object_type = await self._run(
+            ["cat-file", "-t", worktree_base_commit],
+            cwd=repo_path,
+            check=False,
+        )
+        if object_type.returncode != 0 or object_type.stdout.strip() != "commit":
+            raise GitError("prototype generation snapshot commit is missing")
+        actual_tree = await self._resolve_project_tree(
+            repo_path,
+            commit=worktree_base_commit,
+            project_prefix=repository_project_prefix,
+        )
+        if actual_tree != repository_tree_object_id:
+            raise GitError("prototype generation project tree changed")
+
+    async def list_generation_snapshot_refs(
+        self,
+        repo_path: str | Path,
+    ) -> list[tuple[str, str]]:
+        _validate_path(repo_path)
+        result = await self._run(
+            [
+                "for-each-ref",
+                "--format=%(refname) %(objectname)",
+                _GENERATION_SNAPSHOT_REF_PREFIX,
+            ],
+            cwd=repo_path,
+            check=False,
+        )
+        refs: list[tuple[str, str]] = []
+        for line in result.stdout.splitlines():
+            ref_name, separator, object_id = line.partition(" ")
+            if (
+                separator
+                and _GENERATION_SNAPSHOT_REF_RE.fullmatch(ref_name) is not None
+                and _GIT_OBJECT_ID_RE.fullmatch(object_id) is not None
+            ):
+                refs.append((ref_name, object_id))
+        return refs
+
+    async def delete_generation_snapshot_ref(
+        self,
+        repo_path: str | Path,
+        *,
+        snapshot_ref: str,
+        expected_object_id: str,
+    ) -> None:
+        _validate_path(repo_path)
+        if (
+            _GENERATION_SNAPSHOT_REF_RE.fullmatch(snapshot_ref) is None
+            or _GIT_OBJECT_ID_RE.fullmatch(expected_object_id) is None
+        ):
+            raise GitError("invalid prototype generation snapshot ref deletion")
+        result = await self._run(
+            ["update-ref", "-d", snapshot_ref, expected_object_id],
+            cwd=repo_path,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise GitError("prototype generation snapshot ref changed before deletion")
+
+    async def _create_generation_snapshot_ref(
+        self,
+        repo_path: str | Path,
+        *,
+        snapshot_ref: str,
+        commit: str,
+        object_format: str,
+    ) -> None:
+        zero_object_id = "0" * (40 if object_format == "sha1" else 64)
+        created = await self._run(
+            ["update-ref", snapshot_ref, commit, zero_object_id],
+            cwd=repo_path,
+            check=False,
+        )
+        if created.returncode == 0:
+            return
+        existing = await self._run(
+            ["rev-parse", "--verify", snapshot_ref],
+            cwd=repo_path,
+            check=False,
+        )
+        if existing.returncode != 0 or existing.stdout.strip() != commit:
+            raise GitError("prototype generation snapshot ref already targets another commit")
+
+    async def _resolve_project_tree(
+        self,
+        repo_path: str | Path,
+        *,
+        commit: str,
+        project_prefix: str,
+    ) -> str:
+        relative = Path(project_prefix)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise GitError("prototype generation project prefix is unsafe")
+        revision = f"{commit}:{project_prefix}" if project_prefix else f"{commit}^{{tree}}"
+        result = await self._run(
+            ["rev-parse", "--verify", revision],
+            cwd=repo_path,
+            check=False,
+        )
+        tree_object_id = result.stdout.strip()
+        if result.returncode != 0 or _GIT_OBJECT_ID_RE.fullmatch(tree_object_id) is None:
+            raise GitError("prototype generation project tree is missing")
+        object_type = await self._run(
+            ["cat-file", "-t", tree_object_id],
+            cwd=repo_path,
+            check=False,
+        )
+        if object_type.returncode != 0 or object_type.stdout.strip() != "tree":
+            raise GitError("prototype generation project object is not a tree")
+        return tree_object_id
+
+    async def generation_excluded_checkout_paths(
+        self,
+        repo_path: str | Path,
+        *,
+        commit: str,
+        project_prefix: str,
+        exclusion_policy: str,
+    ) -> tuple[str, ...]:
+        """List files filtered from the prepared checkout, not a security sandbox."""
+        _validate_path(repo_path)
+        if exclusion_policy != "dotenv_checkout_filter_v1":
+            raise GitError("unsupported prototype generation file exclusion policy")
+        prefix_path = PurePosixPath(project_prefix)
+        if prefix_path.is_absolute() or ".." in prefix_path.parts:
+            raise GitError("prototype generation project prefix is unsafe")
+        args = ["ls-tree", "--full-tree", "-r", "--name-only", "-z", commit]
+        result = await self._run(args, cwd=repo_path, check=False)
+        if result.returncode != 0:
+            raise GitError("prototype generation committed file list is unavailable")
+        excluded: list[str] = []
+        for repository_path in result.stdout.split("\0"):
+            if not repository_path:
+                continue
+            relative = PurePosixPath(repository_path)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise GitError("prototype generation committed path is unsafe")
+            name = relative.name
+            if name == ".env" or (
+                name.startswith(".env.") and name not in _DOTENV_EXAMPLE_NAMES
+            ):
+                excluded.append(relative.as_posix())
+        return tuple(sorted(excluded))
+
     async def working_tree_snapshot_revision(self, repo_path: str | Path) -> str:
         """Create a detached revision for the current tracked working tree.
 
@@ -893,6 +1190,39 @@ class GitService:
             if line.startswith("worktree "):
                 out.append(line[len("worktree ") :].strip())
         return out
+
+    async def list_worktrees(self, repo_path: str | Path) -> list[GitWorktreeEntry]:
+        _validate_path(repo_path)
+        result = await self._run(
+            ["worktree", "list", "--porcelain"],
+            cwd=repo_path,
+            check=False,
+        )
+        entries: list[GitWorktreeEntry] = []
+        current: dict[str, str] = {}
+        for line in (*result.stdout.splitlines(), ""):
+            if line:
+                key, separator, value = line.partition(" ")
+                if separator and key in {"worktree", "HEAD", "branch"}:
+                    current[key] = value.strip()
+                continue
+            path = current.get("worktree")
+            if path is not None:
+                branch_ref = current.get("branch")
+                branch = (
+                    branch_ref.removeprefix("refs/heads/")
+                    if branch_ref is not None and branch_ref.startswith("refs/heads/")
+                    else None
+                )
+                entries.append(
+                    GitWorktreeEntry(
+                        path=path,
+                        head=current.get("HEAD"),
+                        branch=branch,
+                    )
+                )
+            current = {}
+        return entries
 
     async def list_branch_names(self, repo_path: str | Path, prefix: str) -> list[str]:
         """Return local branch names matching `<prefix>*` (refs/heads only).

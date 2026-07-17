@@ -27,15 +27,21 @@ function matchesKey(event: KeyboardEvent, shortcut: KeyboardShortcut): boolean {
   return true;
 }
 
+export function isKeyboardShortcutEditableTarget(target: EventTarget | null): boolean {
+  return (
+    typeof Element !== "undefined" &&
+    target instanceof Element &&
+    target.closest("input, textarea, select, [contenteditable]") !== null
+  );
+}
+
 export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[]): void {
   useEffect(() => {
     if (typeof document === "undefined") return;
 
     const handler = (event: KeyboardEvent): void => {
       if (!shortcuts || shortcuts.length === 0) return;
-      if ((event.target as HTMLElement | null)?.matches?.("input, textarea, [contenteditable]")) {
-        return;
-      }
+      if (isKeyboardShortcutEditableTarget(event.target)) return;
       for (const shortcut of shortcuts) {
         if (matchesKey(event, shortcut)) {
           event.preventDefault();

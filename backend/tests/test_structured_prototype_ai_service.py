@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 import aiosqlite
 import pytest
@@ -9,7 +10,10 @@ from structured_prototype_fixtures import fixture_id, procurement_document_paylo
 
 from app.adapters.prototype_object_store import PrototypeObjectStore
 from app.adapters.prototype_render_artifact_store import PrototypeRenderArtifactStore
-from app.adapters.prototype_renderer_worker import PrototypeRendererWorker
+from app.adapters.prototype_renderer_worker import (
+    PrototypeRendererWorker,
+    PrototypeRendererWorkerError,
+)
 from app.adapters.structured_prototype_store import AsyncStructuredPrototypeStore
 from app.application.structured_prototype_ai_contracts import (
     PrototypeAiSelectionV1,
@@ -27,18 +31,136 @@ from app.application.structured_prototype_ai_service import (
     StructuredPrototypeAiServiceError,
 )
 from app.application.structured_prototype_contracts import (
+    DomainCommandBatchV1,
     NewPrototypeDocumentV1,
     StackNodeV1,
     TextNodeV1,
 )
-from app.application.structured_prototype_service import StructuredPrototypeService
+from app.application.structured_prototype_service import (
+    PrototypeRendererExecution,
+    StructuredPrototypeService,
+)
 from app.domain.models import Project
+from app.domain.structured_prototype import PrototypeRendererWorkerResult
 
 FIXED_NOW = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
 
 
 def _new_document() -> NewPrototypeDocumentV1:
     payload = procurement_document_payload()
+    payload.pop("id")
+    return NewPrototypeDocumentV1.model_validate(
+        payload,
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+
+
+def _flow_rule_new_document() -> NewPrototypeDocumentV1:
+    payload = procurement_document_payload()
+    rule_id = fixture_id("ai-flow-rule")
+    runtime = payload["runtime"]
+    assert isinstance(runtime, dict)
+    runtime["rules"] = [
+        {
+            "id": rule_id,
+            "key": "submit-to-detail",
+            "enabled": True,
+            "trigger": {
+                "kind": "nodeEvent",
+                "nodeId": fixture_id("button-submit"),
+                "event": "click",
+            },
+            "guard": {
+                "kind": "roleIs",
+                "roleId": fixture_id("role-applicant"),
+            },
+            "effects": [{"kind": "navigate", "targetPageId": fixture_id("page-detail")}],
+            "guardFalseEffects": [],
+        }
+    ]
+    payload["flows"] = [
+        {
+            "id": fixture_id("ai-flow-projection"),
+            "key": "submit-to-detail",
+            "ruleId": rule_id,
+            "fromNodeId": fixture_id("button-submit"),
+            "toPageId": fixture_id("page-detail"),
+        }
+    ]
+    payload.pop("id")
+    return NewPrototypeDocumentV1.model_validate(
+        payload,
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+
+
+def _runtime_table_new_document() -> NewPrototypeDocumentV1:
+    payload = procurement_document_payload()
+    pages = payload["pages"]
+    assert isinstance(pages, list)
+    list_page = pages[0]
+    assert isinstance(list_page, dict)
+    root = list_page["root"]
+    assert isinstance(root, dict)
+    children = root["children"]
+    assert isinstance(children, list)
+    table = children[1]
+    assert isinstance(table, dict)
+    schema_id = fixture_id("table-schema")
+    field_id = fixture_id("table-schema-title")
+    table["columns"] = [{"key": "title", "label": "标题", "fieldId": field_id}]
+    table["rows"] = []
+    runtime = payload["runtime"]
+    assert isinstance(runtime, dict)
+    runtime["entitySchemas"] = [
+        {
+            "id": schema_id,
+            "key": "table-record",
+            "fields": [
+                {
+                    "id": field_id,
+                    "key": "title",
+                    "valueType": "string",
+                    "nullable": False,
+                }
+            ],
+        }
+    ]
+    runtime["viewBindings"] = [
+        {
+            "id": fixture_id("table-view-binding"),
+            "nodeId": fixture_id("table-list"),
+            "target": "tableRows",
+            "schemaId": schema_id,
+            "sortFieldId": field_id,
+            "sortDirection": "asc",
+        }
+    ]
+    scenarios = runtime["scenarios"]
+    assert isinstance(scenarios, list)
+    scenario = scenarios[0]
+    assert isinstance(scenario, dict)
+    scenario["entityFixtures"] = [
+        {
+            "schemaId": schema_id,
+            "entities": [
+                {
+                    "id": fixture_id("table-entity-open"),
+                    "schemaId": schema_id,
+                    "fields": [
+                        {
+                            "fieldId": field_id,
+                            "value": {"type": "string", "value": "办公电脑采购"},
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
     payload.pop("id")
     return NewPrototypeDocumentV1.model_validate(
         payload,
@@ -55,6 +177,37 @@ def _outcome(payload: dict[str, object]) -> PrototypeAssistantOutcomeV1:
         by_alias=True,
         by_name=False,
     ).outcome
+
+
+def _runtime_field_outcome() -> PrototypeAssistantOutcomeV1:
+    scenario_id = fixture_id("scenario-happy-path")
+    schema_id = fixture_id("table-schema")
+    entity_id = fixture_id("table-entity-open")
+    field_id = fixture_id("table-schema-title")
+    summary = "修改运行时表格数据"
+    return _outcome(
+        {
+            "contractVersion": 1,
+            "kind": "commandProposal",
+            "message": "准备修改。",
+            "summary": summary,
+            "batch": {
+                "commandContractVersion": 1,
+                "summary": summary,
+                "commands": [
+                    {
+                        "kind": "setRuntimeEntityField",
+                        "scenarioId": scenario_id,
+                        "schemaId": schema_id,
+                        "entityId": entity_id,
+                        "fieldId": field_id,
+                        "value": {"type": "string", "value": "已更新的采购事项"},
+                    }
+                ],
+            },
+            "affectedEntityIds": [scenario_id, schema_id, entity_id, field_id],
+        }
+    )
 
 
 class _ProjectStore:
@@ -96,10 +249,31 @@ class _UnexpectedRuntime:
         raise RuntimeError("unexpected runtime failure")
 
 
+class _FailingRenderer:
+    def __init__(self, renderer: PrototypeRendererWorker) -> None:
+        self.identity = renderer.identity
+
+    async def render(
+        self,
+        *,
+        request_id: str,
+        artifact_id: str,
+        input_manifest: dict[str, object],
+        document: dict[str, object],
+    ) -> PrototypeRendererWorkerResult:
+        del request_id, artifact_id, input_manifest, document
+        raise PrototypeRendererWorkerError(
+            "renderer_test_failure",
+            "renderer failed for the failure-evidence regression",
+        )
+
+
 async def _fixture(
     tmp_path: Path,
     outcome: PrototypeAssistantOutcomeV1,
     runtime: PrototypeUiEngineerExecution | None = None,
+    renderer_worker: PrototypeRendererExecution | None = None,
+    document: NewPrototypeDocumentV1 | None = None,
 ) -> tuple[
     AsyncStructuredPrototypeStore,
     StructuredPrototypeService,
@@ -121,7 +295,7 @@ async def _fixture(
     created = await structured.create_document(
         project_id="project-1",
         client_request_id=fixture_id("ai-create-document"),
-        document=_new_document(),
+        document=document if document is not None else _new_document(),
     )
     project = Project(
         id="project-1",
@@ -135,7 +309,7 @@ async def _fixture(
         object_store=object_store,
         structured_service=structured,
         runtime=runtime if runtime is not None else _Runtime(outcome),
-        renderer_worker=renderer,
+        renderer_worker=renderer_worker if renderer_worker is not None else renderer,
         artifact_store=artifact_store,
         clock=lambda: FIXED_NOW,
     )
@@ -297,7 +471,20 @@ async def test_command_proposal_renders_then_applies_one_ai_batch_and_checkpoint
         bundle = await store.load_draft_recovery_bundle(draft_id)
         assert bundle.checkpoint.checkpoint_kind == "ai_apply"
         assert bundle.checkpoint.checkpoint_sequence_no == 1
+        assert (
+            bundle.checkpoint.history_snapshot_object_hash
+            == bundle.history_object_descriptor.content_hash
+        )
         assert len(bundle.command_batches) == 0
+        checkpoint_references = await store.list_object_references(
+            "project-1",
+            "checkpoint",
+            bundle.checkpoint.id,
+        )
+        assert {reference.payload_type for reference in checkpoint_references} == {
+            "prototype_document",
+            "prototype_command_history_checkpoint",
+        }
         snapshot = await service.get_thread(thread_id)
         assert snapshot.messages[-1].status == "applied"
         assert snapshot.messages[-1].command_batch_id == applied.command_batch_id
@@ -323,6 +510,66 @@ async def test_command_proposal_renders_then_applies_one_ai_batch_and_checkpoint
         assert [reference.content_hash for reference in apply_references] == [
             apply_operation.result_manifest_hash
         ]
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_preview_renderer_failure_persists_gap_free_terminal_evidence(
+    tmp_path: Path,
+) -> None:
+    title_id = fixture_id("title-list")
+    proposal = _outcome(
+        {
+            "contractVersion": 1,
+            "kind": "commandProposal",
+            "message": "Preview this title adjustment.",
+            "summary": "Adjust the list title",
+            "batch": {
+                "commandContractVersion": 1,
+                "summary": "Adjust the list title",
+                "commands": [
+                    {
+                        "kind": "setNodeProperty",
+                        "node": {"kind": "existing", "nodeId": title_id},
+                        "update": {"kind": "textContent", "content": "All requests"},
+                    }
+                ],
+            },
+            "affectedEntityIds": [title_id],
+        }
+    )
+    renderer = _FailingRenderer(PrototypeRendererWorker())
+    store, _, service, draft_id, thread_id = await _fixture(
+        tmp_path,
+        proposal,
+        renderer_worker=renderer,
+    )
+    try:
+        draft = await store.load_draft(draft_id)
+        assert draft is not None
+        queued = await service.send_message(
+            thread_id=thread_id,
+            client_message_id=fixture_id("ai-renderer-failure-message"),
+            draft_id=draft_id,
+            expected_head_sequence_no=0,
+            expected_document_hash=draft.head_document_hash,
+            content="Adjust the list title",
+            selection=_page_selection(),
+        )
+
+        failed = await service.wait_for_run(queued.id)
+
+        assert failed.status == "failed"
+        assert failed.error_code == "renderer_test_failure"
+        operation = await store.load_operation(failed.operation_id)
+        assert operation is not None
+        assert operation.status == "failed"
+        events = await store.list_operation_events(operation.id)
+        assert [event.event_no for event in events] == list(range(len(events)))
+        assert events[-1].event_kind == "step_failed"
+        assert events[-1].phase == "rendering_preview"
+        assert events[-1].error_code == "renderer_test_failure"
     finally:
         await store.close()
 
@@ -377,6 +624,145 @@ async def test_selection_scope_violation_fails_closed_and_preserves_draft(tmp_pa
         unchanged = await store.load_draft(draft_id)
         assert unchanged is not None
         assert unchanged.head_sequence_no == 0
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope", "selected_node_ids"),
+    [
+        pytest.param("page", (), id="page"),
+        pytest.param("selection", (fixture_id("table-list"),), id="selected-table"),
+    ],
+)
+async def test_runtime_fixture_field_edit_is_allowed_when_reachable_from_scope(
+    tmp_path: Path,
+    scope: Literal["page", "selection"],
+    selected_node_ids: tuple[str, ...],
+) -> None:
+    proposal = _runtime_field_outcome()
+    runtime = _Runtime(proposal)
+    store, _, service, draft_id, thread_id = await _fixture(
+        tmp_path,
+        proposal,
+        runtime=runtime,
+        document=_runtime_table_new_document(),
+    )
+    try:
+        draft = await store.load_draft(draft_id)
+        assert draft is not None
+        queued = await service.send_message(
+            thread_id=thread_id,
+            client_message_id=fixture_id(f"ai-runtime-{scope}-message"),
+            draft_id=draft_id,
+            expected_head_sequence_no=0,
+            expected_document_hash=draft.head_document_hash,
+            content="修改当前表格数据",
+            selection=PrototypeAiSelectionV1(
+                scope=scope,
+                page_id=fixture_id("page-list"),
+                selected_node_ids=list(selected_node_ids),
+                flow_id=None,
+                viewport="desktop",
+            ),
+        )
+
+        ready = await service.wait_for_run(queued.id)
+
+        assert ready.status == "preview_ready"
+        assert len(runtime.requests) == 1
+        runtime_context = runtime.requests[0].frozen_context["runtime"]
+        assert isinstance(runtime_context, dict)
+        bindings = runtime_context["viewBindings"]
+        assert isinstance(bindings, list)
+        assert len(bindings) == 1
+        binding = bindings[0]
+        assert isinstance(binding, dict)
+        assert binding["nodeId"] == fixture_id("table-list")
+        assert binding["schemaId"] == fixture_id("table-schema")
+        schemas = runtime_context["entitySchemas"]
+        assert isinstance(schemas, list)
+        assert len(schemas) == 1
+        schema = schemas[0]
+        assert isinstance(schema, dict)
+        assert schema["id"] == fixture_id("table-schema")
+        scenarios = runtime_context["scenarios"]
+        assert isinstance(scenarios, list)
+        assert len(scenarios) == 1
+        scenario = scenarios[0]
+        assert isinstance(scenario, dict)
+        assert scenario["id"] == fixture_id("scenario-happy-path")
+        fixtures = scenario["entityFixtures"]
+        assert isinstance(fixtures, list)
+        fixture = fixtures[0]
+        assert isinstance(fixture, dict)
+        entities = fixture["entities"]
+        assert isinstance(entities, list)
+        entity = entities[0]
+        assert isinstance(entity, dict)
+        assert entity["id"] == fixture_id("table-entity-open")
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope", "page_id", "selected_node_ids"),
+    [
+        pytest.param(
+            "selection",
+            fixture_id("page-list"),
+            (fixture_id("title-list"),),
+            id="unrelated-selection",
+        ),
+        pytest.param(
+            "page",
+            fixture_id("page-detail"),
+            (),
+            id="unrelated-page",
+        ),
+    ],
+)
+async def test_scope_refuses_unrelated_runtime_fixture_field_edits(
+    tmp_path: Path,
+    scope: Literal["page", "selection"],
+    page_id: str,
+    selected_node_ids: tuple[str, ...],
+) -> None:
+    proposal = _runtime_field_outcome()
+    store, _, service, draft_id, thread_id = await _fixture(
+        tmp_path,
+        proposal,
+        document=_runtime_table_new_document(),
+    )
+    try:
+        draft = await store.load_draft(draft_id)
+        assert draft is not None
+        queued = await service.send_message(
+            thread_id=thread_id,
+            client_message_id=fixture_id(f"ai-runtime-{scope}-scope-message"),
+            draft_id=draft_id,
+            expected_head_sequence_no=0,
+            expected_document_hash=draft.head_document_hash,
+            content="修改当前选中的表格数据",
+            selection=PrototypeAiSelectionV1(
+                scope=scope,
+                page_id=page_id,
+                selected_node_ids=list(selected_node_ids),
+                flow_id=None,
+                viewport="desktop",
+            ),
+        )
+
+        failed = await service.wait_for_run(queued.id)
+
+        assert failed.status == "failed"
+        assert failed.error_code == "scope_violation"
+        unchanged = await store.load_draft(draft_id)
+        assert unchanged is not None
+        assert unchanged.head_sequence_no == 0
+        assert unchanged.head_document_hash == draft.head_document_hash
     finally:
         await store.close()
 
@@ -513,5 +899,395 @@ async def test_unexpected_runtime_failure_persists_terminal_evidence(tmp_path: P
         events = await store.list_operation_events(operation.id)
         assert events[-1].event_kind == "step_failed"
         assert events[-1].error_code == "agent_task_failed"
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_page_scope_accepts_behavior_rule_add_with_scoped_references(
+    tmp_path: Path,
+) -> None:
+    summary = "新增创建页返回列表规则"
+    proposal = _outcome(
+        {
+            "contractVersion": 1,
+            "kind": "commandProposal",
+            "message": "已准备业务规则。",
+            "summary": summary,
+            "batch": {
+                "commandContractVersion": 1,
+                "summary": summary,
+                "commands": [
+                    {
+                        "kind": "addBehaviorRule",
+                        "newRuleKey": "return-to-list",
+                        "definition": {
+                            "key": "return-to-list",
+                            "enabled": True,
+                            "trigger": {
+                                "kind": "nodeEvent",
+                                "nodeId": fixture_id("button-submit"),
+                                "event": "click",
+                            },
+                            "guard": None,
+                            "effects": [
+                                {
+                                    "kind": "navigate",
+                                    "targetPageId": fixture_id("page-list"),
+                                }
+                            ],
+                            "guardFalseEffects": [],
+                        },
+                    }
+                ],
+            },
+            "affectedEntityIds": [
+                fixture_id("button-submit"),
+                fixture_id("page-list"),
+            ],
+        }
+    )
+    runtime = _Runtime(proposal)
+    store, _, service, draft_id, thread_id = await _fixture(
+        tmp_path,
+        proposal,
+        runtime=runtime,
+    )
+    try:
+        draft = await store.load_draft(draft_id)
+        assert draft is not None
+        queued = await service.send_message(
+            thread_id=thread_id,
+            client_message_id=fixture_id("ai-page-add-rule-message"),
+            draft_id=draft_id,
+            expected_head_sequence_no=0,
+            expected_document_hash=draft.head_document_hash,
+            content="给创建页增加返回列表的规则",
+            selection=PrototypeAiSelectionV1(
+                scope="page",
+                page_id=fixture_id("page-create"),
+                selected_node_ids=[],
+                flow_id=None,
+                viewport="desktop",
+            ),
+        )
+
+        ready = await service.wait_for_run(queued.id)
+
+        assert ready.status == "preview_ready"
+        assert len(runtime.requests) == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_flow_scope_freezes_selected_rule_context_and_accepts_replace(
+    tmp_path: Path,
+) -> None:
+    rule_id = fixture_id("ai-flow-rule")
+    flow_id = fixture_id("ai-flow-projection")
+    summary = "补充提交流程通知"
+    proposal = _outcome(
+        {
+            "contractVersion": 1,
+            "kind": "commandProposal",
+            "message": "已准备流程规则调整。",
+            "summary": summary,
+            "batch": {
+                "commandContractVersion": 1,
+                "summary": summary,
+                "commands": [
+                    {
+                        "kind": "replaceBehaviorRule",
+                        "ruleId": rule_id,
+                        "definition": {
+                            "key": "submit-to-detail",
+                            "enabled": True,
+                            "trigger": {
+                                "kind": "nodeEvent",
+                                "nodeId": fixture_id("button-submit"),
+                                "event": "click",
+                            },
+                            "guard": {
+                                "kind": "roleIs",
+                                "roleId": fixture_id("role-applicant"),
+                            },
+                            "effects": [
+                                {
+                                    "kind": "navigate",
+                                    "targetPageId": fixture_id("page-detail"),
+                                },
+                                {
+                                    "kind": "notify",
+                                    "level": "success",
+                                    "message": "已进入详情",
+                                },
+                            ],
+                            "guardFalseEffects": [],
+                        },
+                    }
+                ],
+            },
+            "affectedEntityIds": [
+                rule_id,
+                flow_id,
+                fixture_id("button-submit"),
+                fixture_id("page-detail"),
+            ],
+        }
+    )
+    runtime = _Runtime(proposal)
+    store, _, service, draft_id, thread_id = await _fixture(
+        tmp_path,
+        proposal,
+        runtime=runtime,
+        document=_flow_rule_new_document(),
+    )
+    try:
+        draft = await store.load_draft(draft_id)
+        assert draft is not None
+        queued = await service.send_message(
+            thread_id=thread_id,
+            client_message_id=fixture_id("ai-flow-replace-message"),
+            draft_id=draft_id,
+            expected_head_sequence_no=0,
+            expected_document_hash=draft.head_document_hash,
+            content="给当前流程增加成功通知",
+            selection=PrototypeAiSelectionV1(
+                scope="flow",
+                page_id=None,
+                selected_node_ids=[],
+                flow_id=flow_id,
+                viewport="desktop",
+            ),
+        )
+
+        ready = await service.wait_for_run(queued.id)
+
+        assert ready.status == "preview_ready"
+        context = runtime.requests[0].frozen_context
+        flow = context["flow"]
+        assert isinstance(flow, dict)
+        assert flow["id"] == flow_id
+        rule = context["rule"]
+        assert isinstance(rule, dict)
+        assert rule["id"] == rule_id
+        source_page = context["page"]
+        assert isinstance(source_page, dict)
+        assert source_page["id"] == fixture_id("page-create")
+        target_pages = context["targetPages"]
+        assert isinstance(target_pages, list)
+        assert [page["id"] for page in target_pages] == [fixture_id("page-detail")]
+        assert "navigation" not in context
+        runtime_context = context["runtime"]
+        assert isinstance(runtime_context, dict)
+        assert [role["id"] for role in runtime_context["roles"]] == [fixture_id("role-applicant")]
+        assert [item["id"] for item in runtime_context["rules"]] == [rule_id]
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_flow_scope_accepts_remove_of_its_selected_rule(tmp_path: Path) -> None:
+    rule_id = fixture_id("ai-flow-rule")
+    flow_id = fixture_id("ai-flow-projection")
+    summary = "删除当前流程规则"
+    proposal = _outcome(
+        {
+            "contractVersion": 1,
+            "kind": "commandProposal",
+            "message": "已准备删除当前规则。",
+            "summary": summary,
+            "batch": {
+                "commandContractVersion": 1,
+                "summary": summary,
+                "commands": [{"kind": "removeBehaviorRule", "ruleId": rule_id}],
+            },
+            "affectedEntityIds": [
+                rule_id,
+                flow_id,
+                fixture_id("button-submit"),
+                fixture_id("page-detail"),
+            ],
+        }
+    )
+    store, _, service, draft_id, thread_id = await _fixture(
+        tmp_path,
+        proposal,
+        document=_flow_rule_new_document(),
+    )
+    try:
+        draft = await store.load_draft(draft_id)
+        assert draft is not None
+        queued = await service.send_message(
+            thread_id=thread_id,
+            client_message_id=fixture_id("ai-flow-remove-message"),
+            draft_id=draft_id,
+            expected_head_sequence_no=0,
+            expected_document_hash=draft.head_document_hash,
+            content="删除当前流程",
+            selection=PrototypeAiSelectionV1(
+                scope="flow",
+                page_id=None,
+                selected_node_ids=[],
+                flow_id=flow_id,
+                viewport="desktop",
+            ),
+        )
+
+        ready = await service.wait_for_run(queued.id)
+
+        assert ready.status == "preview_ready"
+    finally:
+        await store.close()
+
+
+@pytest.mark.parametrize("scope", ["page", "selection"])
+@pytest.mark.parametrize("command_kind", ["replace", "remove"])
+def test_page_and_selection_scopes_accept_their_related_behavior_rule(
+    scope: Literal["page", "selection"],
+    command_kind: Literal["replace", "remove"],
+) -> None:
+    document = _flow_rule_new_document().materialize(fixture_id("ai-scope-document"))
+    rule_id = fixture_id("ai-flow-rule")
+    if command_kind == "replace":
+        command: dict[str, object] = {
+            "kind": "replaceBehaviorRule",
+            "ruleId": rule_id,
+            "definition": {
+                "key": "submit-to-detail",
+                "enabled": True,
+                "trigger": {
+                    "kind": "nodeEvent",
+                    "nodeId": fixture_id("button-submit"),
+                    "event": "click",
+                },
+                "guard": {
+                    "kind": "roleIs",
+                    "roleId": fixture_id("role-applicant"),
+                },
+                "effects": [{"kind": "navigate", "targetPageId": fixture_id("page-detail")}],
+                "guardFalseEffects": [],
+            },
+        }
+    else:
+        command = {"kind": "removeBehaviorRule", "ruleId": rule_id}
+    batch = DomainCommandBatchV1.model_validate(
+        {
+            "commandContractVersion": 1,
+            "summary": "修改直接相关规则",
+            "commands": [command],
+        },
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+    selection = PrototypeAiSelectionV1(
+        scope=scope,
+        page_id=fixture_id("page-create"),
+        selected_node_ids=[fixture_id("button-submit")] if scope == "selection" else [],
+        flow_id=None,
+        viewport="desktop",
+    )
+
+    StructuredPrototypeAiService._validate_command_scope(document, batch, selection)
+
+
+@pytest.mark.parametrize("violation", ["add", "other-rule", "outside-target"])
+@pytest.mark.asyncio
+async def test_flow_scope_refuses_unrelated_behavior_rule_edits(
+    tmp_path: Path,
+    violation: str,
+) -> None:
+    rule_id = fixture_id("ai-flow-rule")
+    flow_id = fixture_id("ai-flow-projection")
+    if violation == "add":
+        command: dict[str, object] = {
+            "kind": "addBehaviorRule",
+            "newRuleKey": "unrelated-rule",
+            "definition": {
+                "key": "unrelated-rule",
+                "enabled": False,
+                "trigger": {
+                    "kind": "nodeEvent",
+                    "nodeId": fixture_id("button-submit"),
+                    "event": "click",
+                },
+                "guard": None,
+                "effects": [{"kind": "notify", "level": "info", "message": "无关"}],
+                "guardFalseEffects": [],
+            },
+        }
+    elif violation == "other-rule":
+        command = {
+            "kind": "removeBehaviorRule",
+            "ruleId": fixture_id("another-flow-rule"),
+        }
+    else:
+        command = {
+            "kind": "replaceBehaviorRule",
+            "ruleId": rule_id,
+            "definition": {
+                "key": "submit-to-detail",
+                "enabled": True,
+                "trigger": {
+                    "kind": "nodeEvent",
+                    "nodeId": fixture_id("button-submit"),
+                    "event": "click",
+                },
+                "guard": {
+                    "kind": "roleIs",
+                    "roleId": fixture_id("role-applicant"),
+                },
+                "effects": [{"kind": "navigate", "targetPageId": fixture_id("page-list")}],
+                "guardFalseEffects": [],
+            },
+        }
+    summary = "越权修改流程规则"
+    proposal = _outcome(
+        {
+            "contractVersion": 1,
+            "kind": "commandProposal",
+            "message": "准备修改。",
+            "summary": summary,
+            "batch": {
+                "commandContractVersion": 1,
+                "summary": summary,
+                "commands": [command],
+            },
+            "affectedEntityIds": [rule_id],
+        }
+    )
+    store, _, service, draft_id, thread_id = await _fixture(
+        tmp_path,
+        proposal,
+        document=_flow_rule_new_document(),
+    )
+    try:
+        draft = await store.load_draft(draft_id)
+        assert draft is not None
+        queued = await service.send_message(
+            thread_id=thread_id,
+            client_message_id=fixture_id(f"ai-flow-scope-{violation}-message"),
+            draft_id=draft_id,
+            expected_head_sequence_no=0,
+            expected_document_hash=draft.head_document_hash,
+            content="修改当前流程",
+            selection=PrototypeAiSelectionV1(
+                scope="flow",
+                page_id=None,
+                selected_node_ids=[],
+                flow_id=flow_id,
+                viewport="desktop",
+            ),
+        )
+
+        failed = await service.wait_for_run(queued.id)
+
+        assert failed.status == "failed"
+        assert failed.error_code == "scope_violation"
+        unchanged = await store.load_draft(draft_id)
+        assert unchanged is not None
+        assert unchanged.head_sequence_no == 0
     finally:
         await store.close()

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   applyPrototypeAiProposal,
   createPrototypeAiThread,
+  getCurrentStructuredPrototypeDraft,
   getPrototypeAiThread,
   listPrototypeAiThreads,
   rejectPrototypeAiProposal,
@@ -13,6 +14,21 @@ import {
 } from "@/lib/api/prototypes";
 import { useI18n } from "@/providers/I18nProvider";
 
+import {
+  reconcilePendingPrototypeAiOperation,
+  type ReconciledPrototypeAiOperation,
+} from "./structuredPrototypeAsyncRecovery";
+import {
+  beginStructuredPrototypePendingOperation,
+  finishStructuredPrototypePendingOperation,
+  isStructuredPrototypeAiPendingOperation,
+  loadStructuredPrototypePendingOperation,
+  readStructuredPrototypePendingLockState,
+  structuredPrototypeAiApplyRequestKey,
+  structuredPrototypeAiMessageRequestKey,
+  structuredPrototypeAiRejectRequestKey,
+  type StructuredPrototypePendingOperation,
+} from "./structuredPrototypeStorage";
 import type {
   PrototypeAiEditRun,
   PrototypeAiThreadSnapshot,
@@ -33,9 +49,11 @@ interface Options {
   projectId: string;
   draft: StructuredPrototypeDraft;
   pageId: string;
-  selectedNodeId: string | null;
+  selectedNodeIds: readonly string[];
   viewport: "desktop" | "tablet" | "mobile";
-  onDraftApplied: (draft: StructuredPrototypeDraft) => Promise<void>;
+  onApplyStart: () => number | null;
+  onDraftApplied: (draft: StructuredPrototypeDraft, sessionId: number) => Promise<boolean>;
+  onApplyEnd: (sessionId: number) => void;
 }
 
 interface StructuredPrototypeAiController {
@@ -61,9 +79,11 @@ export function useStructuredPrototypeAi({
   projectId,
   draft,
   pageId,
-  selectedNodeId,
+  selectedNodeIds,
   viewport,
+  onApplyStart,
   onDraftApplied,
+  onApplyEnd,
 }: Options): StructuredPrototypeAiController {
   const [snapshot, setSnapshot] = useState<PrototypeAiThreadSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -79,6 +99,23 @@ export function useStructuredPrototypeAi({
     if (mountedRef.current) setError(errorMessage(cause));
   }, []);
 
+  const reportAiFailure = useCallback(
+    (context: string, cause: unknown): false => {
+      const pending = readStructuredPrototypePendingLockState(
+        projectId,
+        isStructuredPrototypeAiPendingOperation,
+      );
+      const reported = pending.storageError ?? cause;
+      recordError(context, reported);
+      if (mountedRef.current) {
+        setLoading(false);
+        setMutating(pending.locked);
+      }
+      return false;
+    },
+    [projectId, recordError],
+  );
+
   const initialize = useCallback(async () => {
     if (initializeRef.current) return initializeRef.current;
     const inFlight = (async () => {
@@ -87,6 +124,30 @@ export function useStructuredPrototypeAi({
         setError(null);
       }
       try {
+        const pending = loadStructuredPrototypePendingOperation(projectId);
+        if (pending !== null && isStructuredPrototypeAiPendingOperation(pending)) {
+          if (mountedRef.current) setMutating(true);
+          const reconciled = await reconcilePendingPrototypeAiOperation(pending);
+          if (reconciled.kind === "apply") {
+            const sessionId = onApplyStart();
+            if (sessionId === null) {
+              throw new Error("AI apply recovery could not acquire the editor mutation lock");
+            }
+            try {
+              if (!(await onDraftApplied(reconciled.draft, sessionId))) {
+                throw new Error("AI applied draft runtime recovery failed");
+              }
+            } finally {
+              onApplyEnd(sessionId);
+            }
+          }
+          if (!mountedRef.current) return;
+          setSnapshot(reconciled.snapshot);
+          setMutating(false);
+          setLoading(false);
+          setError(null);
+          return;
+        }
         const storedThreadId = window.localStorage.getItem(storageKey(projectId));
         let next: PrototypeAiThreadSnapshot | null = null;
         if (storedThreadId) {
@@ -108,7 +169,7 @@ export function useStructuredPrototypeAi({
             (await createPrototypeAiThread(draft.documentId, {
               contractVersion: 1,
               clientRequestId: crypto.randomUUID(),
-              title: "原型调整",
+              title: t("prototype.structured.ai.threadTitle"),
             }));
           window.localStorage.setItem(storageKey(projectId), thread.id);
           next = await getPrototypeAiThread(thread.id);
@@ -118,15 +179,14 @@ export function useStructuredPrototypeAi({
         setLoading(false);
         setError(null);
       } catch (cause) {
-        recordError("structured prototype AI recovery failed", cause);
-        if (mountedRef.current) setLoading(false);
+        reportAiFailure("structured prototype AI recovery failed", cause);
       }
     })().finally(() => {
       initializeRef.current = null;
     });
     initializeRef.current = inFlight;
     return inFlight;
-  }, [draft.documentId, projectId, recordError]);
+  }, [draft.documentId, onApplyEnd, onApplyStart, onDraftApplied, projectId, reportAiFailure, t]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -187,82 +247,206 @@ export function useStructuredPrototypeAi({
       }
       setMutating(true);
       setError(null);
+      const requestKey = structuredPrototypeAiMessageRequestKey(
+        thread.id,
+        draft.draftId,
+        draft.headSequenceNo,
+        draft.documentHash,
+      );
+      let descriptor: StructuredPrototypePendingOperation;
       try {
-        await sendPrototypeAiMessage(thread.id, {
+        descriptor = beginStructuredPrototypePendingOperation(projectId, {
+          operationKind: "ai_edit",
+          resourceKind: "ai_thread",
+          resourceId: thread.id,
+          requestKey,
+        });
+      } catch (cause) {
+        return reportAiFailure("structured prototype AI message persistence failed", cause);
+      }
+      let next: PrototypeAiThreadSnapshot;
+      try {
+        const run = await sendPrototypeAiMessage(thread.id, {
           contractVersion: 1,
-          clientMessageId: crypto.randomUUID(),
+          clientMessageId: descriptor.clientRequestId,
           draftId: draft.draftId,
           expectedHeadSequenceNo: draft.headSequenceNo,
           expectedDocumentHash: draft.documentHash,
           content: trimmed,
           selection: {
-            scope: selectedNodeId ? "selection" : "page",
+            scope: selectedNodeIds.length > 0 ? "selection" : "page",
             pageId,
-            selectedNodeIds: selectedNodeId ? [selectedNodeId] : [],
+            selectedNodeIds: [...selectedNodeIds],
             flowId: null,
             viewport,
           },
         });
-        const next = await getPrototypeAiThread(thread.id);
-        if (!mountedRef.current) return false;
-        setSnapshot(next);
-        setMutating(false);
-        return true;
+        next = await getPrototypeAiThread(thread.id);
+        if (next.latestRun?.id !== run.id) {
+          throw new Error("AI thread did not expose the submitted edit run");
+        }
+        finishStructuredPrototypePendingOperation(projectId, descriptor.clientRequestId);
       } catch (cause) {
-        recordError("structured prototype AI message failed", cause);
-        if (mountedRef.current) setMutating(false);
-        return false;
+        let reconciled: ReconciledPrototypeAiOperation;
+        try {
+          reconciled = await reconcilePendingPrototypeAiOperation(descriptor);
+        } catch (recoveryError) {
+          return reportAiFailure("structured prototype AI message recovery failed", recoveryError);
+        }
+        if (reconciled.kind !== "message") {
+          return reportAiFailure(
+            "structured prototype AI message recovery failed",
+            new Error("AI message recovered an incompatible operation"),
+          );
+        }
+        next = reconciled.snapshot;
       }
+      if (!mountedRef.current) return false;
+      setSnapshot(next);
+      setMutating(false);
+      return true;
     },
-    [draft, mutating, pageId, recordError, selectedNodeId, snapshot, viewport],
+    [draft, mutating, pageId, projectId, reportAiFailure, selectedNodeIds, snapshot, viewport],
   );
 
   const apply = useCallback(async (): Promise<boolean> => {
     const run = snapshot?.latestRun;
     if (!run?.canApply || mutating) return false;
+    const sessionId = onApplyStart();
+    if (sessionId === null) return false;
     setMutating(true);
     setError(null);
+    const requestKey = structuredPrototypeAiApplyRequestKey(
+      run.id,
+      draft.draftId,
+      draft.headSequenceNo,
+      draft.documentHash,
+    );
+    let descriptor: StructuredPrototypePendingOperation;
+    try {
+      descriptor = beginStructuredPrototypePendingOperation(projectId, {
+        operationKind: "apply_command_batch",
+        resourceKind: "draft",
+        resourceId: draft.draftId,
+        contextId: run.id,
+        requestKey,
+      });
+    } catch (cause) {
+      onApplyEnd(sessionId);
+      return reportAiFailure("structured prototype AI apply persistence failed", cause);
+    }
+    let appliedDraft: StructuredPrototypeDraft;
+    let next: PrototypeAiThreadSnapshot;
     try {
       const applied = await applyPrototypeAiProposal(run.id, {
         contractVersion: 1,
-        clientRequestId: crypto.randomUUID(),
+        clientRequestId: descriptor.clientRequestId,
         expectedHeadSequenceNo: draft.headSequenceNo,
         expectedDocumentHash: draft.documentHash,
       });
-      await onDraftApplied(applied.draft);
-      const next = await getPrototypeAiThread(run.threadId);
-      if (!mountedRef.current) return false;
-      setSnapshot(next);
-      setMutating(false);
-      return true;
+      const currentDraft = await getCurrentStructuredPrototypeDraft(projectId, crypto.randomUUID());
+      if (currentDraft === null || currentDraft.draftId !== applied.draft.draftId) {
+        throw new Error("AI applied draft does not match the project current draft");
+      }
+      appliedDraft = currentDraft;
+      next = await getPrototypeAiThread(run.threadId);
+      finishStructuredPrototypePendingOperation(projectId, descriptor.clientRequestId);
     } catch (cause) {
-      recordError("structured prototype AI apply failed", cause);
-      if (mountedRef.current) setMutating(false);
-      return false;
+      let reconciled: ReconciledPrototypeAiOperation;
+      try {
+        reconciled = await reconcilePendingPrototypeAiOperation(descriptor);
+      } catch (recoveryError) {
+        onApplyEnd(sessionId);
+        return reportAiFailure("structured prototype AI apply recovery failed", recoveryError);
+      }
+      if (reconciled.kind !== "apply") {
+        onApplyEnd(sessionId);
+        return reportAiFailure(
+          "structured prototype AI apply recovery failed",
+          new Error("AI apply recovered an incompatible operation"),
+        );
+      }
+      appliedDraft = reconciled.draft;
+      next = reconciled.snapshot;
     }
-  }, [draft, mutating, onDraftApplied, recordError, snapshot?.latestRun]);
+    let adopted: boolean;
+    try {
+      adopted = await onDraftApplied(appliedDraft, sessionId);
+    } catch (cause) {
+      return reportAiFailure("structured prototype AI apply runtime recovery failed", cause);
+    } finally {
+      onApplyEnd(sessionId);
+    }
+    if (!adopted) {
+      return reportAiFailure(
+        "structured prototype AI apply runtime recovery failed",
+        new Error("AI applied draft runtime recovery failed"),
+      );
+    }
+    if (!mountedRef.current) return false;
+    setSnapshot(next);
+    setMutating(false);
+    return true;
+  }, [
+    draft,
+    mutating,
+    onApplyEnd,
+    onApplyStart,
+    onDraftApplied,
+    projectId,
+    reportAiFailure,
+    snapshot?.latestRun,
+  ]);
 
   const reject = useCallback(async (): Promise<boolean> => {
     const run = snapshot?.latestRun;
     if (!run?.canReject || mutating) return false;
     setMutating(true);
     setError(null);
+    const requestKey = structuredPrototypeAiRejectRequestKey(run.id);
+    let descriptor: StructuredPrototypePendingOperation;
     try {
-      await rejectPrototypeAiProposal(run.id, {
-        contractVersion: 1,
-        clientRequestId: crypto.randomUUID(),
+      descriptor = beginStructuredPrototypePendingOperation(projectId, {
+        operationKind: "reject_ai_proposal",
+        resourceKind: "ai_edit_run",
+        resourceId: run.id,
+        requestKey,
       });
-      const next = await getPrototypeAiThread(run.threadId);
-      if (!mountedRef.current) return false;
-      setSnapshot(next);
-      setMutating(false);
-      return true;
     } catch (cause) {
-      recordError("structured prototype AI reject failed", cause);
-      if (mountedRef.current) setMutating(false);
-      return false;
+      return reportAiFailure("structured prototype AI reject persistence failed", cause);
     }
-  }, [mutating, recordError, snapshot?.latestRun]);
+    let next: PrototypeAiThreadSnapshot;
+    try {
+      const rejected = await rejectPrototypeAiProposal(run.id, {
+        contractVersion: 1,
+        clientRequestId: descriptor.clientRequestId,
+      });
+      if (rejected.status !== "rejected") throw new Error("AI edit run is not rejected");
+      next = await getPrototypeAiThread(run.threadId);
+      if (next.latestRun?.id !== run.id || next.latestRun.status !== "rejected") {
+        throw new Error("AI thread does not expose the rejected edit run");
+      }
+      finishStructuredPrototypePendingOperation(projectId, descriptor.clientRequestId);
+    } catch (cause) {
+      let reconciled: ReconciledPrototypeAiOperation;
+      try {
+        reconciled = await reconcilePendingPrototypeAiOperation(descriptor);
+      } catch (recoveryError) {
+        return reportAiFailure("structured prototype AI reject recovery failed", recoveryError);
+      }
+      if (reconciled.kind !== "reject") {
+        return reportAiFailure(
+          "structured prototype AI reject recovery failed",
+          new Error("AI reject recovered an incompatible operation"),
+        );
+      }
+      next = reconciled.snapshot;
+    }
+    if (!mountedRef.current) return false;
+    setSnapshot(next);
+    setMutating(false);
+    return true;
+  }, [mutating, projectId, reportAiFailure, snapshot?.latestRun]);
 
   return { snapshot, loading, mutating, error, send, apply, reject, retry: initialize };
 }

@@ -12,7 +12,12 @@ from uuid import uuid4
 import aiosqlite
 
 from app.adapters.audit_log_query import build_audit_log_query as _build_audit_log_query
-from app.adapters.structured_prototype_store import STRUCTURED_PROTOTYPE_SCHEMA_SQL
+from app.adapters.structured_prototype_store import (
+    STRUCTURED_PROTOTYPE_GENERATION_SNAPSHOT_COLUMNS,
+    STRUCTURED_PROTOTYPE_RUNTIME_SESSION_COLUMNS,
+    STRUCTURED_PROTOTYPE_RUNTIME_SESSION_REPLACEMENT_INDEX_SQL,
+    STRUCTURED_PROTOTYPE_SCHEMA_SQL,
+)
 from app.domain.models import (
     Agent,
     AgentCallTrace,
@@ -1045,6 +1050,31 @@ class AsyncSQLiteStore:
                 (12,),
             )
             current_version = 12
+        if current_version < 14:
+            for name, declaration in STRUCTURED_PROTOTYPE_GENERATION_SNAPSHOT_COLUMNS:
+                with suppress(aiosqlite.OperationalError):
+                    await conn.execute(
+                        "ALTER TABLE prototype_document_generation_jobs "
+                        f"ADD COLUMN {name} {declaration}"
+                    )
+            await conn.execute(
+                "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
+                (14,),
+            )
+            current_version = 14
+        if current_version < 15:
+            await conn.executescript(STRUCTURED_PROTOTYPE_SCHEMA_SQL)
+            for name, declaration in STRUCTURED_PROTOTYPE_RUNTIME_SESSION_COLUMNS:
+                with suppress(aiosqlite.OperationalError):
+                    await conn.execute(
+                        f"ALTER TABLE prototype_runtime_sessions ADD COLUMN {name} {declaration}"
+                    )
+            await conn.execute(STRUCTURED_PROTOTYPE_RUNTIME_SESSION_REPLACEMENT_INDEX_SQL)
+            await conn.execute(
+                "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
+                (15,),
+            )
+            current_version = 15
         # Create indexes for frequently queried columns
         await conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)"

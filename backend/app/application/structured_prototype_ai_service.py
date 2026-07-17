@@ -33,26 +33,71 @@ from app.application.structured_prototype_ai_runtime import (
 )
 from app.application.structured_prototype_contracts import (
     COMMAND_CONTRACT_VERSION,
+    COMMAND_HISTORY_CHECKPOINT_SCHEMA_VERSION,
     DOCUMENT_SCHEMA_VERSION,
+    AddBehaviorRuleCommandV1,
+    AllPredicateV1,
+    ComparePredicateV1,
+    CreateEntityEffectV1,
     DomainCommandBatchV1,
     DomainCommandV1,
+    EntityFieldExpressionV1,
+    EntityRefRuntimeValueV1,
+    EventEntityRefExpressionV1,
     ExistingNodeRefV1,
+    FormFieldExpressionV1,
     FormNodeV1,
+    FormValidPredicateV1,
+    FreeformNodeV1,
+    GridNodeV1,
+    InputNodeV1,
     InsertNodeCommandV1,
+    LiteralExpressionV1,
     MoveNodeCommandV1,
+    NavigateEffectV1,
+    NotifyEffectV1,
     PrototypeDocumentV1,
+    PrototypeFlowV1,
+    PrototypePageV1,
+    RemoveBehaviorRuleCommandV1,
     RemoveNodeCommandV1,
+    ReplaceBehaviorRuleCommandV1,
+    RoleIsPredicateV1,
+    RuntimeEffectV1,
+    RuntimeEntitySchemaV1,
+    RuntimeEntitySetV1,
+    RuntimeExpressionV1,
+    RuntimeFormV1,
+    RuntimePredicateV1,
+    RuntimeRoleV1,
+    RuntimeRuleDefinitionV1,
+    RuntimeRuleV1,
+    RuntimeScenarioV1,
+    RuntimeValueV1,
+    RuntimeVariableV1,
+    RuntimeViewBindingV1,
     SetNodeLayoutCommandV1,
     SetNodePropertyCommandV1,
+    SetRuntimeEntityFieldCommandV1,
+    SetVariableEffectV1,
     StackNodeV1,
     StructuredPrototypeContractError,
+    TableRowsViewBindingV1,
+    TextViewBindingV1,
     UINodeV1,
+    UpdateEntityEffectV1,
+    ValidateFormEffectV1,
+    VariableExpressionV1,
+    VisibilityViewBindingV1,
+    advance_journal_prefix_hash,
     canonical_model_json,
+    command_batch_envelope_hash,
     command_batch_hash,
     document_payload,
     execute_command_batch,
 )
 from app.application.structured_prototype_service import (
+    CORRUPTION_ERROR_CODES,
     PrototypeRenderArtifactStorage,
     PrototypeRendererExecution,
     RecoverStructuredPrototypeResult,
@@ -64,6 +109,7 @@ from app.domain.structured_prototype import (
     PrototypeCheckpointRecord,
     PrototypeCommandAppendResult,
     PrototypeCommandBatchRecord,
+    PrototypeCommandHistoryCheckpoint,
     PrototypeDocumentRecord,
     PrototypeDraftRecord,
     PrototypeObjectDescriptor,
@@ -78,6 +124,7 @@ from app.domain.structured_prototype import (
     PrototypeRendererWorkerIdentity,
     PrototypeRenderRunRecord,
     PrototypeRenderStatus,
+    advance_prototype_command_history,
 )
 from app.domain.structured_prototype_ai import (
     PrototypeAiEditRunRecord,
@@ -229,8 +276,14 @@ class StructuredPrototypeAiPersistence(Protocol):
             PrototypeOperation, PrototypeOperationStep, PrototypeOperationEvent
         ],
         batch: PrototypeCommandBatchRecord,
+        base_history_checkpoint: PrototypeCommandHistoryCheckpoint,
+        base_tail_batches: tuple[PrototypeCommandBatchRecord, ...],
+        base_journal_prefix_hash: str,
         descriptor: PrototypeObjectDescriptor,
         reference: PrototypeObjectReference,
+        history_descriptor: PrototypeObjectDescriptor,
+        history_reference: PrototypeObjectReference,
+        history_checkpoint: PrototypeCommandHistoryCheckpoint,
         replay_descriptor: PrototypeObjectDescriptor,
         replay_reference: PrototypeObjectReference,
         checkpoint: PrototypeCheckpointRecord,
@@ -291,6 +344,23 @@ class _PipelineEvidence:
     step: PrototypeOperationStep | None
     next_event_no: int
     next_step_ordinal: int
+
+
+@dataclass(frozen=True, slots=True)
+class _RuntimeScenarioScope:
+    scenario: RuntimeScenarioV1
+    entity_fixtures: tuple[RuntimeEntitySetV1, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _RuntimeScopeSlice:
+    roles: tuple[RuntimeRoleV1, ...]
+    variables: tuple[RuntimeVariableV1, ...]
+    forms: tuple[RuntimeFormV1, ...]
+    view_bindings: tuple[RuntimeViewBindingV1, ...]
+    entity_schemas: tuple[RuntimeEntitySchemaV1, ...]
+    rules: tuple[RuntimeRuleV1, ...]
+    scenarios: tuple[_RuntimeScenarioScope, ...]
 
 
 class StructuredPrototypeAiService:
@@ -1050,10 +1120,21 @@ class StructuredPrototypeAiService:
                 "prototype AI proposal evidence is incomplete",
                 run_id=run.id,
             )
-        recovered = await self._structured_service.recover_draft(
-            draft_id=run.draft_id,
-            client_request_id=_stable_id(run.id, client_request_id, "ai-apply-recovery"),
-        )
+        try:
+            recovered = await self._structured_service.recover_draft(
+                draft_id=run.draft_id,
+                client_request_id=_stable_id(run.id, client_request_id, "ai-apply-recovery"),
+            )
+            base_state = await self._structured_service.ensure_mutation_checkpoint(
+                state=recovered.state,
+                client_request_id=client_request_id,
+            )
+        except StructuredPrototypeServiceError as exc:
+            raise StructuredPrototypeAiServiceError(
+                exc.code,
+                str(exc),
+                run_id=run.id,
+            ) from exc
         from app.application.structured_prototype_contracts import parse_command_batch_json
 
         batch = parse_command_batch_json(run.proposed_command_batch_json)
@@ -1064,7 +1145,7 @@ class StructuredPrototypeAiService:
                 run_id=run.id,
             )
         execution = execute_command_batch(
-            recovered.state.document,
+            base_state.document,
             batch,
             draft_id=run.draft_id,
             client_request_id=run.id,
@@ -1078,7 +1159,7 @@ class StructuredPrototypeAiService:
                 "prototype AI candidate cannot be reproduced from its command batch",
                 run_id=run.id,
             )
-        document_record = recovered.state.document_record
+        document_record = base_state.document_record
         descriptor = await self._store.load_object(
             document_record.project_id,
             run.candidate_object_hash,
@@ -1168,6 +1249,7 @@ class StructuredPrototypeAiService:
             event_kind="step_started",
         )
         command_batch_id = _stable_id(operation_id, "command-batch")
+        inverse_commands_json = canonical_model_json(execution.inverse_commands)
         batch_record = PrototypeCommandBatchRecord(
             id=command_batch_id,
             draft_id=run.draft_id,
@@ -1179,14 +1261,55 @@ class StructuredPrototypeAiService:
             target_batch_id=None,
             command_contract_version=COMMAND_CONTRACT_VERSION,
             commands_json=canonical_model_json(batch),
-            inverse_commands_json=canonical_model_json(execution.inverse_commands),
-            command_batch_hash=run.proposed_command_batch_hash,
+            inverse_commands_json=inverse_commands_json,
+            command_batch_hash=command_batch_envelope_hash(
+                draft_id=run.draft_id,
+                base_sequence_no=expected_head_sequence_no,
+                result_sequence_no=expected_head_sequence_no + 1,
+                origin="ai",
+                operation_kind="forward",
+                target_batch_id=None,
+                commands=batch,
+                inverse_commands=execution.inverse_commands,
+            ),
             base_document_hash=run.base_document_hash,
             result_document_hash=run.candidate_object_hash,
             operation_id=operation_id,
             created_at=now,
         )
+        result_history = advance_prototype_command_history(
+            base_state.command_history,
+            batch_record,
+        )
+        result_prefix_hash = advance_journal_prefix_hash(
+            previous_prefix_hash=base_state.journal_prefix_hash,
+            batch_id=batch_record.id,
+            base_sequence_no=batch_record.base_sequence_no,
+            result_sequence_no=batch_record.result_sequence_no,
+            command_batch_hash=batch_record.command_batch_hash,
+            base_document_hash=batch_record.base_document_hash,
+            result_document_hash=batch_record.result_document_hash,
+        )
         checkpoint_id = _stable_id(operation_id, "ai-apply-checkpoint")
+        try:
+            history_artifact = (
+                await self._structured_service.materialize_command_history_checkpoint(
+                    project_id=document_record.project_id,
+                    checkpoint_id=checkpoint_id,
+                    draft_id=run.draft_id,
+                    checkpoint_sequence_no=batch_record.result_sequence_no,
+                    checkpoint_document_hash=run.candidate_object_hash,
+                    journal_prefix_hash=result_prefix_hash,
+                    history=result_history,
+                    created_at=now,
+                )
+            )
+        except (PrototypeObjectStoreError, StructuredPrototypeContractError) as exc:
+            raise StructuredPrototypeAiServiceError(
+                exc.code,
+                str(exc),
+                run_id=run.id,
+            ) from exc
         checkpoint = PrototypeCheckpointRecord(
             id=checkpoint_id,
             document_id=run.document_id,
@@ -1198,6 +1321,9 @@ class StructuredPrototypeAiService:
             document_schema_version=DOCUMENT_SCHEMA_VERSION,
             command_contract_version=COMMAND_CONTRACT_VERSION,
             document_hash=run.candidate_object_hash,
+            history_snapshot_object_hash=history_artifact.descriptor.content_hash,
+            history_snapshot_schema_version=COMMAND_HISTORY_CHECKPOINT_SCHEMA_VERSION,
+            journal_prefix_hash=result_prefix_hash,
             created_by_operation_id=operation_id,
             created_at=now,
         )
@@ -1213,7 +1339,7 @@ class StructuredPrototypeAiService:
             execution_process_id=run.execution_process_id,
             submission_id=run.submission_id,
             submission_hash=run.submission_request_hash,
-            ordered_command_batch_hashes=(run.proposed_command_batch_hash,),
+            ordered_command_batch_hashes=(batch_record.command_batch_hash,),
             base_checkpoint_hash=run.base_document_hash,
             base_sequence_no=run.base_head_sequence_no,
             result_checkpoint_hash=run.candidate_object_hash,
@@ -1250,28 +1376,57 @@ class StructuredPrototypeAiService:
             status="applied",
             updated_at=now,
         )
-        committed = await self._store.apply_ai_edit_run(
-            queued_operation=queued_operation,
-            queued_event=queued_event,
-            running_transition=(running_operation, running_step, running_event),
-            batch=batch_record,
-            descriptor=descriptor,
-            reference=self._reference(
-                project_id=document_record.project_id,
-                owner_kind="checkpoint",
-                owner_id=checkpoint_id,
-                role="ai-apply-document",
+        try:
+            committed = await self._store.apply_ai_edit_run(
+                queued_operation=queued_operation,
+                queued_event=queued_event,
+                running_transition=(running_operation, running_step, running_event),
+                batch=batch_record,
+                base_history_checkpoint=base_state.history_checkpoint,
+                base_tail_batches=base_state.validated_tail_batches,
+                base_journal_prefix_hash=base_state.journal_prefix_hash,
                 descriptor=descriptor,
-                payload_type="prototype_document",
-                schema_version=DOCUMENT_SCHEMA_VERSION,
-            ),
-            replay_descriptor=replay_descriptor,
-            replay_reference=replay_reference,
-            checkpoint=checkpoint,
-            completed_transition=(completed_operation, completed_step, completed_event),
-            run=applied_run,
-            assistant_message=applied_message,
-        )
+                reference=self._reference(
+                    project_id=document_record.project_id,
+                    owner_kind="checkpoint",
+                    owner_id=checkpoint_id,
+                    role="ai-apply-document",
+                    descriptor=descriptor,
+                    payload_type="prototype_document",
+                    schema_version=DOCUMENT_SCHEMA_VERSION,
+                ),
+                history_descriptor=history_artifact.descriptor,
+                history_reference=history_artifact.reference,
+                history_checkpoint=history_artifact.checkpoint,
+                replay_descriptor=replay_descriptor,
+                replay_reference=replay_reference,
+                checkpoint=checkpoint,
+                completed_transition=(completed_operation, completed_step, completed_event),
+                run=applied_run,
+                assistant_message=applied_message,
+            )
+        except StructuredPrototypeStoreError as exc:
+            if exc.code in CORRUPTION_ERROR_CODES:
+                try:
+                    await self._structured_service.recover_draft(
+                        draft_id=run.draft_id,
+                        client_request_id=_stable_id(
+                            operation_id,
+                            exc.code,
+                            "ai-apply-corruption-recovery",
+                        ),
+                    )
+                except StructuredPrototypeServiceError as recovery_exc:
+                    raise StructuredPrototypeAiServiceError(
+                        recovery_exc.code,
+                        str(recovery_exc),
+                        run_id=run.id,
+                    ) from exc
+            raise StructuredPrototypeAiServiceError(
+                exc.code,
+                str(exc),
+                run_id=run.id,
+            ) from exc
         recovered_applied = await self._structured_service.recover_draft(
             draft_id=run.draft_id,
             client_request_id=_stable_id(
@@ -1638,6 +1793,7 @@ class StructuredPrototypeAiService:
         document: PrototypeDocumentV1,
         outcome: PrototypeAssistantCommandProposalV1,
     ) -> None:
+        caller_evidence = evidence
         selection = PrototypeAiSelectionV1.model_validate_json(
             run.scope_json,
             strict=True,
@@ -1749,6 +1905,10 @@ class StructuredPrototypeAiService:
             ),
             operation_transitions=preview_transitions,
         )
+        caller_evidence.operation = evidence.operation
+        caller_evidence.step = evidence.step
+        caller_evidence.next_event_no = evidence.next_event_no
+        caller_evidence.next_step_ordinal = evidence.next_step_ordinal
 
         render_result = await self._renderer_worker.render(
             request_id=run.operation_id,
@@ -1906,8 +2066,10 @@ class StructuredPrototypeAiService:
             ),
             operation_transitions=(*render_transitions, terminal_transition),
         )
-        evidence.operation = completed_evidence.operation
-        evidence.step = completed_evidence.step
+        caller_evidence.operation = completed_evidence.operation
+        caller_evidence.step = completed_evidence.step
+        caller_evidence.next_event_no = completed_evidence.next_event_no
+        caller_evidence.next_step_ordinal = completed_evidence.next_step_ordinal
 
     async def _complete_stale_proposal(
         self,
@@ -2106,7 +2268,18 @@ class StructuredPrototypeAiService:
                 if message.id != run.user_message_id
             ],
         }
-        if selection.scope == "document":
+        if selection.scope == "flow":
+            flow, rule, source_page, target_pages = _flow_scope_projection(document, selection)
+            context["flow"] = flow.model_dump(mode="json", by_alias=True)
+            context["rule"] = rule.model_dump(mode="json", by_alias=True)
+            context["page"] = source_page.model_dump(mode="json", by_alias=True)
+            context["targetPages"] = [
+                page.model_dump(mode="json", by_alias=True) for page in target_pages
+            ]
+            context["runtime"] = _runtime_scope_payload(
+                _runtime_scope_slice(document, {rule.trigger.node_id})
+            )
+        elif selection.scope == "document":
             context["document"] = document_payload(document)
         elif selected_page is not None:
             selected_page_node_ids = _node_ids(selected_page.root)
@@ -2118,6 +2291,11 @@ class StructuredPrototypeAiService:
                 if flow.from_node_id in selected_page_node_ids
                 or flow.to_page_id == selected_page.id
             ]
+            if selection.scope in {"selection", "page"}:
+                scoped_node_ids = _selection_node_ids(selected_page.root, selection)
+                context["runtime"] = _runtime_scope_payload(
+                    _runtime_scope_slice(document, scoped_node_ids)
+                )
         return context
 
     @staticmethod
@@ -2157,22 +2335,65 @@ class StructuredPrototypeAiService:
         if selection.scope == "document":
             return
         if selection.scope == "flow":
-            raise StructuredPrototypeAiServiceError(
-                "scope_violation",
-                "prototype domain command contract does not edit flow definitions",
+            _, selected_rule, source_page, target_pages = _flow_scope_projection(
+                document, selection
             )
+            allowed_node_ids = _node_ids(source_page.root)
+            for target_page in target_pages:
+                allowed_node_ids.update(_node_ids(target_page.root))
+            allowed = (
+                allowed_node_ids
+                | {source_page.id, *(page.id for page in target_pages)}
+                | _runtime_scope_ids(
+                    _runtime_scope_slice(document, {selected_rule.trigger.node_id})
+                )
+            )
+            for command in batch.commands:
+                if isinstance(command, AddBehaviorRuleCommandV1):
+                    raise StructuredPrototypeAiServiceError(
+                        "scope_violation",
+                        "prototype AI flow scope cannot add an unrelated behavior rule",
+                    )
+                if not isinstance(
+                    command,
+                    (ReplaceBehaviorRuleCommandV1, RemoveBehaviorRuleCommandV1),
+                ):
+                    raise StructuredPrototypeAiServiceError(
+                        "scope_violation",
+                        "prototype AI flow scope only edits its selected behavior rule",
+                    )
+                if command.rule_id != selected_rule.id:
+                    raise StructuredPrototypeAiServiceError(
+                        "scope_violation",
+                        "prototype AI flow command targets another behavior rule",
+                    )
+                if not _command_existing_ids(command).issubset(allowed):
+                    raise StructuredPrototypeAiServiceError(
+                        "scope_violation",
+                        "prototype AI flow command references an entity outside scope",
+                    )
+            return
         page = next((item for item in document.pages if item.id == selection.page_id), None)
         if page is None:
             raise StructuredPrototypeAiServiceError(
                 "context_invalid", "prototype AI command page does not exist"
             )
-        allowed = _node_ids(page.root)
-        if selection.scope == "selection":
-            allowed = set()
-            for node_id in selection.selected_node_ids:
-                subtree = _find_node_payload(page.root, node_id)
-                if subtree is not None:
-                    allowed.update(_node_ids(subtree))
+        allowed_node_ids = _selection_node_ids(page.root, selection)
+        contextual_flows = [
+            flow
+            for flow in document.flows
+            if flow.from_node_id in allowed_node_ids or flow.to_page_id == page.id
+        ]
+        allowed_page_ids = {
+            page.id,
+            *(item.target_page_id for item in document.navigation.items),
+            *(flow.to_page_id for flow in contextual_flows if flow.to_page_id is not None),
+        }
+        allowed = (
+            allowed_node_ids
+            | allowed_page_ids
+            | _runtime_scope_ids(_runtime_scope_slice(document, allowed_node_ids))
+        )
         for command in batch.commands:
             if command.kind == "reorderPage":
                 if selection.scope != "page" or command.page_id != page.id:
@@ -2582,7 +2803,7 @@ def _hash_text(value: str) -> str:
 
 def _node_ids(node: UINodeV1) -> set[str]:
     result = {node.id}
-    if isinstance(node, (StackNodeV1, FormNodeV1)):
+    if isinstance(node, (StackNodeV1, GridNodeV1, FormNodeV1, FreeformNodeV1)):
         for child in node.children:
             result.update(_node_ids(child))
     return result
@@ -2591,7 +2812,7 @@ def _node_ids(node: UINodeV1) -> set[str]:
 def _find_node_payload(node: UINodeV1, node_id: str) -> UINodeV1 | None:
     if node.id == node_id:
         return node
-    if not isinstance(node, (StackNodeV1, FormNodeV1)):
+    if not isinstance(node, (StackNodeV1, GridNodeV1, FormNodeV1, FreeformNodeV1)):
         return None
     for child in node.children:
         found = _find_node_payload(child, node_id)
@@ -2600,7 +2821,295 @@ def _find_node_payload(node: UINodeV1, node_id: str) -> UINodeV1 | None:
     return None
 
 
+def _selection_node_ids(
+    page_root: UINodeV1,
+    selection: PrototypeAiSelectionV1,
+) -> set[str]:
+    if selection.scope != "selection":
+        return _node_ids(page_root)
+    result: set[str] = set()
+    for node_id in selection.selected_node_ids:
+        subtree = _find_node_payload(page_root, node_id)
+        if subtree is not None:
+            result.update(_node_ids(subtree))
+    return result
+
+
+def _flow_scope_projection(
+    document: PrototypeDocumentV1,
+    selection: PrototypeAiSelectionV1,
+) -> tuple[PrototypeFlowV1, RuntimeRuleV1, PrototypePageV1, tuple[PrototypePageV1, ...]]:
+    flow = next((item for item in document.flows if item.id == selection.flow_id), None)
+    if flow is None:
+        raise StructuredPrototypeAiServiceError(
+            "context_invalid", "prototype AI flow scope requires an existing flow"
+        )
+    rule = next((item for item in document.runtime.rules if item.id == flow.rule_id), None)
+    if rule is None:
+        raise StructuredPrototypeAiServiceError(
+            "context_invalid", "prototype AI flow scope rule does not exist"
+        )
+    source_page = next(
+        (page for page in document.pages if rule.trigger.node_id in _node_ids(page.root)),
+        None,
+    )
+    if source_page is None:
+        raise StructuredPrototypeAiServiceError(
+            "context_invalid", "prototype AI flow scope trigger has no source page"
+        )
+    pages_by_id = {page.id: page for page in document.pages}
+    target_pages: list[PrototypePageV1] = []
+    seen_page_ids: set[str] = set()
+    for effect in (*rule.effects, *rule.guard_false_effects):
+        if not isinstance(effect, NavigateEffectV1) or effect.target_page_id in seen_page_ids:
+            continue
+        target_page = pages_by_id.get(effect.target_page_id)
+        if target_page is None:
+            raise StructuredPrototypeAiServiceError(
+                "context_invalid", "prototype AI flow scope target page does not exist"
+            )
+        seen_page_ids.add(target_page.id)
+        target_pages.append(target_page)
+    return flow, rule, source_page, tuple(target_pages)
+
+
+def _nodes_in_scope(
+    document: PrototypeDocumentV1,
+    node_ids: set[str],
+) -> tuple[UINodeV1, ...]:
+    result: list[UINodeV1] = []
+
+    def collect(node: UINodeV1) -> None:
+        if node.id in node_ids:
+            result.append(node)
+        if isinstance(node, (StackNodeV1, GridNodeV1, FormNodeV1, FreeformNodeV1)):
+            for child in node.children:
+                collect(child)
+
+    for page in document.pages:
+        collect(page.root)
+    for definition in document.component_definitions:
+        collect(definition.root)
+    return tuple(result)
+
+
+def _runtime_value_reference_ids(value: RuntimeValueV1) -> set[str]:
+    if isinstance(value, EntityRefRuntimeValueV1):
+        return {value.schema_id}
+    return set()
+
+
+def _runtime_expression_reference_ids(expression: RuntimeExpressionV1) -> set[str]:
+    if isinstance(expression, LiteralExpressionV1):
+        return _runtime_value_reference_ids(expression.value)
+    if isinstance(expression, VariableExpressionV1):
+        return {expression.variable_id}
+    if isinstance(expression, FormFieldExpressionV1):
+        return {expression.form_id, expression.field_id}
+    if isinstance(expression, EventEntityRefExpressionV1):
+        return set()
+    if isinstance(expression, EntityFieldExpressionV1):
+        return (
+            _runtime_expression_reference_ids(expression.entity_ref)
+            | {expression.field_id}
+            | _runtime_value_reference_ids(expression.fallback)
+        )
+    raise AssertionError("runtime expression union is exhaustive")
+
+
+def _runtime_predicate_reference_ids(predicate: RuntimePredicateV1) -> set[str]:
+    if isinstance(predicate, AllPredicateV1):
+        result: set[str] = set()
+        for item in predicate.items:
+            result.update(_runtime_predicate_reference_ids(item))
+        return result
+    if isinstance(predicate, RoleIsPredicateV1):
+        return {predicate.role_id}
+    if isinstance(predicate, FormValidPredicateV1):
+        return {predicate.form_id}
+    if isinstance(predicate, ComparePredicateV1):
+        return _runtime_expression_reference_ids(
+            predicate.left
+        ) | _runtime_expression_reference_ids(predicate.right)
+    raise AssertionError("runtime predicate union is exhaustive")
+
+
+def _runtime_effect_reference_ids(effect: RuntimeEffectV1) -> set[str]:
+    if isinstance(effect, SetVariableEffectV1):
+        return {effect.variable_id} | _runtime_expression_reference_ids(effect.value)
+    if isinstance(effect, ValidateFormEffectV1):
+        return {effect.form_id}
+    if isinstance(effect, CreateEntityEffectV1):
+        result = {effect.schema_id, effect.result_variable_id}
+        for assignment in effect.values:
+            result.add(assignment.field_id)
+            result.update(_runtime_expression_reference_ids(assignment.value))
+        return result
+    if isinstance(effect, UpdateEntityEffectV1):
+        result = {effect.schema_id} | _runtime_expression_reference_ids(effect.entity_ref)
+        for assignment in effect.updates:
+            result.add(assignment.field_id)
+            result.update(_runtime_expression_reference_ids(assignment.value))
+        return result
+    if isinstance(effect, NavigateEffectV1):
+        return {effect.target_page_id}
+    if isinstance(effect, NotifyEffectV1):
+        return set()
+    raise AssertionError("runtime effect union is exhaustive")
+
+
+def _behavior_rule_definition_reference_ids(
+    definition: RuntimeRuleDefinitionV1,
+) -> set[str]:
+    result = {definition.trigger.node_id}
+    if definition.guard is not None:
+        result.update(_runtime_predicate_reference_ids(definition.guard))
+    for effect in (*definition.effects, *definition.guard_false_effects):
+        result.update(_runtime_effect_reference_ids(effect))
+    return result
+
+
+def _behavior_rule_reference_ids(rule: RuntimeRuleV1) -> set[str]:
+    result = {rule.trigger.node_id}
+    if rule.guard is not None:
+        result.update(_runtime_predicate_reference_ids(rule.guard))
+    for effect in (*rule.effects, *rule.guard_false_effects):
+        result.update(_runtime_effect_reference_ids(effect))
+    return result
+
+
+def _runtime_view_binding_reference_ids(binding: RuntimeViewBindingV1) -> set[str]:
+    if isinstance(binding, TextViewBindingV1):
+        return _runtime_expression_reference_ids(binding.value)
+    if isinstance(binding, VisibilityViewBindingV1):
+        return _runtime_predicate_reference_ids(binding.predicate)
+    if isinstance(binding, TableRowsViewBindingV1):
+        result = {binding.schema_id}
+        if binding.sort_field_id is not None:
+            result.add(binding.sort_field_id)
+        return result
+    raise AssertionError("runtime view-binding union is exhaustive")
+
+
+def _runtime_scope_slice(
+    document: PrototypeDocumentV1,
+    node_ids: set[str],
+) -> _RuntimeScopeSlice:
+    view_bindings = tuple(
+        binding for binding in document.runtime.view_bindings if binding.node_id in node_ids
+    )
+    rules = tuple(rule for rule in document.runtime.rules if rule.trigger.node_id in node_ids)
+    referenced_ids: set[str] = set()
+    for binding in view_bindings:
+        referenced_ids.update(_runtime_view_binding_reference_ids(binding))
+    for rule in rules:
+        referenced_ids.update(_behavior_rule_reference_ids(rule))
+    for node in _nodes_in_scope(document, node_ids):
+        if isinstance(node, FormNodeV1):
+            referenced_ids.add(node.form_definition_id)
+        elif isinstance(node, InputNodeV1) and node.form_definition_id is not None:
+            referenced_ids.add(node.form_definition_id)
+            assert node.form_field_id is not None
+            referenced_ids.add(node.form_field_id)
+
+    roles = tuple(role for role in document.runtime.roles if role.id in referenced_ids)
+    variables = tuple(
+        variable for variable in document.runtime.variables if variable.id in referenced_ids
+    )
+    referenced_ids.update(
+        variable.entity_schema_id for variable in variables if variable.entity_schema_id is not None
+    )
+    forms = tuple(
+        form
+        for form in document.runtime.forms
+        if form.id in referenced_ids or any(field.id in referenced_ids for field in form.fields)
+    )
+    entity_schemas = tuple(
+        schema
+        for schema in document.runtime.entity_schemas
+        if schema.id in referenced_ids or any(field.id in referenced_ids for field in schema.fields)
+    )
+    schema_ids = {schema.id for schema in entity_schemas}
+    scenario_scopes: list[_RuntimeScenarioScope] = []
+    for scenario in document.runtime.scenarios:
+        entity_fixtures = tuple(
+            fixture for fixture in scenario.entity_fixtures if fixture.schema_id in schema_ids
+        )
+        if entity_fixtures:
+            scenario_scopes.append(
+                _RuntimeScenarioScope(
+                    scenario=scenario,
+                    entity_fixtures=entity_fixtures,
+                )
+            )
+    return _RuntimeScopeSlice(
+        roles=roles,
+        variables=variables,
+        forms=forms,
+        view_bindings=view_bindings,
+        entity_schemas=entity_schemas,
+        rules=rules,
+        scenarios=tuple(scenario_scopes),
+    )
+
+
+def _runtime_scope_ids(scope: _RuntimeScopeSlice) -> set[str]:
+    result: set[str] = set()
+    result.update(role.id for role in scope.roles)
+    result.update(variable.id for variable in scope.variables)
+    for form in scope.forms:
+        result.add(form.id)
+        result.update(field.id for field in form.fields)
+    result.update(binding.id for binding in scope.view_bindings)
+    for schema in scope.entity_schemas:
+        result.add(schema.id)
+        result.update(field.id for field in schema.fields)
+    result.update(rule.id for rule in scope.rules)
+    for scenario_scope in scope.scenarios:
+        result.add(scenario_scope.scenario.id)
+        for fixture in scenario_scope.entity_fixtures:
+            result.update(entity.id for entity in fixture.entities)
+    return result
+
+
+def _runtime_scope_payload(scope: _RuntimeScopeSlice) -> dict[str, object]:
+    return {
+        "roles": [role.model_dump(mode="json", by_alias=True) for role in scope.roles],
+        "variables": [
+            variable.model_dump(mode="json", by_alias=True) for variable in scope.variables
+        ],
+        "forms": [form.model_dump(mode="json", by_alias=True) for form in scope.forms],
+        "viewBindings": [
+            binding.model_dump(mode="json", by_alias=True) for binding in scope.view_bindings
+        ],
+        "entitySchemas": [
+            schema.model_dump(mode="json", by_alias=True) for schema in scope.entity_schemas
+        ],
+        "rules": [rule.model_dump(mode="json", by_alias=True) for rule in scope.rules],
+        "scenarios": [
+            {
+                "id": scenario_scope.scenario.id,
+                "key": scenario_scope.scenario.key,
+                "actorRoleId": scenario_scope.scenario.actor_role_id,
+                "startPageId": scenario_scope.scenario.start_page_id,
+                "entityFixtures": [
+                    fixture.model_dump(mode="json", by_alias=True)
+                    for fixture in scenario_scope.entity_fixtures
+                ],
+                "allowSimulatedRoleSwitch": (scenario_scope.scenario.allow_simulated_role_switch),
+            }
+            for scenario_scope in scope.scenarios
+        ],
+    }
+
+
 def _command_existing_ids(command: DomainCommandV1) -> set[str]:
+    if isinstance(command, AddBehaviorRuleCommandV1):
+        return _behavior_rule_definition_reference_ids(command.definition)
+    if isinstance(command, ReplaceBehaviorRuleCommandV1):
+        return {command.rule_id} | _behavior_rule_definition_reference_ids(command.definition)
+    if isinstance(command, RemoveBehaviorRuleCommandV1):
+        return {command.rule_id}
     if isinstance(command, RemoveNodeCommandV1):
         return {command.node_id}
     if isinstance(command, InsertNodeCommandV1):
@@ -2613,7 +3122,17 @@ def _command_existing_ids(command: DomainCommandV1) -> set[str]:
         return result
     if isinstance(command, (SetNodePropertyCommandV1, SetNodeLayoutCommandV1)):
         return {command.node.node_id} if isinstance(command.node, ExistingNodeRefV1) else set()
-    return set()
+    if isinstance(command, SetRuntimeEntityFieldCommandV1):
+        return {
+            command.scenario_id,
+            command.schema_id,
+            command.entity_id,
+            command.field_id,
+        }
+    raise StructuredPrototypeAiServiceError(
+        "scope_validation_unsupported",
+        f"prototype AI command scope validation does not support {command.kind}",
+    )
 
 
 def _renderer_input_manifest(
