@@ -1,1 +1,5 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/ccgui/frontend/index.md","reason":"Frontend package boundaries and cross-layer spec routing."}
+{"file":".trellis/spec/ccgui/frontend/quality-guidelines.md","reason":"Frontend test, browser verification, and source quality contracts."}
+{"file":".trellis/spec/vibe-kanban/backend/index.md","reason":"Backend layering, timeout ownership, and package conventions."}
+{"file":".trellis/spec/vibe-kanban/backend/structured-prototype-snap-attestation.md","reason":"Executable Freeform replay, evidence, worker, recovery, and timeout contract."}
+{"file":".trellis/tasks/07-13-structured-prototype-editor-demo/research/freeform-snap-attestation.md","reason":"Pinned design decisions, failure semantics, capacity benchmark, and worker identity."}

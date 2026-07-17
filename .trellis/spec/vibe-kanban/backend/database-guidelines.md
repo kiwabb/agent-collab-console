@@ -452,6 +452,214 @@ return recoverStudioRuntime(draft);
 
 ---
 
+## Scenario: Durable Structured Prototype Operation Outcome Lookup
+
+### 1. Scope / Trigger
+
+- Trigger: changing structured-prototype mutation idempotency, operation
+  persistence, request timeout recovery, or the operation-outcome API.
+- A lost HTTP response is ambiguous. The durable operation row is the only
+  authority for whether that exact mutation is unknown, active, or terminal.
+
+### 2. Signatures
+
+- HTTP:
+  `GET /api/projects/{project_id}/structured-prototype-operations/outcome?operationKind={kind}&clientRequestId={uuid}`
+  -> `StructuredPrototypeOperationOutcomeResponseV1`.
+- Service:
+  `get_operation_outcome(project_id, operation_kind, client_request_id) -> PrototypeOperation`.
+- Store:
+  `load_operation_by_request(project_id, operation_kind, client_request_id) -> PrototypeOperation | None`.
+- Lookup identity is the full `(project_id, operation_kind, client_request_id)`
+  tuple; no request creates a new operation row.
+
+### 3. Contracts
+
+- Return the persisted operation whether its status is `queued`, `running`,
+  `succeeded`, `failed`, `interrupted`, or `cancelled`; do not collapse active
+  states into unknown.
+- `terminal` is derived only from
+  `succeeded | failed | interrupted | cancelled`. It is false for `queued` and
+  `running`.
+- The response exposes operation/resource identity, correlation and parent IDs,
+  attempt, phase, request/config/result/failure evidence hashes, error code, and
+  lifecycle timestamps from the same durable row.
+- The lookup is read-only and idempotent. It does not advance phase, rewrite
+  evidence, create recovery operations, or substitute another operation with a
+  similar resource ID.
+- Project, operation kind, and request identity are all required so one project
+  or mutation kind cannot observe another operation accidentally.
+- Operation lifecycle writers remain responsible for atomic status/evidence
+  transitions. The outcome endpoint reports those facts without repairing
+  incomplete rows.
+
+### 4. Validation & Error Matrix
+
+- Invalid `clientRequestId` -> `422 client_request_id_invalid`; no lookup
+  fallback and no operation creation.
+- Unsupported `operationKind` -> request validation error.
+- Exact tuple not found -> `404 operation_outcome_unknown`, retryable, with no
+  fabricated pending or terminal outcome.
+- Exact tuple found in `queued` or `running` -> `200`, `terminal=false`.
+- Exact tuple found in a terminal status -> `200`, `terminal=true`, preserving
+  its success or failure evidence.
+- Persisted row violates domain lifecycle invariants -> fail closed through the
+  normal typed boundary; do not synthesize missing hashes or timestamps.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a timed-out command request first reads `running`, later reads
+  `succeeded`, and both responses carry the same operation and correlation IDs.
+- Base: a request identity that has not reached persistence returns retryable
+  `operation_outcome_unknown`.
+- Good: a failed operation returns its failure evidence hash and error code so
+  the frontend can surface an observable terminal failure.
+- Bad: query only by `client_request_id` and return an operation from another
+  project or kind.
+- Bad: create a synthetic failed operation when the lookup misses.
+- Bad: return `404` for a known running operation because it has no result
+  manifest yet.
+
+### 6. Tests Required
+
+- Store/service: queued, running, succeeded, and failed rows round-trip by the
+  exact composite request identity.
+- Service: invalid UUID is rejected before the store read; unknown identity
+  raises `operation_outcome_unknown`.
+- API: active and terminal responses preserve every identity, evidence, attempt,
+  phase, and lifecycle field with the correct `terminal` value.
+- API isolation: the same request UUID under another project or operation kind
+  remains unknown.
+- Frontend integration: unknown and non-terminal outcomes retain the pending
+  operation; terminal outcome still requires authoritative resource recovery.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+operation = await store.load_operation_by_client_request_id(client_request_id)
+if operation is None or operation.result_manifest_hash is None:
+    raise StructuredPrototypeServiceError("operation_outcome_unknown", "unknown")
+```
+
+Correct:
+
+```python
+operation = await store.load_operation_by_request(
+    project_id,
+    operation_kind,
+    client_request_id,
+)
+if operation is None:
+    raise StructuredPrototypeServiceError(
+        "operation_outcome_unknown",
+        "structured prototype operation outcome is not recorded",
+    )
+return operation
+```
+
+---
+
+## Scenario: Atomic Project Structured Prototype Deletion
+
+### 1. Scope / Trigger
+
+- Trigger: changing project-level structured prototype deletion, generation job
+  lifecycle states, operation concurrency gates, or the Studio/generation delete
+  controls.
+- Deletion spans every structured-prototype aggregate and must either remove the
+  complete project prototype or preserve it unchanged.
+
+### 2. Signatures
+
+- HTTP:
+  `DELETE /api/projects/{project_id}/structured-prototype-documents?clientRequestId={uuid}`
+  -> `{ contractVersion: 1, operationId, correlationId, deleted: true }`.
+- Service:
+  `delete_project_prototype(project_id, client_request_id) -> DeleteStructuredPrototypeResult`.
+- Store:
+  `delete_project_prototype(project_id, deletion_operation_id, completed_operation, completion_step, completion_event) -> PrototypeProjectDeletionCounts`.
+- Evidence kind: `project_prototype_deleted`; operation kind:
+  `delete_project_prototype`.
+
+### 3. Contracts
+
+- One SQLite `BEGIN IMMEDIATE` transaction removes the project's documents,
+  drafts, checkpoints, command batches, revisions, publications/render rows,
+  runtime sessions/events/checkpoints, AI threads/messages/edit runs, generation
+  jobs/runs/items, object references, and superseded non-deletion operations.
+- Immutable object bytes are not deleted in the transaction. Removing their
+  references makes them eligible for the managed object-store GC.
+- The successful deletion operation and its queued/running/succeeded evidence
+  remain durable. Reusing the same `clientRequestId` returns that result.
+- A root `generation_job` operation may remain `running` while its durable job
+  waits for the user. Only `awaiting_confirmation` and `ready` are quiescent and
+  exempt from the busy gate. Planning, generating, assembling, validating, and
+  preview rendering remain active and block deletion.
+- The frontend persists one delete request identity through failures, clears it
+  only after success, and preserves the last loaded prototype on any error.
+
+### 4. Validation & Error Matrix
+
+- Invalid `clientRequestId` -> `422 client_request_id_invalid`; no operation.
+- Another queued/running non-quiescent project operation -> `409 prototype_busy`,
+  retryable; no prototype row or object reference is removed.
+- Deletion operation identity/evidence mismatch ->
+  `prototype_delete_identity_mismatch`; refuse the transaction.
+- SQLite failure during deletion -> `prototype_delete_failed`; roll back every
+  delete and persist failed deletion evidence.
+- Same successful `clientRequestId` -> `200` with the original operation and
+  correlation IDs.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a ready generated candidate is deleted before acceptance; current
+  generation and current document both return `null` afterward.
+- Good: a published draft with runtime and AI history is deleted atomically, and
+  its published artifact route is no longer addressable.
+- Base: deleting a project with no prototype succeeds as an observable no-op.
+- Bad: treating every running generation root as active, which makes the visible
+  delete control fail while the job is waiting for user confirmation.
+- Bad: clearing frontend state before the server confirms success.
+
+### 6. Tests Required
+
+- API: deletion removes editable, published, and runtime reads; retry with the
+  same request ID returns the identical response and terminal event sequence.
+- Store/service: an unrelated active operation returns retryable
+  `prototype_busy` and leaves the document readable.
+- Generation regression: both `awaiting_confirmation` and `ready` jobs delete
+  successfully and their root operations disappear with the job.
+- Frontend: project IDs are encoded, the request uses `DELETE`, both entry points
+  reuse the persisted delete identity, and state is cleared only after success.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```sql
+SELECT id FROM prototype_operations
+WHERE project_id = ? AND status IN ('queued', 'running');
+```
+
+Correct:
+
+```sql
+SELECT operation.id
+FROM prototype_operations AS operation
+LEFT JOIN prototype_document_generation_jobs AS job
+  ON job.operation_id = operation.id
+WHERE operation.project_id = ?
+  AND operation.status IN ('queued', 'running')
+  AND NOT (
+    operation.operation_kind = 'generation_job'
+    AND job.status IN ('awaiting_confirmation', 'ready')
+  );
+```
+
+---
+
 ## Scenario: Structured Prototype Is the Only Editable Prototype System
 
 ### 1. Scope / Trigger
@@ -492,8 +700,9 @@ return recoverStudioRuntime(draft);
 
 ### 4. Validation & Error Matrix
 
-- Existing database at schema <= 11 -> drop all six legacy tables and record
-  schema version 12; do not migrate old HTML rows into structured documents.
+- Existing database at schema <= 11 -> drop all six legacy tables at the
+  version-12 migration; later additive migrations may advance the global schema
+  version further. Do not migrate old HTML rows into structured documents.
 - New database -> never create a legacy prototype table.
 - Request to a retired prototype plan/version/stream endpoint -> route absent
   (`404`); do not add a compatibility handler.

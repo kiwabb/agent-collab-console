@@ -17,7 +17,11 @@ The locked end-state and user acceptance loop are recorded in [`final-goal.md`](
 
 - A versioned structured prototype document is the future source of truth; HTML/CSS/JS are renderer outputs, not canonical storage.
 - The page model is structured-first. Standard semantic components are draggable and inspectable; unsupported complex regions use an opaque CodeBlock that remains runnable and AI-editable but is not internally draggable.
-- Page layout is constraint-first using Stack and Grid containers. The MVP has no free positioning; a future version may allow it only inside an explicit Freeform container.
+- Page layout is constraint-first using Stack, Grid, and Form containers. Bounded free positioning is available only for direct children of an explicit Freeform container; it is never an implicit page-wide mode.
+- Freeform move snapping treats a single selection or same-parent group union as one moving frame. On each axis it evaluates alignment and equal-spacing candidates in one deterministic competition: smallest client-space correction wins, existing edge/center alignment wins an exact tie, then spacing candidates are ordered by target position and stable sibling IDs. If independently valid X/Y spacing winners invalidate each other after combination, the smaller correction is retried alone, an exact tie prefers X, then the alternate axis and alignment/raw fallbacks are tried in that fixed order.
+- Equal-spacing candidates use only visible, unselected direct siblings frozen at pointer-down. The moving frame plus two lane-compatible siblings may either fill the gap between adjacent siblings or extend an existing sibling gap before/after the pair; all represented gaps must be positive, the three frames must share positive cross-axis overlap, and the projected moving frame must remain in its Freeform bounds without overlapping another lane sibling.
+- Equal-spacing uses the existing inclusive six-client-pixel threshold at every zoom, preserves group-internal geometry, emits paired distance segments only during move preview, and shares Ctrl/Meta bypass, RAF projection, exact pointer-up projection, one atomic command batch, and one-step Undo with edge/center snapping. Local arithmetic tails may affect acceptance but never move the authoritative equal-spacing target; logical zero gaps remain edge alignment, and both rendered segments must match the recorded gap within the same local tolerance. Equivalent blocker queries use exact final geometry as a per-projection cache key so dense overlapping siblings do not repeat the same full scan. Configurable grid snapping remains a separate later slice.
+- Configurable Freeform layout grids are the next independent move-snapping slice. Each Freeform may own ordered, versioned square, column, and row grids with stable IDs, local origins, token-backed color/opacity, persisted visibility, and persisted snap enablement. The editor also has a session-level grid-snapping gate. All grid candidates start from the same raw frame as alignment and equal-spacing candidates; the smallest correction wins and exact ties use `alignment > equal-spacing > grid`.
 - AI changes are expressed as validated structured patches and shown as a draft before acceptance. Rejecting or failing a patch preserves the accepted version.
 - Initial AI generation is plan-first: the user confirms a multi-page blueprint before foundation and page generation begin, and only a fully validated assembled document can become an active draft.
 - The confirmed blueprint is the sole scope authority for generation. Page counts, routes, navigation, roles, entities, forms, flows, and scenarios must not be fixed to a procurement or admin domain in production code.
@@ -39,8 +43,9 @@ The locked end-state and user acceptance loop are recorded in [`final-goal.md`](
 - `PrototypeDocument` contains `schemaVersion`, project settings, tokens, component definitions, pages, navigation, flows, runtime definitions, and asset references.
 - Every document entity and UI node has a stable opaque ID.
 - `PrototypePage` contains a route, title, viewport settings, root node, and flow metadata.
-- `UINode` uses a discriminated type union for Stack, Grid, Form, Text, Button, Input, Select, Table, Image, ComponentInstance, Overlay, and CodeBlock.
-- Layout values use explicit units and typed responsive overrides; arbitrary style dictionaries are forbidden for structured nodes.
+- `UINode` uses a discriminated type union for Freeform, Stack, Grid, Form, Text, Button, Input, Select, Table, Image, ComponentInstance, Overlay, and CodeBlock.
+- Layout values use explicit units and typed responsive overrides; arbitrary style dictionaries are forbidden for structured nodes. Freeform child coordinates use bounded canonical decimal strings and are forbidden at the page root, under ordinary containers, and in responsive overrides.
+- Freeform grid geometry uses the same canonical bounded decimal-string boundary. Missing or empty `grids` is the backward-compatible no-grid value and remains omitted from canonical JSON so historical document/checkpoint hashes do not change. Unknown grid versions, kinds, fields, token references, duplicate grid IDs, or invalid geometry fail closed.
 - Component instances reference a definition and store only permitted property and slot overrides.
 - Runtime rules and bindings reference entity IDs rather than URLs or handlers embedded in HTML.
 - Runtime behavior uses typed trigger/guard/effect ASTs. Flow edges reference behavior-rule IDs; screen/state/decision canvas nodes and coordinates are projections, not executable authority.
@@ -54,6 +59,8 @@ The locked end-state and user acceptance loop are recorded in [`final-goal.md`](
 - A command batch is atomic: validation failure rejects the complete batch.
 - Every mutation includes the expected draft head sequence; stale heads are refused with an explicit conflict result.
 - Command batches are append-only and use a gap-free monotonic sequence. Undo and redo append compensation/replay batches and never modify or delete historical batches.
+- Moving into Freeform writes the target position in the same Move command; moving out clears it. Freeform west/north/center Resize writes position and dimensions in one `setNodeLayout` command so Undo cannot observe a half-applied frame.
+- Adding, editing, removing, or reordering Freeform grids uses one `setNodeProperty/freeformGrids` batch. The complete prior grid list is captured by the existing inverse-command path, so one save is one journal sequence and one Undo/Redo unit.
 - Recovery loads the latest verified checkpoint and deterministically replays the bounded command tail. Missing sequence, unsupported version, object corruption, or hash mismatch marks the draft corrupt and fails closed.
 - Publishing a draft creates an immutable document revision that references a verified document object. Rendered artifacts record document object hash, revision, renderer version, and output hash.
 - Assets are content-addressed and referenced by ID; large binaries are never embedded into document JSON.
@@ -79,6 +86,7 @@ The locked end-state and user acceptance loop are recorded in [`final-goal.md`](
 - Center in Flow mode: draggable projection nodes, rule-backed ports/connections, zoom controls, and selected-path emphasis.
 - Flow inspector edits the selected rule's trigger, guard and ordered effects; moving nodes only changes flow layout.
 - Right inspector: AI conversation as the default tab, selected-node properties, and selected Flow rule/view-binding runtime properties.
+- Selecting a Freeform exposes a compact layout-grid editor for add/remove, kind, visibility, snapping, origin, size/count, item size, gutter, margin, alignment, token color, and opacity. Grid chrome is pointer-transparent and visible only in Design mode.
 - AI patch review remains visible until accepted or rejected and states exactly which nodes/pages will change.
 - Mobile collapses side regions into explicit drawers; preview and mode switching remain operable without horizontal overflow.
 
@@ -139,11 +147,29 @@ The locked end-state and user acceptance loop are recorded in [`final-goal.md`](
 - [x] Flow edges are projections of executable behavior rules and cannot drift from runtime behavior.
 - [x] Runtime sessions pin document/scenario/core versions and persist semantic event/state hashes for deterministic recovery and replay.
 - [x] Browser preview and backend replay share one versioned TypeScript runtime core; Python does not implement a second evaluator.
+- [x] Explicit Freeform containers support bounded direct-child placement, pointer movement, west/north Resize, center Resize modifiers, deterministic drop coordinates, persistence, and Undo without enabling page-wide arbitrary positioning.
+- [x] Freeform move projection snaps single or grouped selections to container and visible direct-sibling edges/centers, renders zoom-stable smart guides only during preview, supports Ctrl/Meta bypass, and preserves exact-tail one-batch persistence and Undo.
+- [x] Freeform Resize snaps all eight active handle edges for single or grouped selections, preserves Shift/Alt/Shift+Alt semantics, supports Ctrl/Meta bypass, recovers but never worsens existing overflow, keeps every projected child field within the canonical `0..4096` range, and keeps guides, exact-tail persistence, and Undo atomic across zoom levels.
+- [x] Freeform move snaps single or grouped selections into positive equal horizontal or vertical gaps formed with two visible same-parent siblings, chooses deterministically against edge/center snaps within the same six-client-pixel threshold, and never snaps across unrelated visual lanes or through another sibling.
+- [x] An equal-spacing preview renders the two compared distance segments with stable metadata and one-physical-pixel strokes across zoom; Ctrl/Meta, Escape, pointer cancellation, and a non-winning spacing candidate leave no distance guide or document mutation.
+- [x] Pointer-up recomputes the exact final equal-spacing projection and persists the whole single/group move in one command batch and one Undo unit, while preview frames leave the document sequence unchanged.
+- [x] Legacy Freeforms without `grids` retain their canonical hashes; non-empty square/column/row configurations round-trip through the frontend codec, backend strict model, command journal, checkpoint recovery, and one-step Undo/Redo.
+- [x] Design mode renders frame-local square/column/row overlays without intercepting pointer or runtime events; per-grid visibility and snapping plus the editor grid-snapping gate have distinct, deterministic effects.
+- [x] Freeform move evaluates grid lines from the same continuous raw single/group frame as alignment and equal-spacing, keeps the six-client-pixel threshold at every zoom, and resolves exact ties as `alignment > equal-spacing > grid` independent of grid order.
+- [x] Pointer-up recomputes the exact final grid projection into the existing one-batch move transaction; Ctrl/Meta, Escape, cancellation, disabled grids, and the session gate leave no grid guide or document mutation.
 - [x] Initial AI generation includes at least one scripted business scenario whose event batches and milestone predicates pass in the pinned runtime core before candidate readiness.
-- [ ] Production generation contains no procurement-specific prompt, page set, route, role, entity, form, scenario, store ordering, or runtime replay requirement.
-- [ ] Generation work items and deterministic assembly derive entirely from the confirmed blueprint and strict generation artifacts.
-- [ ] `examples/admin-demo` produces editable dashboard, user-management, and order-management pages from repository evidence.
-- [ ] A second non-admin fixture passes generation contract tests, proving the implementation is not specialized to `admin-demo`.
+- [x] Production generation contains no procurement-specific prompt, page set, route, role, entity, form, scenario, store ordering, or runtime replay requirement.
+- [x] Generation work items and deterministic assembly derive entirely from the confirmed blueprint and strict generation artifacts.
+- [x] `examples/admin-demo` produces editable dashboard, user-management, and order-management pages from repository evidence.
+- [x] A second non-admin fixture passes generation contract tests, proving the implementation is not specialized to `admin-demo`.
+
+Generality evidence is pinned in
+[`admin-demo-accepted-v12-audit.json`](artifacts/admin-demo-accepted-v12-audit.json) and its
+canonical candidate document. The accepted Claude UI Engineer run produced `/dashboard`,
+`/users`, and `/orders` with root child counts `3/3/2`, a source fingerprint and terminal replay
+manifest. The older `admin-demo-v11-ec07ae12-candidate-document.json` remains preserved as failed
+evidence for the empty-page regression. `test_structured_prototype_generation_generality.py`
+supplies the independent City Weekends fixture and runtime replay proof.
 
 ## Implementation Plan
 
@@ -157,6 +183,7 @@ The locked end-state and user acceptance loop are recorded in [`final-goal.md`](
 8. Lock storage/recovery in `checkpoint-journal-design.md` and the cross-workflow evidence contract in `observability-reproducibility-design.md` before production schema or service implementation.
 9. Lock exact document/command/HTTP/MCP/renderer boundaries and compatibility fixtures in `executable-contracts.md` so implementation does not reinterpret the design.
 10. Define executable business state, scenarios, rule-backed Flow semantics, runtime sessions and deterministic event replay in `prototype-runtime-design.md`.
+11. Implement frame-local Freeform layout grids and grid snapping from the pinned Penpot interaction study, preserving historical hashes and the existing move transaction.
 
 ## Out of Scope
 
@@ -166,6 +193,7 @@ The locked end-state and user acceptance loop are recorded in [`final-goal.md`](
 - Direct generic LLM API integration or fallback for prototype generation and conversational editing.
 - Real APIs/databases, real authentication/authorization, production data, arbitrary expressions/scripts, full BPMN, timers, parallel gateways, or production-grade application state.
 - Pen tools, vector editing, arbitrary layer transforms, or Figma-compatible file import/export.
+- Page-level grid presets, rotation-aware grids, infinite-canvas pixel grids, and a Penpot/Figma file interchange format.
 
 ## Technical Notes
 
@@ -175,3 +203,4 @@ The locked end-state and user acceptance loop are recorded in [`final-goal.md`](
 - Follow the repository fail-closed rules: invalid document operations and failed governance or rendering checks must refuse publication.
 - Managed prototype objects live under the application data root. Exporting a prototype into the project directory is a separate derivative operation and never changes canonical storage.
 - The interactive artifact is exploratory design evidence. It must not be wired into the production route in this task.
+- Penpot grid behavior was inspected at commit `167aa7410f95bce91b9a80059624a3e3d9307f1e`; only interaction/data contracts are reused. No MPL implementation code is copied. See `research/penpot-grid-snapping-patterns.md`.

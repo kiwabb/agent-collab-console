@@ -1,1 +1,5 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/ccgui/frontend/quality-guidelines.md","reason":"Verify frontend type safety, focused tests, browser behavior, and formatting scope."}
+{"file":".trellis/spec/ccgui/frontend/state-management.md","reason":"Verify structured prototype mutation and stale runtime-session recovery remain fail-closed and evidence-driven."}
+{"file":".trellis/spec/vibe-kanban/backend/error-handling.md","reason":"Verify deterministic versus retryable infrastructure failure classification."}
+{"file":".trellis/spec/vibe-kanban/backend/structured-prototype-snap-attestation.md","reason":"Verify every cross-layer replay, evidence, worker, recovery, and timeout assertion."}
+{"file":".trellis/tasks/07-13-structured-prototype-editor-demo/research/freeform-snap-attestation.md","reason":"Verify implementation against the pinned design and measured capacity boundary."}

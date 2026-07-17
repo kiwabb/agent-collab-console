@@ -1,0 +1,1079 @@
+{
+  "assetRefs": [],
+  "componentDefinitions": [],
+  "flows": [],
+  "id": "8d06e2f7-c083-556b-b18c-a7e03f99db84",
+  "locale": "zh-CN",
+  "navigation": {
+    "items": [
+      {
+        "id": "4b5dc868-41e2-59cf-8d17-37ae254710d9",
+        "key": "nav-dashboard",
+        "label": "仪表盘",
+        "targetPageId": "da3172fe-3ee6-5068-a775-036b726dc4d5"
+      },
+      {
+        "id": "aa097bf4-d457-5caf-939b-d08852d8d007",
+        "key": "nav-users",
+        "label": "用户管理",
+        "targetPageId": "f77e37bb-1db9-509a-b4ed-8ad8edc0ad71"
+      },
+      {
+        "id": "73d535f0-677e-56a4-bb4b-f8c029f6a0fb",
+        "key": "nav-orders",
+        "label": "订单管理",
+        "targetPageId": "73abea5c-11a1-5806-b33f-a4d79d133970"
+      }
+    ]
+  },
+  "pages": [
+    {
+      "id": "da3172fe-3ee6-5068-a775-036b726dc4d5",
+      "key": "dashboard",
+      "root": {
+        "align": "stretch",
+        "children": [],
+        "direction": "column",
+        "gap": 24,
+        "id": "81773a1c-8735-5e48-9e74-5f786f4e5c1b",
+        "justify": "start",
+        "layoutItem": {
+          "alignSelf": "stretch",
+          "grow": 0,
+          "height": {
+            "unit": "auto",
+            "value": null
+          },
+          "maxHeight": null,
+          "maxWidth": null,
+          "minHeight": null,
+          "minWidth": null,
+          "shrink": 1,
+          "width": {
+            "unit": "auto",
+            "value": null
+          }
+        },
+        "name": "仪表盘",
+        "padding": {
+          "bottom": 0,
+          "left": 0,
+          "right": 0,
+          "top": 0
+        },
+        "responsive": [],
+        "type": "Stack",
+        "visibility": "visible"
+      },
+      "route": "/dashboard",
+      "title": "仪表盘",
+      "viewport": {
+        "height": 900,
+        "width": 1440
+      }
+    },
+    {
+      "id": "f77e37bb-1db9-509a-b4ed-8ad8edc0ad71",
+      "key": "users",
+      "root": {
+        "align": "stretch",
+        "children": [
+          {
+            "content": "成员与权限",
+            "id": "0ff7f0c6-f3a9-505b-9075-cab7220881ea",
+            "layoutItem": {
+              "alignSelf": "stretch",
+              "grow": 0,
+              "height": {
+                "unit": "auto",
+                "value": null
+              },
+              "maxHeight": null,
+              "maxWidth": null,
+              "minHeight": null,
+              "minWidth": null,
+              "shrink": 1,
+              "width": {
+                "unit": "auto",
+                "value": null
+              }
+            },
+            "name": "页面分类",
+            "responsive": [],
+            "semantic": "label",
+            "tone": "default",
+            "type": "Text",
+            "visibility": "visible"
+          },
+          {
+            "content": "用户管理",
+            "id": "f5f86195-15eb-52a6-90c3-dd995825e028",
+            "layoutItem": {
+              "alignSelf": "stretch",
+              "grow": 0,
+              "height": {
+                "unit": "auto",
+                "value": null
+              },
+              "maxHeight": null,
+              "maxWidth": null,
+              "minHeight": null,
+              "minWidth": null,
+              "shrink": 1,
+              "width": {
+                "unit": "auto",
+                "value": null
+              }
+            },
+            "name": "页面标题",
+            "responsive": [],
+            "semantic": "heading",
+            "tone": "default",
+            "type": "Text",
+            "visibility": "visible"
+          },
+          {
+            "content": "查看平台成员及其账号状态。",
+            "id": "b7a5a3a6-2ef5-57a7-a5c8-4e7c89b71c59",
+            "layoutItem": {
+              "alignSelf": "stretch",
+              "grow": 0,
+              "height": {
+                "unit": "auto",
+                "value": null
+              },
+              "maxHeight": null,
+              "maxWidth": null,
+              "minHeight": null,
+              "minWidth": null,
+              "shrink": 1,
+              "width": {
+                "unit": "auto",
+                "value": null
+              }
+            },
+            "name": "页面说明",
+            "responsive": [],
+            "semantic": "body",
+            "tone": "muted",
+            "type": "Text",
+            "visibility": "visible"
+          },
+          {
+            "content": "共 5 位用户",
+            "id": "7ed099c6-6a5e-5616-be75-3bcb4bd9c0cc",
+            "layoutItem": {
+              "alignSelf": "stretch",
+              "grow": 0,
+              "height": {
+                "unit": "auto",
+                "value": null
+              },
+              "maxHeight": null,
+              "maxWidth": null,
+              "minHeight": null,
+              "minWidth": null,
+              "shrink": 1,
+              "width": {
+                "unit": "auto",
+                "value": null
+              }
+            },
+            "name": "用户数量",
+            "responsive": [],
+            "semantic": "label",
+            "tone": "muted",
+            "type": "Text",
+            "visibility": "visible"
+          },
+          {
+            "columns": [
+              {
+                "fieldId": null,
+                "key": "user",
+                "label": "用户"
+              },
+              {
+                "fieldId": null,
+                "key": "role",
+                "label": "角色"
+              },
+              {
+                "fieldId": null,
+                "key": "status",
+                "label": "状态"
+              },
+              {
+                "fieldId": null,
+                "key": "joined-at",
+                "label": "加入时间"
+              }
+            ],
+            "density": "compact",
+            "id": "5acdac77-cc34-59dc-a2d7-8257b15bbcaa",
+            "layoutItem": {
+              "alignSelf": "stretch",
+              "grow": 0,
+              "height": {
+                "unit": "auto",
+                "value": null
+              },
+              "maxHeight": null,
+              "maxWidth": null,
+              "minHeight": null,
+              "minWidth": null,
+              "shrink": 1,
+              "width": {
+                "unit": "auto",
+                "value": null
+              }
+            },
+            "name": "用户列表",
+            "responsive": [],
+            "rows": [
+              {
+                "cells": [
+                  {
+                    "columnKey": "user",
+                    "value": "陈晓宁\nxiaoning.chen@example.com"
+                  },
+                  {
+                    "columnKey": "role",
+                    "value": "系统管理员"
+                  },
+                  {
+                    "columnKey": "status",
+                    "value": "正常"
+                  },
+                  {
+                    "columnKey": "joined-at",
+                    "value": "2026-01-18"
+                  }
+                ],
+                "id": "664ef6c8-131d-5bd4-889e-2c9fb54558b2"
+              },
+              {
+                "cells": [
+                  {
+                    "columnKey": "user",
+                    "value": "林悦\nyue.lin@example.com"
+                  },
+                  {
+                    "columnKey": "role",
+                    "value": "运营专员"
+                  },
+                  {
+                    "columnKey": "status",
+                    "value": "正常"
+                  },
+                  {
+                    "columnKey": "joined-at",
+                    "value": "2026-03-06"
+                  }
+                ],
+                "id": "1f84cec5-7383-5b42-b8f0-d91b68ff5d1c"
+              },
+              {
+                "cells": [
+                  {
+                    "columnKey": "user",
+                    "value": "周子昂\nziang.zhou@example.com"
+                  },
+                  {
+                    "columnKey": "role",
+                    "value": "财务经理"
+                  },
+                  {
+                    "columnKey": "status",
+                    "value": "正常"
+                  },
+                  {
+                    "columnKey": "joined-at",
+                    "value": "2025-11-22"
+                  }
+                ],
+                "id": "f18f3553-1b35-5b10-b202-6c0ba2672343"
+              },
+              {
+                "cells": [
+                  {
+                    "columnKey": "user",
+                    "value": "孟雨桐\nyutong.meng@example.com"
+                  },
+                  {
+                    "columnKey": "role",
+                    "value": "访客"
+                  },
+                  {
+                    "columnKey": "status",
+                    "value": "停用"
+                  },
+                  {
+                    "columnKey": "joined-at",
+                    "value": "2026-05-14"
+                  }
+                ],
+                "id": "d6716570-8182-5060-827e-de46fde395b4"
+              },
+              {
+                "cells": [
+                  {
+                    "columnKey": "user",
+                    "value": "韩思远\nsiyuan.han@example.com"
+                  },
+                  {
+                    "columnKey": "role",
+                    "value": "客户经理"
+                  },
+                  {
+                    "columnKey": "status",
+                    "value": "正常"
+                  },
+                  {
+                    "columnKey": "joined-at",
+                    "value": "2026-06-02"
+                  }
+                ],
+                "id": "5fc60255-b156-59bd-9730-d28aa6c4ad2c"
+              }
+            ],
+            "type": "Table",
+            "visibility": "visible"
+          }
+        ],
+        "direction": "column",
+        "gap": 24,
+        "id": "c75bd6be-00da-5585-b857-bb74b2f2bd86",
+        "justify": "start",
+        "layoutItem": {
+          "alignSelf": "stretch",
+          "grow": 0,
+          "height": {
+            "unit": "auto",
+            "value": null
+          },
+          "maxHeight": null,
+          "maxWidth": null,
+          "minHeight": null,
+          "minWidth": null,
+          "shrink": 1,
+          "width": {
+            "unit": "auto",
+            "value": null
+          }
+        },
+        "name": "用户管理页面",
+        "padding": {
+          "bottom": 0,
+          "left": 0,
+          "right": 0,
+          "top": 0
+        },
+        "responsive": [],
+        "type": "Stack",
+        "visibility": "visible"
+      },
+      "route": "/users",
+      "title": "用户管理",
+      "viewport": {
+        "height": 900,
+        "width": 1440
+      }
+    },
+    {
+      "id": "73abea5c-11a1-5806-b33f-a4d79d133970",
+      "key": "orders",
+      "root": {
+        "align": "stretch",
+        "children": [
+          {
+            "align": "stretch",
+            "children": [
+              {
+                "align": "stretch",
+                "children": [
+                  {
+                    "content": "交易与履约",
+                    "id": "0b56f68d-cfef-5249-96e7-993a5cd6a5ac",
+                    "layoutItem": {
+                      "alignSelf": "stretch",
+                      "grow": 0,
+                      "height": {
+                        "unit": "auto",
+                        "value": null
+                      },
+                      "maxHeight": null,
+                      "maxWidth": null,
+                      "minHeight": null,
+                      "minWidth": null,
+                      "shrink": 1,
+                      "width": {
+                        "unit": "auto",
+                        "value": null
+                      }
+                    },
+                    "name": "分类标签",
+                    "responsive": [],
+                    "semantic": "label",
+                    "tone": "muted",
+                    "type": "Text",
+                    "visibility": "visible"
+                  },
+                  {
+                    "content": "订单管理",
+                    "id": "3748ca1a-9a52-5f8d-b625-88c919081aab",
+                    "layoutItem": {
+                      "alignSelf": "stretch",
+                      "grow": 0,
+                      "height": {
+                        "unit": "auto",
+                        "value": null
+                      },
+                      "maxHeight": null,
+                      "maxWidth": null,
+                      "minHeight": null,
+                      "minWidth": null,
+                      "shrink": 1,
+                      "width": {
+                        "unit": "auto",
+                        "value": null
+                      }
+                    },
+                    "name": "页面标题",
+                    "responsive": [],
+                    "semantic": "heading",
+                    "tone": "default",
+                    "type": "Text",
+                    "visibility": "visible"
+                  },
+                  {
+                    "content": "跟踪近期订单金额和处理状态。",
+                    "id": "3a0f7a13-8153-5130-93e4-58953a048bf2",
+                    "layoutItem": {
+                      "alignSelf": "stretch",
+                      "grow": 0,
+                      "height": {
+                        "unit": "auto",
+                        "value": null
+                      },
+                      "maxHeight": null,
+                      "maxWidth": null,
+                      "minHeight": null,
+                      "minWidth": null,
+                      "shrink": 1,
+                      "width": {
+                        "unit": "auto",
+                        "value": null
+                      }
+                    },
+                    "name": "页面说明",
+                    "responsive": [],
+                    "semantic": "body",
+                    "tone": "muted",
+                    "type": "Text",
+                    "visibility": "visible"
+                  }
+                ],
+                "direction": "column",
+                "gap": 4,
+                "id": "bdecafc8-941e-51c2-a9fa-dfdb7da485af",
+                "justify": "start",
+                "layoutItem": {
+                  "alignSelf": "stretch",
+                  "grow": 0,
+                  "height": {
+                    "unit": "auto",
+                    "value": null
+                  },
+                  "maxHeight": null,
+                  "maxWidth": null,
+                  "minHeight": null,
+                  "minWidth": null,
+                  "shrink": 1,
+                  "width": {
+                    "unit": "auto",
+                    "value": null
+                  }
+                },
+                "name": "标题信息",
+                "padding": {
+                  "bottom": 0,
+                  "left": 0,
+                  "right": 0,
+                  "top": 0
+                },
+                "responsive": [],
+                "type": "Stack",
+                "visibility": "visible"
+              },
+              {
+                "disabled": false,
+                "iconName": null,
+                "id": "0e26484a-468a-5e0f-b4a1-53d0d6261c46",
+                "label": "导出订单",
+                "layoutItem": {
+                  "alignSelf": "stretch",
+                  "grow": 0,
+                  "height": {
+                    "unit": "auto",
+                    "value": null
+                  },
+                  "maxHeight": null,
+                  "maxWidth": null,
+                  "minHeight": null,
+                  "minWidth": null,
+                  "shrink": 1,
+                  "width": {
+                    "unit": "auto",
+                    "value": null
+                  }
+                },
+                "name": "导出订单",
+                "responsive": [],
+                "size": "medium",
+                "type": "Button",
+                "variant": "secondary",
+                "visibility": "visible"
+              }
+            ],
+            "direction": "row",
+            "gap": 16,
+            "id": "dfefb815-e9ba-547f-b5b5-678968f138ba",
+            "justify": "start",
+            "layoutItem": {
+              "alignSelf": "stretch",
+              "grow": 0,
+              "height": {
+                "unit": "auto",
+                "value": null
+              },
+              "maxHeight": null,
+              "maxWidth": null,
+              "minHeight": null,
+              "minWidth": null,
+              "shrink": 1,
+              "width": {
+                "unit": "auto",
+                "value": null
+              }
+            },
+            "name": "页面标题",
+            "padding": {
+              "bottom": 0,
+              "left": 0,
+              "right": 0,
+              "top": 0
+            },
+            "responsive": [],
+            "type": "Stack",
+            "visibility": "visible"
+          },
+          {
+            "align": "stretch",
+            "children": [
+              {
+                "align": "stretch",
+                "children": [
+                  {
+                    "content": "全部订单",
+                    "id": "7c790924-bfff-5383-8305-d89f6447fb00",
+                    "layoutItem": {
+                      "alignSelf": "stretch",
+                      "grow": 0,
+                      "height": {
+                        "unit": "auto",
+                        "value": null
+                      },
+                      "maxHeight": null,
+                      "maxWidth": null,
+                      "minHeight": null,
+                      "minWidth": null,
+                      "shrink": 1,
+                      "width": {
+                        "unit": "auto",
+                        "value": null
+                      }
+                    },
+                    "name": "区域名称",
+                    "responsive": [],
+                    "semantic": "heading",
+                    "tone": "default",
+                    "type": "Text",
+                    "visibility": "visible"
+                  },
+                  {
+                    "content": "最近创建的 5 笔订单",
+                    "id": "6eb6ad76-1e42-5d5d-bb55-cc0ad46e588f",
+                    "layoutItem": {
+                      "alignSelf": "stretch",
+                      "grow": 0,
+                      "height": {
+                        "unit": "auto",
+                        "value": null
+                      },
+                      "maxHeight": null,
+                      "maxWidth": null,
+                      "minHeight": null,
+                      "minWidth": null,
+                      "shrink": 1,
+                      "width": {
+                        "unit": "auto",
+                        "value": null
+                      }
+                    },
+                    "name": "区域说明",
+                    "responsive": [],
+                    "semantic": "body",
+                    "tone": "muted",
+                    "type": "Text",
+                    "visibility": "visible"
+                  }
+                ],
+                "direction": "column",
+                "gap": 4,
+                "id": "fbbd4265-4071-525e-ada5-49039590f2a6",
+                "justify": "start",
+                "layoutItem": {
+                  "alignSelf": "stretch",
+                  "grow": 0,
+                  "height": {
+                    "unit": "auto",
+                    "value": null
+                  },
+                  "maxHeight": null,
+                  "maxWidth": null,
+                  "minHeight": null,
+                  "minWidth": null,
+                  "shrink": 1,
+                  "width": {
+                    "unit": "auto",
+                    "value": null
+                  }
+                },
+                "name": "区域标题",
+                "padding": {
+                  "bottom": 0,
+                  "left": 0,
+                  "right": 0,
+                  "top": 0
+                },
+                "responsive": [],
+                "type": "Stack",
+                "visibility": "visible"
+              },
+              {
+                "columns": [
+                  {
+                    "fieldId": null,
+                    "key": "order-id",
+                    "label": "订单号"
+                  },
+                  {
+                    "fieldId": null,
+                    "key": "customer",
+                    "label": "客户"
+                  },
+                  {
+                    "fieldId": null,
+                    "key": "product",
+                    "label": "商品"
+                  },
+                  {
+                    "fieldId": null,
+                    "key": "amount",
+                    "label": "金额"
+                  },
+                  {
+                    "fieldId": null,
+                    "key": "status",
+                    "label": "状态"
+                  },
+                  {
+                    "fieldId": null,
+                    "key": "created-at",
+                    "label": "创建时间"
+                  }
+                ],
+                "density": "comfortable",
+                "id": "d0915935-4ebb-53bb-8869-251739b6057f",
+                "layoutItem": {
+                  "alignSelf": "stretch",
+                  "grow": 0,
+                  "height": {
+                    "unit": "auto",
+                    "value": null
+                  },
+                  "maxHeight": null,
+                  "maxWidth": null,
+                  "minHeight": null,
+                  "minWidth": null,
+                  "shrink": 1,
+                  "width": {
+                    "unit": "auto",
+                    "value": null
+                  }
+                },
+                "name": "订单列表",
+                "responsive": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "columnKey": "order-id",
+                        "value": "NS-20260712-1042"
+                      },
+                      {
+                        "columnKey": "customer",
+                        "value": "远望科技"
+                      },
+                      {
+                        "columnKey": "product",
+                        "value": "企业协作专业版"
+                      },
+                      {
+                        "columnKey": "amount",
+                        "value": "¥12,999"
+                      },
+                      {
+                        "columnKey": "status",
+                        "value": "已支付"
+                      },
+                      {
+                        "columnKey": "created-at",
+                        "value": "2026-07-12 09:18"
+                      }
+                    ],
+                    "id": "7945448a-2e31-5839-8761-aee85e3ccc0a"
+                  },
+                  {
+                    "cells": [
+                      {
+                        "columnKey": "order-id",
+                        "value": "NS-20260712-1041"
+                      },
+                      {
+                        "columnKey": "customer",
+                        "value": "嘉禾零售"
+                      },
+                      {
+                        "columnKey": "product",
+                        "value": "数据分析扩展包"
+                      },
+                      {
+                        "columnKey": "amount",
+                        "value": "¥3,680"
+                      },
+                      {
+                        "columnKey": "status",
+                        "value": "待支付"
+                      },
+                      {
+                        "columnKey": "created-at",
+                        "value": "2026-07-12 08:42"
+                      }
+                    ],
+                    "id": "f2a5288a-f05e-58f4-b099-38145fabb9c0"
+                  },
+                  {
+                    "cells": [
+                      {
+                        "columnKey": "order-id",
+                        "value": "NS-20260711-1038"
+                      },
+                      {
+                        "columnKey": "customer",
+                        "value": "清源设计"
+                      },
+                      {
+                        "columnKey": "product",
+                        "value": "企业协作基础版"
+                      },
+                      {
+                        "columnKey": "amount",
+                        "value": "¥4,999"
+                      },
+                      {
+                        "columnKey": "status",
+                        "value": "已支付"
+                      },
+                      {
+                        "columnKey": "created-at",
+                        "value": "2026-07-11 17:26"
+                      }
+                    ],
+                    "id": "4be23623-83aa-504c-a903-33676ffcb3bd"
+                  },
+                  {
+                    "cells": [
+                      {
+                        "columnKey": "order-id",
+                        "value": "NS-20260711-1035"
+                      },
+                      {
+                        "columnKey": "customer",
+                        "value": "星洲物流"
+                      },
+                      {
+                        "columnKey": "product",
+                        "value": "自动化工作流套件"
+                      },
+                      {
+                        "columnKey": "amount",
+                        "value": "¥8,600"
+                      },
+                      {
+                        "columnKey": "status",
+                        "value": "已退款"
+                      },
+                      {
+                        "columnKey": "created-at",
+                        "value": "2026-07-11 14:08"
+                      }
+                    ],
+                    "id": "d99bb6fa-e667-582b-acf8-d415879ac8d7"
+                  },
+                  {
+                    "cells": [
+                      {
+                        "columnKey": "order-id",
+                        "value": "NS-20260710-1029"
+                      },
+                      {
+                        "columnKey": "customer",
+                        "value": "北辰教育"
+                      },
+                      {
+                        "columnKey": "product",
+                        "value": "企业协作专业版"
+                      },
+                      {
+                        "columnKey": "amount",
+                        "value": "¥12,999"
+                      },
+                      {
+                        "columnKey": "status",
+                        "value": "已支付"
+                      },
+                      {
+                        "columnKey": "created-at",
+                        "value": "2026-07-10 11:35"
+                      }
+                    ],
+                    "id": "044ab5b9-2af4-5957-9a0d-ac68047ee91d"
+                  }
+                ],
+                "type": "Table",
+                "visibility": "visible"
+              }
+            ],
+            "direction": "column",
+            "gap": 16,
+            "id": "9b90bc80-e8dc-5e19-abce-5a39765aadb3",
+            "justify": "start",
+            "layoutItem": {
+              "alignSelf": "stretch",
+              "grow": 0,
+              "height": {
+                "unit": "auto",
+                "value": null
+              },
+              "maxHeight": null,
+              "maxWidth": null,
+              "minHeight": null,
+              "minWidth": null,
+              "shrink": 1,
+              "width": {
+                "unit": "auto",
+                "value": null
+              }
+            },
+            "name": "全部订单",
+            "padding": {
+              "bottom": 20,
+              "left": 20,
+              "right": 20,
+              "top": 20
+            },
+            "responsive": [],
+            "type": "Stack",
+            "visibility": "visible"
+          }
+        ],
+        "direction": "column",
+        "gap": 24,
+        "id": "0f74f295-b5c9-54e7-b9e0-d230c6fc0f5f",
+        "justify": "start",
+        "layoutItem": {
+          "alignSelf": "stretch",
+          "grow": 0,
+          "height": {
+            "unit": "auto",
+            "value": null
+          },
+          "maxHeight": null,
+          "maxWidth": null,
+          "minHeight": null,
+          "minWidth": null,
+          "shrink": 1,
+          "width": {
+            "unit": "auto",
+            "value": null
+          }
+        },
+        "name": "订单管理页面",
+        "padding": {
+          "bottom": 32,
+          "left": 32,
+          "right": 32,
+          "top": 32
+        },
+        "responsive": [],
+        "type": "Stack",
+        "visibility": "visible"
+      },
+      "route": "/orders",
+      "title": "订单管理",
+      "viewport": {
+        "height": 900,
+        "width": 1440
+      }
+    }
+  ],
+  "runtime": {
+    "entitySchemas": [],
+    "forms": [],
+    "pageIds": [
+      "da3172fe-3ee6-5068-a775-036b726dc4d5",
+      "f77e37bb-1db9-509a-b4ed-8ad8edc0ad71",
+      "73abea5c-11a1-5806-b33f-a4d79d133970"
+    ],
+    "roles": [
+      {
+        "id": "5b1fb080-3484-5fe8-b83d-6c0ddf45d470",
+        "key": "system-preview",
+        "label": "System preview"
+      }
+    ],
+    "rules": [],
+    "runtimeSchemaVersion": 1,
+    "scenarios": [
+      {
+        "actorRoleId": "5b1fb080-3484-5fe8-b83d-6c0ddf45d470",
+        "allowSimulatedRoleSwitch": false,
+        "entityFixtures": [],
+        "id": "ba6dfff3-22a9-50fa-8538-01799e419eb5",
+        "initialVariables": [],
+        "key": "default-preview",
+        "startPageId": "da3172fe-3ee6-5068-a775-036b726dc4d5"
+      }
+    ],
+    "variables": [],
+    "viewBindings": []
+  },
+  "schemaVersion": 1,
+  "settings": {
+    "defaultViewport": "desktop",
+    "shell": {
+      "accentColorTokenKey": "primary",
+      "contentBackgroundColorTokenKey": "page-background",
+      "expandedMinWidth": 1024,
+      "kind": "sidebar",
+      "navigationBackgroundColorTokenKey": "sidebar",
+      "navigationWidth": 232,
+      "surfaceColorTokenKey": "surface",
+      "title": "Northstar 运营管理平台"
+    },
+    "theme": "system"
+  },
+  "title": "Northstar 运营管理平台",
+  "tokens": {
+    "colors": [
+      {
+        "key": "primary",
+        "value": "#3157d5"
+      },
+      {
+        "key": "primary-soft",
+        "value": "#edf1ff"
+      },
+      {
+        "key": "surface",
+        "value": "#ffffff"
+      },
+      {
+        "key": "sidebar",
+        "value": "#19202d"
+      },
+      {
+        "key": "page-background",
+        "value": "#f4f6f9"
+      },
+      {
+        "key": "border",
+        "value": "#dfe4ec"
+      },
+      {
+        "key": "text",
+        "value": "#172033"
+      },
+      {
+        "key": "muted",
+        "value": "#667085"
+      },
+      {
+        "key": "amber-soft",
+        "value": "#fff1dc"
+      },
+      {
+        "key": "green-soft",
+        "value": "#dff7eb"
+      },
+      {
+        "key": "violet-soft",
+        "value": "#f1e9ff"
+      },
+      {
+        "key": "danger",
+        "value": "#b42318"
+      }
+    ],
+    "spacing": [
+      {
+        "key": "sidebar-width",
+        "value": "232px"
+      },
+      {
+        "key": "topbar-height",
+        "value": "64px"
+      },
+      {
+        "key": "page-container-max",
+        "value": "1180px"
+      },
+      {
+        "key": "page-padding-desktop",
+        "value": "32px"
+      },
+      {
+        "key": "page-padding-mobile",
+        "value": "16px"
+      },
+      {
+        "key": "section-padding",
+        "value": "20px"
+      },
+      {
+        "key": "metric-gap",
+        "value": "14px"
+      },
+      {
+        "key": "card-radius",
+        "value": "7px"
+      },
+      {
+        "key": "control-radius",
+        "value": "6px"
+      }
+    ]
+  }
+}

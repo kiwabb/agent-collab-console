@@ -123,8 +123,9 @@ responsive: ResponsiveOverrideV1[0..3]
 
 | `type` | 必填 payload | children contract |
 |---|---|---|
+| `Freeform` | no extra payload; fixed non-zero px width/height in `layoutItem` | `children[0..500]` |
 | `Stack` | direction, gap, align, justify, padding | `children[0..500]` |
-| `Grid` | columns, gap, rowGap, padding | `children[0..500]` |
+| `Grid` | columns, gap, padding, columnOverrides | `children[0..500]` |
 | `Form` | formDefinitionId, gap, padding | `children[1..200]` |
 | `Text` | content, semantic, tone | none |
 | `Button` | label, variant, size, disabled, iconName nullable | none |
@@ -136,7 +137,10 @@ responsive: ResponsiveOverrideV1[0..3]
 | `Overlay` | presentation, title nullable, openByDefault | exactly one root child |
 | `CodeBlock` | payload, sandboxPolicyVersion | none; payload opaque |
 
-`Stack` 和 `Grid` 是普通画布的合法容器。任意 `x/y` 只允许未来 `Freeform` contract，首版 node/layout schema 不提供该字段。
+`Grid.columnOverrides` 按 `minWidth` 严格递增，最多 3 项；每项只覆盖列数。基础
+`columns` 和 override `columns` 均为 `1..12`，`minWidth` 为 `320..2560`。`Stack`、
+`Grid` 和 `Form` 是约束布局容器。`Freeform` 是唯一自由定位容器，且自身
+`width`/`height` 必须是 `1..4096px` 的非零固定长度。
 
 ### 4.4 Layout
 
@@ -153,9 +157,14 @@ LayoutItemV1
   grow: integer[0..12]
   shrink: integer[0..12]
   alignSelf: auto | start | center | end | stretch
+  position?: FreeformPositionV1
+
+FreeformPositionV1
+  x: canonical non-negative DecimalString[0..4096]
+  y: canonical non-negative DecimalString[0..4096]
 ```
 
-`unit=auto` 时 `value=null`，其他 unit 必须有 `DecimalString`。用规范字符串而不是 JSON 浮点数，保证 Python/TypeScript canonical hash 一致。百分比限定 0..100，px/rem 使用配置上限。Responsive override 的 breakpoint 只允许 `sm | md | lg`，每个 breakpoint 最多一条。
+`unit=auto` 时 `value=null`，其他 unit 必须有 `DecimalString`。用规范字符串而不是 JSON 浮点数，保证 Python/TypeScript canonical hash 一致。百分比限定 0..100，px/rem 使用配置上限。页面 root 的 `position` 必须缺省；Freeform 的直接子节点必须有 `position`；其他父节点的直接子节点禁止 `position`。Responsive override 永远禁止 `position`。Responsive override 的 breakpoint 只允许 `sm | md | lg`，每个 breakpoint 最多一条；数组必须按 `sm < md < lg` 严格递增。`LayoutItemUpdateV1` canonical JSON 只输出调用方显式提交的字段，未设置字段不能被序列化成 `null`。
 
 ### 4.5 Runtime behavior and flows
 
@@ -218,6 +227,7 @@ MoveNodeCommand
   targetParent: NodeRefV1
   targetSlot: string | null
   targetIndex: integer >= 0
+  targetPosition?: FreeformPositionV1
 
 RemoveNodeCommand
   kind: removeNode
@@ -236,6 +246,21 @@ SetNodePropertyCommand
   node: NodeRefV1
   update: NodePropertyUpdateV1
 
+ContainerLayoutUpdateV1 =
+  StackLayoutUpdate {
+    kind=stackLayout, direction, gap, align, justify, padding
+  }
+  GridLayoutUpdate {
+    kind=gridLayout, columns, gap, padding, columnOverrides
+  }
+  FormLayoutUpdate {kind=formLayout, gap, padding}
+  ResponsiveLayoutUpdate {kind=responsiveLayout, responsive}
+
+Stack/Grid/Form updates are full-value replacements for their matching node
+type. ResponsiveLayoutUpdate is valid for every structured node. A mismatched
+node/update pair is refused with `command_property_invalid`; inverse commands
+store the complete previous value.
+
 SetNodeLayoutCommand
   kind: setNodeLayout
   node: NodeRefV1
@@ -245,6 +270,16 @@ ReorderPageCommand
   kind: reorderPage
   pageId: EntityId
   targetIndex: integer >= 0
+
+ReorderNavigationItemCommand
+  kind: reorderNavigationItem
+  itemId: EntityId
+  targetIndex: integer >= 0
+
+Studio page sorting submits `reorderPage` and the required
+`reorderNavigationItem` commands in one atomic batch. The local projected
+document reorders both `pages` and `navigation.items`; failure restores both,
+and inverse execution restores their exact prior order.
 
 UpdateNavigationCommand
   kind: updateNavigation
@@ -256,6 +291,11 @@ ReplaceCodeBlockPayloadCommand
   payload: string[0..131072 bytes UTF-8]
   sandboxPolicyVersion: integer
 ```
+
+`InsertNode` 向 Freeform 插入时，`node.layoutItem.position` 必填；向其他容器插入时禁止。
+`MoveNode.targetPosition` 在目标父节点为 Freeform 时必填，目标为普通容器时禁止并由命令应用器清除来源坐标。
+inverse Move 必须恢复来源父节点、index 和来源 position。Freeform 的 west/north/Alt-center Resize
+必须通过一个 `SetNodeLayoutCommand` 同时提交 `position`、`width` 和 `height`，不能拆成两个 batch。
 
 Runtime/Flow command union：
 
@@ -291,6 +331,13 @@ ReplaceRuntimeViewBindingCommand {kind=replaceRuntimeViewBinding, bindingId, def
 RemoveRuntimeViewBindingCommand {kind=removeRuntimeViewBinding, bindingId}
 SetRuntimeFlowNodePositionCommand {kind=setRuntimeFlowNodePosition, flowNodeId, x, y}
 ```
+
+`SetRuntimeFlowNodePositionCommand` 的 `flowNodeId` 当前只接受 document 中
+存在的 page、runtime variable、behavior rule 或 scenario ID。`x/y` 必须是
+`[-32768, 32768]` 内整数；`flowLayout.nodes` 最多 300 项、按 `nodeId` canonical
+排序且禁止重复。删除最后一个位置时不序列化空 `flowLayout`，旧文档的 canonical
+JSON 与 hash 必须保持不变。服务端 inverse 精确恢复原坐标；原节点此前没有显式
+坐标时，Undo 必须完全移除该 entry 和空 layout。
 
 `definition` 不是任意 dict，分别是去掉持久化 `id` 的 strict RuntimeRole/Variable/EntitySchema/Form/Scenario/BehaviorRule definition。Replace 是整份 typed definition replacement，避免 field path/value 形式的半类型化 patch。所有 inbound references 在执行前验证。
 
@@ -405,7 +452,32 @@ Apply 不接受 commands；它只能应用 run 已持久化并预览过的 propo
 
 ### 6.4 Initial generation
 
-Create request 使用 `RequirementsGenerationRequestV1 | RepositoryGenerationRequestV1` discriminated union。Confirm 必须携带 expected blueprint version/hash；Accept 必须携带 expected candidate object hash、preview artifact hash 和 source fingerprint（repository mode）。
+Create request 使用 `RequirementsGenerationRequestV1 | RepositoryGenerationRequestV1` discriminated union。
+
+```text
+ConfirmGenerationBlueprintRequestV1
+  contractVersion
+  clientRequestId
+  expectedBlueprintVersion
+  expectedBlueprintHash
+
+AcceptGenerationCandidateRequestV1
+  contractVersion
+  clientRequestId
+  expectedCandidateObjectHash
+  expectedPreviewOutputHash
+  expectedSourceFingerprint
+```
+
+Confirm 在创建 Foundation run 的同一 SQLite 事务内复核 blueprint version/hash，并且必须在
+`awaiting_confirmation` 状态门之前按 `clientRequestId` 和完整 canonical request hash 查询既有
+Foundation scheduling operation：同请求在 operation 完成后返回当前权威 job snapshot，运行中返回
+`generation_confirm_in_progress`，相同 request ID 不同 body 返回
+`generation_confirm_idempotency_conflict`。Accept 在 job、document、draft、checkpoint 和 terminal
+evidence 的同一事务内复核 candidate、preview 和 source fingerprint。Accept 必须先按
+`clientRequestId` 和完整 canonical request hash 查询既有 operation：同请求成功重试返回原
+document/draft/checkpoint；相同 request ID 不同 body 返回
+`generation_accept_idempotency_conflict`，不能先因 job 已是 `accepted` 而拒绝响应丢失后的重试。
 
 ### 6.5 Error envelope
 
@@ -424,6 +496,37 @@ PrototypeErrorResponseV1
 ```
 
 `retryable` 由稳定 error-code registry 决定，不由捕获的 exception 动态猜测。
+
+### 6.6 Operation outcome recovery
+
+```text
+GET /api/projects/{projectId}/structured-prototype-operations/outcome
+  ?operationKind=PrototypeOperationKind
+  &clientRequestId=ClientRequestId
+
+OperationOutcomeResponseV1
+  contractVersion: 1
+  known: true
+  terminal: boolean
+  operationId, operationKind, projectId
+  resourceKind, resourceId | null
+  clientRequestId, correlationId, parentOperationId | null
+  status, phase, attempt
+  requestManifestHash, configManifestHash
+  resultManifestHash | null, failureEvidenceHash | null, errorCode | null
+  createdAt, startedAt | null, completedAt | null
+```
+
+查询键严格为 `projectId + operationKind + clientRequestId`。未知请求和跨项目请求都返回
+`404 operation_outcome_unknown`，不能泄漏另一项目的 operation。客户端对所有结构化原型请求使用
+总 deadline；deadline、断网或响应丢失后必须保留持久化 pending descriptor 和编辑锁。只有查询到
+terminal outcome，并重新读取对应 current draft/runtime/publication/job/thread 收敛到权威资源后，才能
+清除 pending；`unknown` 或非 terminal outcome 不能被当作失败，也不能换 request ID 重发。
+
+实现证据：前端 outcome parser 拒绝未知字段、身份漂移以及 status/terminal/时间/证据不一致；
+localStorage pending descriptor 使用严格 schema，损坏时保持可见错误和编辑锁。Studio、AI
+send/apply/reject、generation start/confirm/accept/delete 都使用同一 pending/outcome 协议，恢复路径
+不存在接受 non-terminal outcome 的旁路。
 
 ## 7. Claude submission contracts
 

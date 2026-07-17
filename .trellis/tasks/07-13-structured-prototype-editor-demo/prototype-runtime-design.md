@@ -48,10 +48,12 @@ RuntimeDefinitionV1
   viewBindings: RuntimeViewBindingV1[0..300]
   rules: BehaviorRuleV1[0..300]
   scenarios: RuntimeScenarioV1[1..30]
-  flowLayout: RuntimeFlowLayoutV1
+  flowLayout?: RuntimeFlowLayoutV1
 ```
 
 Runtime definition 是 document 的一部分，参与 document hash、checkpoint、revision、AI context、validation 和 renderer compatibility。
+`flowLayout` 为兼容既有 canonical document/hash 而可选；缺失与空布局都不序列化。
+非空 `nodes` 按 `nodeId` 排序，最多 300 项，坐标为 `[-32768, 32768]` 内整数。
 
 ### 3.2 Flow 不是第二份规则
 
@@ -575,6 +577,9 @@ setRuntimeFlowNodePosition
 ```
 
 这些命令继续使用 design draft 的单调 journal、expected head sequence/hash、atomic batch 和服务端 inverse。删除被 rule/scenario/form 引用的 definition 必须拒绝，直到引用被移除或显式重定向。
+当前 Flow runtime-core spike 只把 page 投影为可拖节点，把既有 `flows` 投影为只读有向边；
+坐标保存复用 Studio command pipeline。连接创建/删除、BehaviorRule CRUD 与 Rule Inspector
+仍属于本节最终目标，不能因为页面节点可拖就宣称业务流程编辑完成。
 
 ## 13. AI generation 与对话修改
 
@@ -715,10 +720,13 @@ final_view_model_hash
 - 50 events/30 秒/close 触发 checkpoint，201 tail 被 hard gate 拒绝。
 - checkpoint + events 恢复逐步匹配 guard/effect/state hashes。
 - reset 创建新 session，不删除旧 history。
+- Flow 坐标经过 document checkpoint、store 关闭/重开和 recovery 后保持相同 document hash；
+  Undo 对原来无显式布局的文档完全移除 `flowLayout` 并回到 base hash，Redo 精确恢复坐标/hash。
 
 ### Flow/AI
 
 - Flow edge 与 BehaviorRule 一一关联，layout 改动不改变 runtime hash（除 flowLayout document hash）。
+- Browser 与 backend Node worker 对同一 scenario 的 state/view-model hash 不受 Flow 坐标影响。
 - 删除仍被引用的 variable/entity/form/rule 被拒绝。
 - Blueprint behavior intent 必须被页面 binding 消费，未绑定不能 candidate ready。
 - 首次生成至少一个主 scenario 的 scripted event/milestone 全部通过；失败时不能 candidate ready。

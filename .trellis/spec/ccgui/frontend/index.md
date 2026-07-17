@@ -33,6 +33,7 @@ should be closed.
 | [Quality Guidelines](./quality-guidelines.md) | Forbidden / required patterns, tests, review checklist | Filled |
 | [Type Safety](./type-safety.md) | Domain types, API typing, no-any, validation | Filled |
 | [Observability UI](./observability-ui.md) | Audit Log vs Agent Timeline UI and API contracts | Filled |
+| [Structured Prototype Snap Attestation](../../vibe-kanban/backend/structured-prototype-snap-attestation.md) | Cross-layer Freeform replay/evidence/worker contract | Filled |
 
 ---
 

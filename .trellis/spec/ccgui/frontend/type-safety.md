@@ -706,3 +706,119 @@ type ProjectRunStartReason =
   | "refused"
   | "env_incomplete";
 ```
+
+---
+
+## Scenario: Structured Prototype Recovery Boundary Parsing
+
+### 1. Scope / Trigger
+
+- Trigger: changing the structured-prototype pending-operation descriptor, its
+  `localStorage` representation, or the operation-outcome HTTP response.
+- Both values are untyped boundary data. Stale browser bytes or a drifted API
+  response must never be asserted into the recovery state machine.
+
+### 2. Signatures
+
+- Stored descriptor parser:
+  `parseStructuredPrototypePendingOperation(value: unknown, expectedProjectId?: string) -> StructuredPrototypePendingOperation`.
+- Storage loader:
+  `loadStructuredPrototypePendingOperation(projectId: string) -> StructuredPrototypePendingOperation | null`.
+- Outcome parser:
+  `parseStructuredPrototypeOperationOutcome(value: unknown) -> StructuredPrototypeOperationOutcome`.
+- Record guard: `isRecord(value: unknown) -> value is Record<string, unknown>`.
+
+### 3. Contracts
+
+- Both parsers accept `unknown`, require the complete version-1 key set, and
+  reject unknown fields. Do not use a domain assertion or a broad
+  `Record<string, unknown>` assertion to enter either parser.
+- Pending descriptors require canonical UUIDs for `projectId`, `resourceId`,
+  and `clientRequestId`; `contextId` is `null`, the literal `generation`, or a
+  canonical UUID as allowed by the operation owner.
+- The descriptor's `operationKind`, `resourceKind`, and `contextId` combination
+  is an allowlisted ownership contract. For example, generation deletion uses
+  `delete_project_prototype / project_prototype / generation`, while Studio
+  deletion uses the same operation/resource with a `null` context.
+- `requestKey` is also owned by that operation/context combination. Exact keys
+  are required for project deletion and generation start; other operations use
+  only their allowlisted non-empty prefix. Completion must never use arbitrary
+  stored text as a project-scoped storage suffix.
+- A standalone request-identity value read from `localStorage` must itself be a
+  canonical UUID before it can enter a new pending descriptor.
+- `createdAt` is canonical UTC: it must round-trip exactly through
+  `new Date(Date.parse(value)).toISOString()`.
+- Outcome UUIDs, SHA-256 evidence hashes, lifecycle timestamps, status,
+  `terminal`, and result/failure evidence are validated together. The parser
+  must reject a structurally valid object whose lifecycle facts disagree.
+- The API client additionally verifies that parsed `projectId`,
+  `operationKind`, and `clientRequestId` equal the query identity.
+- Invalid pending storage throws `StructuredPrototypeStorageError`; callers
+  keep the stored bytes and convert that error into a fail-closed lock.
+
+### 4. Validation & Error Matrix
+
+- Malformed JSON -> `StructuredPrototypeStorageError`; preserve stored bytes.
+- Non-object, missing key, extra key, or unsupported contract version -> reject.
+- Non-canonical/cross-project UUID or non-canonical UTC `createdAt` -> reject.
+- Unsupported operation/resource/context ownership combination -> reject.
+- Request key does not match its operation/context, or an existing standalone
+  request identity is not a canonical UUID -> reject and preserve the bytes.
+- Outcome `terminal` disagrees with status -> reject.
+- Queued outcome with lifecycle times, running outcome without `startedAt`, or
+  terminal outcome without `completedAt` -> reject.
+- Queued/running outcome with any terminal evidence, success with failure
+  evidence, failure with a result manifest, or interrupted/cancelled with a
+  result manifest -> reject.
+- Succeeded outcome without `resultManifestHash`, failed outcome without
+  `failureEvidenceHash` and `errorCode`, or interrupted/cancelled outcome without
+  `errorCode` -> reject.
+- Parsed outcome identity differs from its query -> reject before controller
+  state changes.
+
+### 5. Good/Base/Bad Cases
+
+- Good: `safeJsonParse(raw)` returns `unknown`, then the feature parser proves
+  every descriptor field and ownership relationship.
+- Good: a terminal success carries canonical UUIDs, lifecycle times, and a
+  `sha256:<64 lowercase hex>` result manifest.
+- Base: no pending storage key returns `null` and leaves the controller unlocked.
+- Bad: `JSON.parse(raw) as StructuredPrototypePendingOperation`.
+- Bad: accepting a descriptor from another project because its request UUID is
+  syntactically valid.
+- Bad: accepting `terminal=true` with `status="running"` or a success with no
+  result evidence.
+
+### 6. Tests Required
+
+- Pending parser tests cover malformed JSON, non-object values, missing/unknown
+  fields, version drift, UUID drift, project mismatch, invalid timestamps, and
+  every forbidden operation/resource/context/request-key combination.
+- Storage tests prove a corrupt standalone request UUID cannot create an
+  unreadable descriptor and a corrupt `requestKey` cannot delete another
+  project storage entry.
+- Outcome parser tests cover exact keys, UUID/hash/timestamp validation, every
+  lifecycle status, terminal agreement, evidence requirements, and query
+  identity mismatch.
+- Lock tests assert corrupt storage stays present and yields `locked=true` plus
+  a visible `StructuredPrototypeStorageError`.
+- Run `node --import tsx --test tests/structuredPrototypeApi.test.ts tests/structuredPrototypeOperationRecovery.test.ts`
+  plus frontend typecheck and focused ESLint.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+const pending = JSON.parse(raw) as StructuredPrototypePendingOperation;
+if (pending.clientRequestId) resume(pending);
+```
+
+Correct:
+
+```ts
+const value = safeJsonParse(raw);
+if (value === null) throw new StructuredPrototypeStorageError("invalid pending JSON");
+const pending = parseStructuredPrototypePendingOperation(value, projectId);
+resume(pending);
+```

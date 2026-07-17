@@ -32,6 +32,7 @@ that should be closed.
 | [Project Resume API Contract](./project-resume-api.md) | Project-level resume markdown storage and PDF import API contract | Filled |
 | [MCP Management Contract](./mcp-management.md) | Framework-owned MCP registry, catalog API, redacted audit, and Settings UI | Filled |
 | [External Prototype Agent](./external-prototype-agent.md) | Project-scoped local Agent pairing, Skill packaging, MCP read/propose tools, and Studio proposal integration | Filled |
+| [Structured Prototype Snap Attestation](./structured-prototype-snap-attestation.md) | Shared TypeScript replay authority, evidence v2, checked worker, recovery, and timeout contract | Filled |
 | [Quality Guidelines](./quality-guidelines.md) | Forbidden / required patterns, tests, run kinds, QA workflow | Filled |
 | [Logging Guidelines](./logging-guidelines.md) | stdlib logging, level conventions, what not to log | Filled |
 | [Observability Guidelines](./observability-guidelines.md) | Audit log, Agent Timeline, and trace/span contracts | Filled |

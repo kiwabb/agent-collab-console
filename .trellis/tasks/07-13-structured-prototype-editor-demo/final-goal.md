@@ -59,11 +59,17 @@
 
 ## 当前完成定义
 
-- [ ] 生产代码和生产 UI 不包含采购领域常量、固定页面集合或固定审批场景。
-- [ ] 蓝图允许动态页面集合以及可选角色、实体、表单、流程和场景。
-- [ ] 页面任务数量、顺序、上下文和装配结果完全由已确认蓝图派生。
-- [ ] 通用装配结果通过严格 `PrototypeDocumentV1` 校验和确定性哈希重放。
-- [ ] runtime 验证由生成场景的通用测试计划驱动；无场景文档使用结构/渲染验证，不伪造业务事件。
-- [ ] `admin-demo` 生成仪表盘、用户管理和订单管理的可编辑原型。
-- [ ] 第二个非后台管理 fixture 的测试证明没有 `admin-demo` 专用硬编码。
-- [ ] Claude UI Engineer 不可用时明确失败，且不会回退到固定模板或通用 LLM。
+- [x] 生产代码和生产 UI 不包含采购领域常量、固定页面集合或固定审批场景。
+- [x] 蓝图允许动态页面集合以及可选角色、实体、表单、流程和场景。
+- [x] 页面任务数量、顺序、上下文和装配结果完全由已确认蓝图派生。
+- [x] 通用装配结果通过严格 `PrototypeDocumentV1` 校验和确定性哈希重放。
+- [x] runtime 验证由生成场景的通用测试计划驱动；无场景文档使用结构/渲染验证，不伪造业务事件。
+- [x] `admin-demo` 生成仪表盘、用户管理和订单管理的可编辑原型。
+- [x] 第二个非后台管理 fixture 的测试证明没有 `admin-demo` 专用硬编码。
+- [x] Claude UI Engineer 不可用时明确失败，且不会回退到固定模板或通用 LLM。
+
+`admin-demo` 的最终生成证据见
+[`admin-demo-accepted-v12-audit.json`](artifacts/admin-demo-accepted-v12-audit.json)：五个
+`prototype_ui_engineer` Claude 任务完成 blueprint、foundation 和三个页面，候选文档的
+`dashboard/users/orders` 根节点子项数为 `3/3/2`，接受 checkpoint 的 document hash 与候选
+content hash 完全一致。旧的空 Dashboard 产物保留为失败回归证据，不计入完成证明。

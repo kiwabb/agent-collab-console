@@ -589,3 +589,675 @@ Correct:
 
 const brief = structuredPrototypeGenerationBrief(optionalGuidance);
 ```
+
+---
+
+## Scenario: Structured Prototype Mutation Outcome Recovery
+
+### 1. Scope / Trigger
+
+- Trigger: changing a structured-prototype Studio, AI, generation, publication,
+  runtime, or deletion mutation whose HTTP response can be lost after the
+  backend has accepted the request.
+- The browser may remember an in-flight request identity, but only durable
+  operation evidence plus an authoritative resource read can prove completion.
+- A stored Studio runtime-session pointer can outlive the database that created
+  it, for example after switching from an isolated acceptance database back to
+  the main database. That stale pointer is a lookup failure, not runtime
+  corruption or proof that a reset operation failed.
+
+### 2. Signatures
+
+- Persist request state:
+  `beginStructuredPrototypePendingOperation(projectId, descriptorInput) -> StructuredPrototypePendingOperation`.
+- Resume request state:
+  `loadStructuredPrototypePendingOperation(projectId) -> StructuredPrototypePendingOperation | null`.
+- Outcome read:
+  `GET /api/projects/{projectId}/structured-prototype-operations/outcome?operationKind={kind}&clientRequestId={uuid}`.
+- Outcome wait:
+  `waitForStructuredPrototypeOperationOutcome(descriptor) -> Promise<StructuredPrototypeOperationOutcome>`.
+- Completion:
+  `finishStructuredPrototypePendingOperation(projectId, clientRequestId) -> void`.
+- Recovery owners:
+  `reconcilePendingStudioOperation`, `reconcilePendingPrototypeAiOperation`, and
+  `reconcilePendingPrototypeGenerationOperation`.
+- Stale stored-session classifier:
+  `shouldRecreateMissingStoredRuntimeSession(error, { hasCommittedReset, hasResetOutcomeError }) -> boolean`.
+
+### 3. Contracts
+
+- Persist the pending descriptor before sending the mutation. Re-entering the
+  exact same operation returns the same `clientRequestId`; a different mutation
+  is refused while that descriptor exists.
+- Every structured-prototype API request has an abort deadline. A timeout,
+  retryable API failure, network `TypeError`, or `operation_outcome_unknown`
+  starts bounded outcome polling; it does not prove failure or success.
+- `queued`, `running`, unknown outcome, exhausted polling, corrupt storage, and
+  an authoritative resource read failure all retain the descriptor and keep the
+  owning controller locked.
+- A terminal outcome is necessary but not sufficient to clear the descriptor.
+  The owning controller first re-reads and validates the current draft, runtime
+  session, publication, AI thread/edit run, generation job, or deletion state.
+- Resource kind, resource ID, project ID, operation kind, and request ID must
+  agree across the descriptor, outcome, and authoritative resource snapshot.
+- A known terminal failure clears the exact descriptor only after the expected
+  post-failure resource state is readable, then surfaces
+  `StructuredPrototypeOperationOutcomeError` with operation and correlation
+  evidence.
+- Keep the last valid draft, runtime, job, thread, and preview on recovery
+  failure. Set a visible error and derive `saving` / `mutating` from whether the
+  controller still owns a pending operation.
+- Recreate a stored runtime session only when the typed API error is exactly
+  `status=404` plus `code=runtime_session_missing`, no reset outcome has already
+  committed a replacement pointer, and no reset terminal error is awaiting
+  presentation. Use the normal `create_runtime_session` pending-operation path;
+  keep the old pointer until the replacement session is decoded, then overwrite
+  it atomically with the new session ID.
+
+### 4. Validation & Error Matrix
+
+- `404 operation_outcome_unknown` -> retry within the bounded poll budget; keep
+  the lock if the budget expires.
+- Outcome `queued` or `running` -> retry; never clear storage even when a result
+  resource is already observable.
+- Outcome identity differs from the descriptor -> visible recovery mismatch;
+  preserve the descriptor and lock.
+- Terminal success plus missing/mismatched authoritative resource -> recovery
+  pending error; preserve the descriptor and lock.
+- Terminal failed/interrupted/cancelled plus valid post-failure resource state ->
+  clear the exact descriptor and show the terminal error evidence.
+- Malformed browser storage -> visible storage error and fail-closed lock; do
+  not delete the corrupt evidence automatically.
+- Completion called with another `clientRequestId` -> storage error; do not
+  remove either request identity.
+- Stored runtime lookup returns `404 runtime_session_missing` with no committed
+  or failed reset evidence -> create a fresh session pinned to the recovered
+  draft, then replace the stored pointer.
+- The same error code arrives with a non-404 status, or the request fails with a
+  timeout, network error, 5xx, response parsing/codec error, corrupt/version
+  recovery code, pending operation, committed reset, or reset terminal error ->
+  do not create a session; preserve the evidence and fail closed.
+
+### 5. Good/Base/Bad Cases
+
+- Good: command POST times out, outcome moves from unknown to running to
+  succeeded, the current draft matches, and only then does Studio unlock.
+- Good: refresh during AI apply reloads the pending descriptor, verifies the
+  edit run and current draft, and restores both thread and canvas state.
+- Base: a direct successful response updates the authoritative controller state
+  and completes the matching descriptor once.
+- Good: Studio returns from an isolated database to the main database, receives
+  an explicit missing-session 404 for the old pointer, creates one observable
+  replacement session, and preserves the draft sequence and document hash.
+- Bad: clear `pending-operation-v1` in a generic `catch` because the server did
+  not answer before the deadline.
+- Bad: observe a new draft or job while the operation outcome is still running
+  and infer terminal success from that resource alone.
+- Bad: wipe the last loaded prototype when reconciliation cannot reach the
+  backend.
+- Bad: treat any `runtime_session_missing` code as sufficient without checking
+  HTTP status or reset ownership; a drifted 5xx response can then create a
+  duplicate session and hide an infrastructure failure.
+
+### 6. Tests Required
+
+- Unit: exact operation re-entry reuses one request UUID; a competing mutation
+  is refused.
+- Unit: unknown and running outcomes precede terminal success; poll exhaustion
+  leaves the descriptor and controller lock intact.
+- Unit: corrupt pending storage remains stored and produces a fail-closed lock.
+- API parser: reject unknown/missing fields, identity drift, inconsistent
+  terminal/status pairs, invalid lifecycle timestamps, and invalid evidence
+  hashes.
+- Controller/source contracts: Studio, AI send/apply/reject, generation
+  start/confirm/accept/delete, runtime, publish, undo/redo, and command batches
+  all use the shared pending-operation recovery path.
+- Browser: reload during a pending mutation preserves visible data and prevents
+  a second mutation until terminal outcome plus resource reconciliation.
+- Unit: the stale-session classifier accepts only 404 plus
+  `runtime_session_missing`; 5xx with the same code, network errors, committed
+  reset evidence, and reset outcome errors all return false.
+- Browser/store: seed a pointer absent from the active database, reload Studio,
+  and assert one succeeded `create_runtime_session` operation with contiguous
+  events `[0,1,2]`, a new active session pinned to the original document hash,
+  unchanged draft sequence/hash, no visible missing-session error, and an
+  unlocked canvas.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+try {
+  await applyMutation();
+} catch (error) {
+  localStorage.removeItem(pendingKey);
+  setSaving(false);
+  setDraft(null);
+}
+```
+
+Correct:
+
+```ts
+const descriptor = beginStructuredPrototypePendingOperation(projectId, input);
+try {
+  const result = await applyMutation(descriptor.clientRequestId);
+  await acceptAuthoritativeResult(result);
+  finishStructuredPrototypePendingOperation(projectId, descriptor.clientRequestId);
+} catch {
+  await reconcilePendingStudioOperation(descriptor);
+}
+```
+
+Wrong stored-session recovery:
+
+```ts
+if (error.code === "runtime_session_missing") {
+  localStorage.removeItem(runtimePointerKey);
+  return createRuntime(draft);
+}
+```
+
+Correct stored-session recovery:
+
+```ts
+if (
+  shouldRecreateMissingStoredRuntimeSession(error, {
+    hasCommittedReset: committedReset !== null,
+    hasResetOutcomeError: resetOutcomeError !== null,
+  })
+) {
+  return createRuntime(draft); // The decoded replacement writes the new pointer.
+}
+throw error;
+```
+
+---
+
+## Scenario: Flow Rule Persisted-Draft Runtime Recovery
+
+### 1. Scope / Trigger
+
+- Trigger: changing Flow rule create, replace, or remove behavior in
+  `StructuredPrototypeStudioPage`, where `applyCommands` persists a command
+  batch before rebuilding the pinned runtime session.
+- A runtime reset can fail after the draft head has already changed. Treating
+  the controller's `false` result as a failed rule save remounts the inspector
+  against stale input and can submit a duplicate rule.
+
+### 2. Signatures
+
+```ts
+type StructuredPrototypeFlowRuleMutationTarget =
+  | { kind: "ruleKey"; ruleKey: string }
+  | { kind: "ruleId"; ruleId: string }
+  | { kind: "clear" };
+
+interface StructuredPrototypeFlowRuleMutation {
+  baseDocumentHash: string;
+  target: StructuredPrototypeFlowRuleMutationTarget;
+  failureMessage: string;
+  requestSettled: boolean;
+}
+
+resolveStructuredPrototypeFlowRuleMutationOutcome(
+  mutation,
+  currentDocumentHash,
+  saving,
+) -> { kind: "pending" | "persisted" | "failed" };
+```
+
+### 3. Contracts
+
+- Capture `controller.draft.documentHash` and write the mutation state before
+  dispatching `addBehaviorRule`, `replaceBehaviorRule`, or
+  `removeBehaviorRule`.
+- A different current document hash is durable proof that this Flow command
+  persisted. It wins even while `saving=true`, `applyCommands` resolves
+  `false`, or `runtimeRecovery` is visible.
+- The request completion callback marks `requestSettled=true` only when the
+  exact mutation object is still current. A stale callback must not settle or
+  overwrite a later mutation.
+- On `persisted`, derive the next inspector selection from the canonical
+  document: rule key for creates, rule ID for replaces, and no selection for a
+  removal. Do not keep the pending connection draft mounted.
+- On `failed`, require both an unchanged document hash and a settled request
+  with `saving=false`. Preserve the Inspector draft and show its localized
+  failure message.
+- `runtimeRecovery` remains a document-wide mutation lock. This local outcome
+  state only disambiguates persistence; it does not permit another edit before
+  the runtime is recovered.
+
+### 4. Validation & Error Matrix
+
+- Command batch commits, then runtime reset fails -> `persisted`; select the
+  canonical rule or clear selection, show the recovery notice, and do not show
+  the rule-save failure.
+- Request settles with the original document hash and `saving=false` ->
+  `failed`; keep the Inspector's unsaved draft visible.
+- Request has not settled and the hash is unchanged -> `pending`; no success or
+  failure feedback is emitted.
+- A later mutation replaces the state before an earlier promise settles -> the
+  earlier callback is ignored.
+- Remove command changes the hash -> `persisted` with `{ kind: "clear" }`;
+  the deleted rule cannot remain selected.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a create command writes a rule, runtime reset needs manual recovery,
+  and the inspector selects the newly allocated rule exactly once.
+- Good: a replace command changes a navigate target; Flow counts and browser
+  runtime navigation use the same rule ID after recovery.
+- Base: an ordinary successful response changes the hash and selects the rule
+  after the controller finishes rebuilding runtime.
+- Bad: `if (!applied) setInteractionError(saveFailed)` after every command;
+  it misclassifies a persisted draft with a failed runtime reset.
+- Bad: select a rule immediately from the optimistic callback before the new
+  document hash is visible; it can remount the Inspector with stale state.
+
+### 6. Tests Required
+
+- Unit: `structuredPrototypeFlowRuleMutation.test.ts` proves hash change wins
+  while saving, unchanged settled hash fails, and an in-flight unchanged hash
+  remains pending.
+- Source/Flow test: Flow create, replace, and remove route through the shared
+  mutation state rather than an `onApplied` boolean branch.
+- Browser: create a Flow rule, change its navigation target, execute the
+  runtime button, delete it, undo, redo, and undo again. Assert the final Flow
+  projection and runtime event both reference the same rule ID.
+- Store/API: command journal records `addBehaviorRule`, `replaceBehaviorRule`,
+  `removeBehaviorRule`, undo, and redo as immutable batches with distinct
+  document hashes.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+void applyInspectorCommands(batch).then((applied) => {
+  if (applied) onApplied();
+  else setInteractionError(failureMessage);
+});
+```
+
+Correct:
+
+```ts
+setFlowRuleMutation(mutation);
+void applyInspectorCommands(batch).finally(() => {
+  setFlowRuleMutation((current) =>
+    current === mutation ? { ...current, requestSettled: true } : current,
+  );
+});
+// A changed canonical document hash resolves the mutation as persisted.
+```
+
+---
+
+## Scenario: Freeform Move Snapping Transaction
+
+### 1. Scope / Trigger
+
+- Trigger: changing direct-child movement, snapping, or smart-guide rendering for an explicit
+  structured-prototype `Freeform` container.
+- Snapping is transient editor projection. The command journal remains the only persistent
+  mutation authority.
+
+### 2. Signatures
+
+- Pure solver:
+  `resolveStructuredPrototypeFreeformMoveSnap(input) -> { position, delta, guides }`.
+- Pure overlay projection:
+  `projectStructuredPrototypeFreeformSnapGuides(input) -> projected guides`.
+- Gesture start frame freezes selection bounds, selected node IDs, visible direct siblings,
+  container dimensions, preview scale, and the Freeform's Canvas-local overlay frame.
+- Hook output keeps `draft` and `guideOverlay` separate.
+
+### 3. Contracts
+
+- Moving `left | center | right` and `top | middle | bottom` anchors may snap independently to
+  Freeform boundaries/centers or unselected visible direct siblings.
+- The threshold is exactly six client pixels converted through the preview scale frozen at
+  pointerdown. Candidate ordering is deterministic.
+- Do not read sibling DOM geometry in RAF callbacks. Collect same-parent targets once in document
+  order, require a live direct DOM child, and exclude the complete moving selection.
+- A rendered child may overflow its Freeform because intrinsic DOM content can exceed the typed
+  layout frame. Overflow or floating-point edge overshoot must not throw inside RAF; clamp the raw
+  move and reject only snap corrections whose resulting origin is invalid.
+- Editable preview scale/width changes do not use CSS interpolation. Pointer geometry must never
+  freeze an in-between transform scale.
+- Ctrl or Meta on the current pointer event bypasses snapping. RAF preview and pointerup exact-tail
+  commit call the same projection function with that event's modifier state.
+- Guides render only in the Canvas selection-controls layer during `preview`, span the owning
+  Freeform, remain one physical pixel at every zoom, and never enter business DOM.
+- Pointerup clears guides before the pending command, submits the existing one atomic position
+  batch, and preserves one Undo item. Cancel, blur, lost capture, Escape, failed apply,
+  acknowledge, and unmount clear guides without a command.
+
+### 4. Validation & Error Matrix
+
+- Invalid container dimensions, scale, coordinates, duplicate IDs, or non-positive measured
+  frames -> pure solver/projection error in focused tests; Canvas does not construct such input.
+- Hidden, runtime-hidden, detached, stale-parent, nested-descendant, or zero-size sibling -> omit
+  from the frozen target set.
+- Selection or sibling extends past the container -> movement remains available; only a snapped
+  origin outside the legal movement range is rejected.
+- Ctrl/Meta becomes active during a drag -> next preview and final pointerup use unsnapped geometry.
+- Gesture cancellation -> authoritative position restored, guide count zero, sequence unchanged.
+- Persistence failure -> pending projection clears through the existing visible error path; no
+  stale guide remains.
+
+### 5. Good/Base/Bad Cases
+
+- Good: two Text children share one Freeform; moving one within six client pixels shows sibling
+  X/Y guides while the document sequence is unchanged, then pointerup writes one sequence.
+- Base: no target is within threshold; movement uses the existing bounded raw projection and shows
+  no guide.
+- Good: Meta is held only on pointerup; the exact final event bypasses snapping even if the last RAF
+  preview was snapped.
+- Bad: query `getBoundingClientRect()` for every sibling on every pointermove.
+- Bad: attach guide elements inside the runnable prototype node or keep them visible while the
+  server command is pending.
+
+### 6. Tests Required
+
+- Pure solver: container and sibling edges/centers, single and group bounds, six-client-pixel zoom
+  invariance, deterministic ties, invalid snap origins, and overflowing rendered frames.
+- Pure guide projection: nested Canvas origin, both axes, one-device-pixel thickness, metadata, and
+  invalid inputs.
+- Source contract: frozen targets, shared RAF/pointerup solver, event-local Ctrl/Meta bypass, guide
+  cleanup paths, direct-parent filtering, and selection-controls-only rendering.
+- Browser: observe guides during preview with an unchanged sequence; pointerup increments once;
+  Undo restores position; Meta shows no guides; Escape clears guides and submits nothing; reload
+  has no new console error.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+window.addEventListener("pointermove", () => {
+  const siblings = readEverySiblingRect();
+  setDraft(snapWithLiveScale(siblings));
+});
+```
+
+Correct:
+
+```ts
+const gesture = freezeMoveStartFrame();
+const resolveProjection = (event: PointerEvent) =>
+  event.ctrlKey || event.metaKey
+    ? resolveRawMove(gesture, event)
+    : resolveStructuredPrototypeFreeformMoveSnap(projectRawMove(gesture, event));
+// RAF preview and pointerup exact tail both call resolveProjection().
+```
+
+---
+
+## Scenario: Freeform Equal-Spacing Move Snapping Transaction
+
+### 1. Scope / Trigger
+
+- Trigger: changing Freeform move candidate arbitration, distance/equal-spacing guides, or another
+  move snap system that competes with edge/center alignment.
+- Equal spacing is transient editor projection. It does not add a document command, persistence
+  field, or second move transaction.
+
+### 2. Signatures
+
+- Pure axis solver:
+  `resolveStructuredPrototypeFreeformSpacingSnap(input) -> spacing candidate | null`.
+- Combined move solver:
+  `resolveStructuredPrototypeFreeformMoveSnap(input) -> { position, delta, guides, spacingGuides }`.
+- Pure distance projection:
+  `projectStructuredPrototypeFreeformSpacingGuides(input) -> projected spacing segments`.
+- A spacing guide contains `axis`, `placement`, positive `gap`, two stable reference node IDs, and
+  exactly two segments with `start`, `end`, `crossCoordinate`, endpoint node IDs, and segment index.
+
+### 3. Contracts
+
+- A single selection or same-Freeform group union is one rigid moving frame. Together with two
+  visible, unselected direct siblings it may form `before`, `between`, or `after` equal spacing.
+  Group-internal offsets never participate in the spacing calculation.
+- All three frames must share a positive cross-axis intersection. Both represented gaps must be
+  strictly positive; zero gap remains edge alignment. A same-lane sibling occupying either gap or
+  the projected moving frame rejects the candidate.
+- Alignment and spacing candidates start from the same continuous, clamped raw frame. Each axis
+  chooses the smallest correction; edge/center alignment wins an exact tie. Spacing is never run
+  as a second transform on an already aligned position.
+- X and Y initially resolve independently. After their positions combine, every winning spacing
+  candidate is re-evaluated against the final frame so another axis's alignment cannot move the
+  selection out of the shared visual lane. An invalid spacing axis falls back to its original
+  alignment/raw result. If both spacing axes invalidate each other, retry the smaller-correction
+  axis alone, prefer X on an exact tie, then retry the alternate axis before falling back fully.
+- The threshold is exactly six client pixels converted through the pointerdown preview scale.
+  Geometry stays continuous before persistence. Relative `1e-9` arithmetic tails may admit a
+  threshold/envelope comparison, but the derived equal-spacing target remains authoritative:
+  `position = raw + correction` and `distance = abs(correction)`. Arithmetic-zero fixed/derived
+  gaps are rejected as edge alignment. After a true envelope normalization, both segment lengths
+  must still match the logical gap under the same local tolerance or the candidate is rejected.
+- Distance guides render only for the winning spacing candidate during move preview. Each gap gets
+  one line, two six-client-pixel end caps, stable participant metadata, and a numeric distance
+  label formatted to at most four decimals without changing geometry. Line and cap thickness
+  remain one physical pixel at every zoom.
+- Candidate ranking is separated from blocker validation. Only a candidate better than the current
+  validated winner performs a blocker query. Queries cache `blocked | clear` by exact axis, final
+  moving rectangle, shared lane, fixed corridor, and both segment intervals; reference IDs never
+  replace real candidate IDs, and different lanes must never share a cache entry.
+- Ctrl/Meta bypass returns no alignment or spacing guide. RAF preview and pointerup exact tail use
+  the same projection. Pointerup still calls the existing move callback once, so a grouped move is
+  one command batch and one Undo item.
+
+### 4. Validation & Error Matrix
+
+- Fewer than two eligible siblings, no positive shared lane, zero/negative gap, occupied corridor,
+  overlapping projected frame, or target outside the legal move envelope -> no spacing candidate;
+  retain alignment or raw movement.
+- Spacing correction farther than six client pixels -> reject. A correction that exceeds the
+  boundary only by relative `1e-9` -> normalize and accept; `6 + 1e-6` client pixels -> reject.
+- A cross-axis snap removes the final common lane -> discard that spacing guide and restore the
+  axis's alignment/raw result.
+- Both spacing axes invalidate each other -> retry the lower-distance axis alone; equal distance
+  retries X first; if it remains invalid, retry Y and then return alignment/raw.
+- A decimal arithmetic tail makes a fixed or derived gap effectively zero -> reject spacing and
+  retain edge alignment. A positive canonical `0.0001` gap -> preserve the target and project both
+  segments without throwing.
+- Multiple equal candidates -> order by correction distance, outer span, placement, gap, position,
+  and stable reference IDs; sibling input order cannot change the result.
+- Many candidates produce one identical blocker-query geometry -> scan siblings once and reuse the
+  exact result. A different shared-lane interval -> perform a distinct query.
+- Ctrl/Meta, Escape, pointer cancel, lost capture, blur, failed apply, acknowledgement, or unmount
+  -> clear both guide families; cancellation submits no command.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a card moves between two same-row cards; within six client pixels it lands at two equal
+  positive gaps and shows two distance segments while the document sequence stays unchanged.
+- Good: X spacing and Y alignment both win from one raw frame; the final lane is rechecked before
+  the X spacing guide is shown.
+- Base: only one sibling exists or no spacing target is near; the established edge/center/raw move
+  behavior is unchanged.
+- Bad: snap to an edge first and then run spacing against that already shifted result; this creates
+  a second correction and makes the guide disagree with pointer intent.
+- Bad: round the raw move before threshold comparison; fractional zoom can turn a true
+  `> 6 client px` correction into an accepted candidate and destroy half-pixel equal spacing.
+
+### 6. Tests Required
+
+- Pure spacing: `before | between | after` on both axes, single/group union, selected-ID exclusion,
+  shared-lane success/failure, fixed/target/projected blockers, off-lane blockers, envelope bounds,
+  input-order invariance, and deterministic ties.
+- Numeric boundary: `0.5 | 1 | 2 | 4` zoom, exact six-client-pixel acceptance, `6 + 1e-6`
+  rejection, fractional targets, and relative tail normalization at threshold/envelope boundaries.
+- Arbitration: spacing closer than alignment, alignment exact tie, X spacing plus Y alignment,
+  compatible X/Y spacing, final-lane invalidation after the other axis snaps, mutually invalid
+  X/Y candidates with smaller-distance and X-tie fallback, then full fallback.
+- Projection/UI: two same-axis segments keep order and metadata; lines/caps remain one physical
+  pixel; React keys include axis, placement, reference IDs, and segment index; positive tiny gaps
+  and continuous coordinates display at most four decimals; Resize supplies an explicit empty
+  spacing-guide collection.
+- Density/performance: 400 exact-overlap siblings, 400 unique full frames with one effective lane,
+  a shared blocker, shuffled input, and same-midpoint/different-lane cache isolation. Record the
+  100/200/400-node benchmark separately; do not use a flaky wall-clock unit-test assertion.
+- Transaction source/browser: pointerup passes the exact final projection to one move callback;
+  group union delta maps to every group item; browser sequence stays unchanged during preview,
+  increments once on commit, and one Undo restores all items.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+const aligned = resolveAlignment(raw);
+const spaced = resolveSpacing({ ...input, movingBounds: aligned });
+return roundPosition(spaced.position);
+```
+
+Correct:
+
+```ts
+const alignment = collectAlignmentCandidate(raw);
+const spacing = collectSpacingCandidate(raw);
+const projected = chooseNearestCandidate(alignment, spacing); // alignment wins a tie
+return revalidateSpacingPlans(projected, {
+  mutualFallback: "smaller-correction-then-x-tie",
+  blockerCacheKey: "axis+final-frame+lane+corridors",
+});
+```
+
+---
+
+## Scenario: Freeform Resize Snapping Transaction
+
+### 1. Scope / Trigger
+
+- Trigger: changing resize geometry, snapping, modifiers, group projection, or smart-guide
+  rendering for positioned direct children of a structured-prototype `Freeform` container.
+- Resize snapping is a transient editor projection. The accepted document and command journal
+  remain the only persistent mutation authority.
+
+### 2. Signatures
+
+- Pure snap solver:
+  `resolveStructuredPrototypeFreeformResizeSnap(input) -> { bounds, guides }`.
+- Shared bounded geometry:
+  `resolveStructuredPrototypeResizeBounds(input) -> { x, y, width, height }`.
+- Group projection:
+  `projectStructuredPrototypeGroupItemsToBounds(items, bounds) -> projected items`.
+- Gesture state is `idle -> armed -> preview -> pending -> idle`; pointerdown freezes selection
+  bounds, selected node IDs, visible direct siblings, container dimensions, minimum size,
+  preview scale, and the Freeform's Canvas-local guide frame.
+
+### 3. Contracts
+
+- All eight handles snap only their active pointer-side edges. A corner may snap independently on
+  both axes; a side handle never invents a guide for its derived axis.
+- Candidate targets are the Freeform's `left | center | right` and `top | middle | bottom` anchors
+  plus the same anchors of visible, unselected direct siblings. Ordering and tie-breaking are
+  deterministic and independent of sibling input order.
+- The threshold is exactly six client pixels converted with the preview scale frozen at
+  pointerdown. Fractional target coordinates remain continuous until canonical command encoding.
+- Shift preserves the starting aspect ratio. For a corner, the closest compatible axis drives the
+  ratio and the other axis receives a guide only when its derived edge exactly matches a target.
+- Alt keeps the center fixed. Shift+Alt combines both contracts. Ctrl or Meta from the current
+  pointer event bypasses snapping without disabling bounded resize geometry.
+- Single and grouped selections use the same snapped selection bounds. Group children are then
+  proportionally reprojected in stable caller order; no child command is committed early.
+- A pre-existing right/bottom overflow frame remains editable: zero movement cannot jump it,
+  resize may recover it toward the container, and no projection may worsen the existing envelope.
+- Every projected `x`, `y`, `width`, and `height` must already fit the canonical Freeform field
+  range `0..4096`; preview must never rely on command encoding to reject or repair geometry.
+  Group minimum scale includes every projected child's coordinate cap, and group maximum scale is
+  derived from every child dimension. The transient group union may exceed `4096` because it is not
+  persisted; limiting the union itself would corrupt otherwise valid multi-node layouts.
+- Repeated center/aspect arithmetic may create machine-precision tails at a legal boundary. Values
+  within relative `1e-9` of `0`, `4096`, or a frozen start value normalize to that boundary before
+  preview; meaningful out-of-range values still fail fast. Resize-only child projection owns this
+  normalization, while Move/Nudge preserve their raw measured dimensions.
+- RAF preview and pointerup exact tail call the same projection function with the current event's
+  modifiers. Guides render only in the Canvas selection-controls layer during `preview`, remain
+  one physical pixel at every zoom, and clear before `pending`.
+- Pointerup persists one atomic frame/position batch for the single node or complete group and
+  creates one Undo item. Cancel, blur, lost capture, Escape, rejected commit, failed apply,
+  acknowledgement, and unmount clear draft guides without a partial command.
+
+### 4. Validation & Error Matrix
+
+- Empty or duplicate selected IDs; duplicate sibling IDs; invalid direction; non-finite values;
+  non-positive scale, dimensions, minimum size, or container dimensions -> fail fast in the pure
+  solver; Canvas must not construct malformed frozen input.
+- Hidden, runtime-hidden, detached, stale-parent, nested-descendant, zero-size, or selected sibling
+  -> omit from the frozen target set.
+- Candidate violates minimum size, fixed-center envelope, aspect ratio, or active-edge equality ->
+  reject that candidate and retain the legal bounded raw projection.
+- Existing frame overflows right/bottom -> use the starting overflow edge as the maximum envelope;
+  allow recovery but reject a result that extends farther.
+- Union bounds fit `0..4096` but a proportionally projected child origin would exceed `4096` ->
+  raise that axis's minimum group scale until every child field is directly canonical.
+- Group union width/height exceeds `4096` while every child field is legal -> preserve the union and
+  apply child-derived maximum scale; do not clamp the transient union to a document-field limit.
+- Derived aspect/center value differs from a legal boundary only within relative `1e-9` -> normalize
+  before coordinate clamping; a larger difference remains an error.
+- Ctrl/Meta changes after the last RAF -> pointerup recomputes unsnapped exact-tail geometry from
+  that event and commits no stale preview guide.
+- Gesture cancellation or persistence failure -> sequence remains unchanged, authoritative bounds
+  return, guide count becomes zero, and the existing visible error path owns failure reporting.
+
+### 5. Good/Base/Bad Cases
+
+- Good: resize the east edge within six client pixels of a sibling center; preview shows one X
+  guide without changing the sequence, then pointerup writes exactly one batch.
+- Good: resize a two-node group from northwest with Shift+Alt; snap shared bounds first, preserve
+  the shared ratio and center, then proportionally project both children into one Undo unit.
+- Base: no compatible target is within threshold; bounded raw resize remains active with no guide.
+- Good: a frame already extends past the right edge; dragging inward can snap it to the container,
+  while zero or outward movement cannot make overflow worse.
+- Bad: snap every selected child independently, which distorts group spacing and produces
+  conflicting guides.
+- Bad: reuse the last RAF result on pointerup, because late Shift, Alt, Ctrl, or Meta changes would
+  commit geometry the pointer event did not request.
+
+### 6. Tests Required
+
+- Pure solver: all eight handles; container/sibling edges and centers; exact six-client-pixel zoom
+  invariance; deterministic ties; continuous coordinates; malformed frozen inputs.
+- Modifier matrix: Shift, Alt, Shift+Alt, Ctrl/Meta bypass, side-handle derived-axis exclusion, and
+  corner aspect-driver selection.
+- Bounds and groups: minimum size, existing overflow recovery/non-worsening, shared group snap, and
+  proportional child projection in stable order, including west/north/center transforms at the
+  canonical `4096` field boundary.
+- Boundary stress: no-op and nonzero constrained Shift/Alt cases, a legal group union wider than
+  `4096`, and resize-only proportional tails at `4096`; Move/Nudge raw projection stays unchanged.
+- Source contract: frozen start frame, one shared RAF/pointerup projection, event-local modifiers,
+  `idle/armed/preview/pending` phases, one batch, and cleanup on every terminal path.
+- Browser: sequence unchanged during preview; resize guides are visible and one physical pixel at
+  multiple zooms; pointerup increments once; Undo restores every frame; Meta shows no guide;
+  Escape submits nothing; desktop/mobile reloads add no console error.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+const preview = snapResize(readLiveSiblingRects(), lastPointerMove);
+setDraft(preview);
+// Reuse stale RAF geometry and persist each group child separately.
+void Promise.all(preview.children.map(updateNodeFrame));
+```
+
+Correct:
+
+```ts
+const gesture = freezeResizeStartFrame();
+const resolveProjection = (event: PointerEvent) =>
+  resolveStructuredPrototypeFreeformResizeSnap({
+    ...gesture,
+    requestedCanvasDelta: toCanvasDelta(gesture, event),
+    lockAspectRatio: event.shiftKey,
+    resizeFromCenter: event.altKey,
+    bypassSnapping: event.ctrlKey || event.metaKey,
+  });
+// RAF preview and pointerup exact tail both call resolveProjection(); pointerup persists one batch.
+```

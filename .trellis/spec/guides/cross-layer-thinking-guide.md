@@ -83,6 +83,41 @@ After implementation:
 - [ ] Verified error handling at each boundary
 - [ ] Checked data survives round-trip
 
+### Checklist: Continuous Editor Geometry to Persisted Fields
+
+- [ ] Distinguish transient control/aggregate geometry from persisted entity fields. A selection
+  union may legally exceed one field's limit even when every member is valid.
+- [ ] Put explicit minimum and maximum constraints on the shared projection input; do not assume a
+  container bound is also the persistence-format bound.
+- [ ] Define the numeric handoff from continuous preview values to canonical storage precision,
+  including a tolerance smaller than half the smallest persisted unit.
+- [ ] Normalize machine-precision tails before preview and command construction, but reject any
+      meaningful out-of-range value. Do not rely on serialization to repair editor state.
+- [ ] When multiple snap systems compete, generate every candidate from the same continuous raw
+      frame and define one deterministic priority. Never feed one snap result into another solver.
+- [ ] For independent X/Y snapping, recheck any cross-axis lane/collision requirement against the
+      combined final frame. A candidate that was valid only before the other axis moved must fall
+      back without leaving a stale guide.
+- [ ] If X/Y candidates invalidate each other only after combination, define a stable single-axis
+      retry order (smaller correction, explicit tie-break, alternate, then raw/alignment) instead
+      of dropping both opportunistically.
+- [ ] Keep local spacing arithmetic separate from absolute canvas-coordinate tolerance. A logical
+      zero gap must remain alignment, and the winning target, recorded gap, rendered segments, and
+      committed correction must satisfy one executable invariant.
+- [ ] Benchmark adversarial editor geometry, not only normal distributions. Repeated candidate
+      queries inside RAF work need exact semantic cache keys or a spatial index; avoid a hidden
+      pair-enumeration times full-scan path.
+- [ ] Test every handle/modifier combination with no-op, constrained nonzero, overflow-recovery,
+  aggregate-wider-than-field, and deterministic high-volume boundary cases.
+
+**Real-world example**: Structured-prototype Resize initially limited the transient group union to
+the document's per-node `4096` field cap. That rejected valid groups whose children were each
+canonical but whose union was wider than one node field. After separating per-child size limits,
+aspect/center arithmetic still produced values such as `4096.000000000001`, so preview succeeded
+but command encoding failed. The stable contract derives group limits from every child, permits a
+wider transient union, normalizes only relative-`1e-9` tails in Resize projection, and leaves
+Move/Nudge measured geometry unchanged.
+
 ---
 
 ## Structured Model Output and Durable Live Workflows

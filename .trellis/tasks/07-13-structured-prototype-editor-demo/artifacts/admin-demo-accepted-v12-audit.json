@@ -1,0 +1,87 @@
+{
+  "contractVersion": 1,
+  "projectId": "09cca906-b5e1-4601-aa7a-14fb58f9f06b",
+  "generationJob": {
+    "id": "30c10ca1-b31f-5284-8aa5-ae7f7c7e5518",
+    "status": "accepted",
+    "operationId": "22e1ab42-5bc0-5557-a6b5-d03df3c9fc80",
+    "createdAt": "2026-07-15T01:57:57.445973+00:00",
+    "acceptedAt": "2026-07-15T02:05:54.515369+00:00",
+    "requestManifestObjectHash": "sha256:2c37aac59f0b0ea7ab99162cf9da62604f270a6ef6e01bc9fafeacd5a08c6027",
+    "contextManifestObjectHash": "sha256:ec23c7a9041f5e2f30af815da6aa49783a550fb3a5e2f010f9dcffa9aeab8da1",
+    "sourceSnapshotObjectHash": "sha256:73267b651bb11c7bbf694f0ccd65cfc5083398cb70c6f3ae04041f0302dbe879",
+    "sourceFingerprint": "sha256:74f3c7ea616eb0282389cade9641a5edb61834089da7f969da9cdf3965aa7c35",
+    "blueprintObjectHash": "sha256:d4d8d932e2ec7067b71dde95ea001954f5c7eea96013babbd4c80111f8d46a55",
+    "candidateObjectHash": "sha256:d98d7f9f9f4e6b36f060ba92db15af38330b1aa9796e148aeaca5ba8e75b2e90",
+    "previewOutputHash": "sha256:1b7f831bbf63ca170f576be31235e6280d26f550e87e57377816ec2d52cda650",
+    "previewOutputManifestHash": "sha256:f6cdc532c2bc293220d748bcebf91bd9047381c7d5da492c6b5d0cee875072ac",
+    "replayManifestObjectHash": "sha256:8fcd6e34dd86596838044c4b6855f28b663b272bbaa69dd45dffab1f21489156"
+  },
+  "candidate": {
+    "file": "admin-demo-accepted-v12-candidate-document.json",
+    "canonicalSha256": "d98d7f9f9f4e6b36f060ba92db15af38330b1aa9796e148aeaca5ba8e75b2e90",
+    "documentId": "48ac2728-c503-5a21-9915-1588512a17a0",
+    "pages": [
+      { "key": "dashboard", "route": "/dashboard", "rootChildCount": 3 },
+      { "key": "users", "route": "/users", "rootChildCount": 3 },
+      { "key": "orders", "route": "/orders", "rootChildCount": 2 }
+    ]
+  },
+  "claudeExecutions": [
+    {
+      "kind": "blueprint",
+      "itemKey": "blueprint",
+      "taskId": "6b537f75-9a83-51fe-94e5-cfc120bf3d49",
+      "executionProcessId": "674c34e7-6c15-44f5-8aa5-dfe7ebda39c0",
+      "role": "prototype_ui_engineer",
+      "executor": "claude",
+      "outputObjectHash": "sha256:d4d8d932e2ec7067b71dde95ea001954f5c7eea96013babbd4c80111f8d46a55"
+    },
+    {
+      "kind": "foundation",
+      "itemKey": "foundation",
+      "taskId": "01402b34-8256-5796-bee5-4c79be24017d",
+      "executionProcessId": "f1bc7d3e-386e-48af-a141-b1a614af117d",
+      "role": "prototype_ui_engineer",
+      "executor": "claude",
+      "outputObjectHash": "sha256:a95ace8aff6eaff937644761a7465f217af64d1deb08126ff129888652aa8941"
+    },
+    {
+      "kind": "page",
+      "itemKey": "dashboard",
+      "taskId": "b664394c-24a4-50b3-960f-559d849aa844",
+      "executionProcessId": "abc3a1aa-c7ff-4282-b45e-21372e2f4d21",
+      "role": "prototype_ui_engineer",
+      "executor": "claude",
+      "outputObjectHash": "sha256:7684df992252a898b28ea1209eaa057b96df12595cb6bd2f94d1b5b3d8d2a069"
+    },
+    {
+      "kind": "page",
+      "itemKey": "users",
+      "taskId": "90a48949-2da6-5570-a8d2-aadc35f7ef7d",
+      "executionProcessId": "22f44b89-6bc0-4e3b-84ac-df0913516daa",
+      "role": "prototype_ui_engineer",
+      "executor": "claude",
+      "outputObjectHash": "sha256:715dac35ee66fd8340b6699b717b7ad397e571c57259c6266be40928c5e795b0"
+    },
+    {
+      "kind": "page",
+      "itemKey": "orders",
+      "taskId": "10581f28-40ff-55dc-b8c5-1be5fd69f8a4",
+      "executionProcessId": "49c2cbb8-3110-41f3-8f99-86f3dcc9e2cd",
+      "role": "prototype_ui_engineer",
+      "executor": "claude",
+      "outputObjectHash": "sha256:5ef282ba512fbb81b2a15cf66d0e5702c6526a78e7ecc6ca08434a3f7210d853"
+    }
+  ],
+  "acceptedDraft": {
+    "draftId": "832b7a81-8207-53bb-b5c4-3b04ea574fc5",
+    "initialCheckpointId": "17c19961-b52d-5649-8372-f687bdae3f63",
+    "initialSequenceNo": 0,
+    "initialDocumentHash": "sha256:d98d7f9f9f4e6b36f060ba92db15af38330b1aa9796e148aeaca5ba8e75b2e90"
+  },
+  "supersedesForAcceptance": {
+    "file": "admin-demo-v11-ec07ae12-candidate-document.json",
+    "reason": "The older failed evidence has an empty dashboard root and remains preserved as a regression artifact."
+  }
+}
