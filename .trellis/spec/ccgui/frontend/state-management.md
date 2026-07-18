@@ -1261,3 +1261,140 @@ const resolveProjection = (event: PointerEvent) =>
   });
 // RAF preview and pointerup exact tail both call resolveProjection(); pointerup persists one batch.
 ```
+
+---
+
+## Scenario: Faithful Structured Prototype Drag Mirrors
+
+### 1. Scope / Trigger
+
+- Trigger: changing structured-prototype node dragging, dnd-kit overlay rendering, preview zoom,
+  palette materialization, hover reparenting, or drag cancellation/commit cleanup.
+- The drag mirror is transient editor presentation. It must not introduce a document command,
+  persistence field, runtime event, or second mutation path.
+
+### 2. Signatures
+
+- Capture:
+  `captureStructuredPrototypeDragMirror(source: HTMLElement) -> StructuredPrototypeDragMirrorSnapshot | null`.
+- Geometry:
+  `resolveStructuredPrototypeDragMirrorGeometry({ clientWidth, clientHeight, contentWidth, contentHeight }) -> geometry | null`.
+- Root isolation:
+  `resolveStructuredPrototypeDragMirrorRootStyle(contentWidth, contentHeight) -> pixel-frozen style | null`.
+- Mounted scroll restoration:
+  `restoreStructuredPrototypeDragMirrorScrollState(scrollStates) -> void`.
+- Sortable data exposes
+  `captureDragMirror: () -> StructuredPrototypeDragMirrorSnapshot | null` for existing nodes.
+- Existing-node view:
+  `<StructuredPrototypeDragMirrorView snapshot={snapshot} />`.
+- Palette view:
+  `<StructuredPrototypeNodeDragOverlay kind="palette" node={materializedNode} previewScale={scale} />`.
+
+### 3. Contracts
+
+- Capture the registered business-node DOM synchronously in `onDragStart`, before `isDragging`
+  opacity or hover projection can move/remount it. A later RAF capture is not equivalent.
+- The snapshot freezes the source's client-pixel width/height, unscaled `offsetWidth/offsetHeight`,
+  X/Y scale, text/form/table state, font family, color scheme, and every inherited
+  `--prototype-*` custom property needed outside the scaled preview subtree.
+- Before mounting, replace parent-relative root layout with the captured pixel border box:
+  `position: relative`, zero effective inset/margin, pixel `width/height`, unconstrained min/max,
+  neutral flex/grid item properties, and no transform longhands or transition. Preserve the root
+  as a positioning context for its absolutely positioned descendants; `position: static` is not
+  equivalent.
+- Copy live Input `value/checked/indeterminate`, Textarea value, Select option selection, and every
+  source element's scroll offsets before sanitization. Restore scroll offsets only after the clone
+  is mounted, because detached elements may clamp scrolling to zero.
+- Sanitize the clone before mounting it: remove drop-intent elements, duplicate IDs and node/container
+  identity attributes, label/reference ownership, autofocus/contenteditable behavior, and tab stops.
+  The clone is `aria-hidden`, inert, pointer-inert, fully opaque, and has no transient transform or
+  transition of its own.
+- Mount the clone in a client-sized host, scale its content-sized inner host from the top-left, and
+  remove the cloned element on cancel, successful drop, snapshot replacement, or unmount.
+- The live source becomes transparent while retaining layout space. Selection/drop controls remain
+  in the editor controls layer so the source location is still legible without competing with the
+  mirror.
+- Palette dragging uses the same materialized transient node that hover projection inserts. Render
+  the real leaf/container presentation recursively with document theme variables and the frozen
+  preview scale; never replace it with a component type/name card or cap child/table content.
+- Page-rail sorting remains a compact page title/route preview. It represents navigation ordering,
+  not a business object on the prototype canvas.
+- Keep the pure DOM helper and React view on distinct module stems
+  (`structuredPrototypeDragMirror.ts` and `StructuredPrototypeDragMirrorView.tsx`). Next module
+  resolution on case-insensitive filesystems must not choose between `.ts` and `.tsx` siblings with
+  the same stem.
+
+### 4. Validation & Error Matrix
+
+- Zero, negative, NaN, or infinite client/content dimension -> return `null`; do not mount a
+  malformed mirror.
+- Source/clone tree or form-control shape mismatch -> return `null`; partial live-state copies are
+  not valid snapshots.
+- Missing registered source, unavailable capture callback, invalid geometry, or live-state copy
+  mismatch -> refuse the gesture before opening an interaction session and show the drag-preview
+  failure message. Existing nodes never fall back to an independently reconstructed React overlay.
+- Hover reparent/remount changes the live source bounds -> keep the captured mirror geometry stable
+  for the gesture.
+- Escape, pointer cancellation, invalid drop, or successful commit -> clear both the node snapshot
+  and palette transient node; no cloned identity or focusable surface remains.
+- Palette Form without a selected runtime form definition -> preserve the existing fail-closed
+  insertion refusal; do not fabricate a preview-only form.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a Button dragged at Fit, 75%, 100%, or 200% keeps the captured client bounds, label, colors,
+  and theme while the source is transparent.
+- Good: a four-row Table mirror contains all four rows while hover projection moves the source to a
+  narrower parent.
+- Base: page sorting still shows its compact title and route overlay.
+- Bad: reconstruct a fixed-width card headed `Button / name`; its geometry and content are not the
+  object being moved.
+- Bad: render `children.slice(0, 6)` or `rows.slice(0, 3)` in the overlay; the preview silently lies
+  about the dragged object.
+
+### 6. Tests Required
+
+- Pure geometry tests cover `0.5 | 0.75 | 1 | 2` scale plus zero, negative, NaN, and infinite
+  dimensions. Root-isolation tests prove pixel width/height plus neutral Freeform, flex, and grid
+  item properties.
+- Source contracts prove synchronous capture, `opacity-0`, clone sanitization, prototype custom
+  properties, exact mount scale, cleanup, palette materialization, full recursion, and the absence
+  of generic card/truncation code.
+- Browser acceptance compares source/mirror client bounds and theme at Fit, 75%, 100%, and 200%;
+  verifies full Table content during hover reparenting; checks palette Button appearance; and proves
+  Escape removes the overlay and restores source opacity.
+- Existing move projection, nested drop, command, Undo, and recovery tests remain green because the
+  mirror does not change persisted state.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```tsx
+<DragOverlay>
+  <div className="min-w-44 rounded-lg shadow-2xl">
+    {node.type} / {node.name}
+    {node.children?.slice(0, 6).map(renderApproximation)}
+  </div>
+</DragOverlay>
+```
+
+Correct:
+
+```tsx
+const snapshot =
+  readStructuredPrototypeNodeDragMirrorCapture(event.active.data.current)?.() ?? null;
+if (snapshot === null) {
+  setInteractionError(t("prototype.structured.canvas.dragPreviewFailed"));
+  return;
+}
+const sessionId = beginInteraction(/* move request */);
+if (sessionId === null) return;
+setActiveNodeDragMirror(snapshot);
+
+<DragOverlay adjustScale={false}>
+  {activeDrag?.kind === "node" && activeNodeDragMirror !== null ? (
+    <StructuredPrototypeDragMirrorView snapshot={activeNodeDragMirror} />
+  ) : null}
+</DragOverlay>
+```
