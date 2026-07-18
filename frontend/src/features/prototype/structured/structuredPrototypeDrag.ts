@@ -5,6 +5,7 @@ import {
   type StructuredPrototypeContainerNode,
 } from "./structuredPrototypeNodes";
 import type { StructuredPrototypePaletteType } from "./StructuredPrototypePalette";
+import type { StructuredPrototypeDragMirrorCapture } from "./structuredPrototypeDragMirror";
 import type {
   NewStructuredPrototypeNode,
   StructuredPrototypeDocument,
@@ -155,6 +156,14 @@ export function readStructuredPrototypeNodeDragData(
     parentId: value["parentId"],
     index: value["index"],
   };
+}
+
+export function readStructuredPrototypeNodeDragMirrorCapture(
+  value: unknown,
+): StructuredPrototypeDragMirrorCapture | null {
+  if (!isRecord(value) || value["kind"] !== "node") return null;
+  const capture = value["captureDragMirror"];
+  return typeof capture === "function" ? (capture as StructuredPrototypeDragMirrorCapture) : null;
 }
 
 export function readStructuredPrototypePageDragData(

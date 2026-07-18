@@ -2197,6 +2197,7 @@ const zhCN = {
     "仅支持整体移动同一个自由画布中的直接子组件。",
   "prototype.structured.canvas.freeformGroupArrangeFailed": "多选组件排列失败，请重试。",
   "prototype.structured.canvas.commitFailed": "布局变更保存失败，请重试。",
+  "prototype.structured.canvas.dragPreviewFailed": "无法开始拖动：组件预览捕获失败，请重试。",
   "prototype.structured.canvas.empty": "将组件拖到这里",
   "prototype.structured.canvas.invalidDrop": "该组件不能移动到这个位置",
   "prototype.structured.interaction.label": "画布交互模式",

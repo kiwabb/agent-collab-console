@@ -113,6 +113,8 @@ import {
   type StructuredPrototypeNodeSelection,
   type StructuredPrototypeSelectionRect,
 } from "./structuredPrototypeSelection";
+import { captureStructuredPrototypeDragMirror } from "./structuredPrototypeDragMirror";
+import { resolveStructuredPrototypeTheme } from "./structuredPrototypeTheme";
 import {
   useStructuredPrototypeFreeformMove,
   type StructuredPrototypeFreeformMoveDraft,
@@ -595,75 +597,43 @@ function RuntimeTable({
   );
 }
 
-function NodeRenderer({
+type StructuredPrototypeLeafNode = Exclude<
+  StructuredPrototypeNode,
+  StructuredPrototypeContainerNode
+>;
+
+interface LeafNodeRendererProps {
+  document: StructuredPrototypeDocument;
+  node: StructuredPrototypeLeafNode;
+  runtimeState: PrototypeRuntimeState | null;
+  viewModel: RuntimeViewModel | null;
+  editing: boolean;
+  formValues: Record<string, string>;
+  disabled: boolean;
+  onSelect: (nodeId: string, intent: StructuredPrototypeNodeSelectionIntent) => void;
+  onFormValue: (nodeId: string, value: string) => void;
+  onNodeActivate: (nodeId: string, event: "click" | "submit") => void;
+  onRowActivate: (nodeId: string, entity: RuntimeEntity) => void;
+}
+
+function LeafNodeRenderer({
   document,
   node,
-  depth,
-  ancestorNodeIds,
   runtimeState,
   viewModel,
-  viewportWidth,
-  previewScale,
   editing,
-  selection,
   formValues,
   disabled,
-  dragDisabled,
-  resizeDisabled,
-  gridSnappingEnabled,
-  marqueeDisabled,
   onSelect,
-  onSelectionChange,
-  onFreeformGroupArrange,
-  onResizeNode,
   onFormValue,
   onNodeActivate,
   onRowActivate,
-  freeformMoveDraft,
-  resizeDraft,
-  registerNodeElement,
-  registerSortableControls,
-}: NodeRendererProps) {
-  if (node.visibility === "hidden" || !runtimeNodeVisible(viewModel, node.id)) return null;
+}: LeafNodeRendererProps) {
   const select = (event: React.MouseEvent) => {
     if (!editing) return;
     event.stopPropagation();
     onSelect(node.id, event.shiftKey ? "toggle" : "replace");
   };
-  if (isStructuredPrototypeContainerNode(node)) {
-    return (
-      <SortableCanvasContainer
-        document={document}
-        node={node}
-        depth={depth}
-        ancestorNodeIds={ancestorNodeIds}
-        runtimeState={runtimeState}
-        viewModel={viewModel}
-        viewportWidth={viewportWidth}
-        previewScale={previewScale}
-        editing={editing}
-        selection={selection}
-        formValues={formValues}
-        disabled={disabled}
-        dragDisabled={dragDisabled}
-        resizeDisabled={resizeDisabled}
-        gridSnappingEnabled={gridSnappingEnabled}
-        marqueeDisabled={marqueeDisabled}
-        onSelect={onSelect}
-        onSelectionChange={onSelectionChange}
-        onFreeformGroupArrange={onFreeformGroupArrange}
-        onResizeNode={onResizeNode}
-        onFormValue={onFormValue}
-        onNodeActivate={onNodeActivate}
-        onRowActivate={onRowActivate}
-        freeformMoveDraft={freeformMoveDraft}
-        resizeDraft={resizeDraft}
-        registerNodeElement={registerNodeElement}
-        registerSortableControls={registerSortableControls}
-        isRoot={false}
-      />
-    );
-  }
   if (node.type === "Text") {
     const text = runtimeNodeText(viewModel, node.id, node.content);
     if (node.semantic === "heading") {
@@ -746,6 +716,87 @@ function NodeRenderer({
         editing={editing}
       />
     </div>
+  );
+}
+
+function NodeRenderer({
+  document,
+  node,
+  depth,
+  ancestorNodeIds,
+  runtimeState,
+  viewModel,
+  viewportWidth,
+  previewScale,
+  editing,
+  selection,
+  formValues,
+  disabled,
+  dragDisabled,
+  resizeDisabled,
+  gridSnappingEnabled,
+  marqueeDisabled,
+  onSelect,
+  onSelectionChange,
+  onFreeformGroupArrange,
+  onResizeNode,
+  onFormValue,
+  onNodeActivate,
+  onRowActivate,
+  freeformMoveDraft,
+  resizeDraft,
+  registerNodeElement,
+  registerSortableControls,
+}: NodeRendererProps) {
+  if (node.visibility === "hidden" || !runtimeNodeVisible(viewModel, node.id)) return null;
+  if (isStructuredPrototypeContainerNode(node)) {
+    return (
+      <SortableCanvasContainer
+        document={document}
+        node={node}
+        depth={depth}
+        ancestorNodeIds={ancestorNodeIds}
+        runtimeState={runtimeState}
+        viewModel={viewModel}
+        viewportWidth={viewportWidth}
+        previewScale={previewScale}
+        editing={editing}
+        selection={selection}
+        formValues={formValues}
+        disabled={disabled}
+        dragDisabled={dragDisabled}
+        resizeDisabled={resizeDisabled}
+        gridSnappingEnabled={gridSnappingEnabled}
+        marqueeDisabled={marqueeDisabled}
+        onSelect={onSelect}
+        onSelectionChange={onSelectionChange}
+        onFreeformGroupArrange={onFreeformGroupArrange}
+        onResizeNode={onResizeNode}
+        onFormValue={onFormValue}
+        onNodeActivate={onNodeActivate}
+        onRowActivate={onRowActivate}
+        freeformMoveDraft={freeformMoveDraft}
+        resizeDraft={resizeDraft}
+        registerNodeElement={registerNodeElement}
+        registerSortableControls={registerSortableControls}
+        isRoot={false}
+      />
+    );
+  }
+  return (
+    <LeafNodeRenderer
+      document={document}
+      node={node}
+      runtimeState={runtimeState}
+      viewModel={viewModel}
+      editing={editing}
+      formValues={formValues}
+      disabled={disabled}
+      onSelect={onSelect}
+      onFormValue={onFormValue}
+      onNodeActivate={onNodeActivate}
+      onRowActivate={onRowActivate}
+    />
   );
 }
 
@@ -1183,6 +1234,14 @@ function SortableCanvasNode({
   ...props
 }: SortableCanvasNodeProps) {
   const [registrationKey] = useState(() => Symbol(node.id));
+  const dragMirrorSourceRef = useRef<HTMLElement | null>(null);
+  const captureDragMirror = useCallback(
+    () =>
+      dragMirrorSourceRef.current === null
+        ? null
+        : captureStructuredPrototypeDragMirror(dragMirrorSourceRef.current),
+    [],
+  );
   const {
     attributes,
     listeners,
@@ -1201,6 +1260,7 @@ function SortableCanvasNode({
       ancestorNodeIds,
       parentId,
       index,
+      captureDragMirror,
       ...(isStructuredPrototypeContainerNode(node)
         ? { containerId: node.id, containerIndex: node.children.length }
         : {}),
@@ -1221,6 +1281,7 @@ function SortableCanvasNode({
   const container = isStructuredPrototypeContainerNode(node);
   const setRefs = useCallback(
     (element: HTMLElement | null) => {
+      dragMirrorSourceRef.current = element;
       setNodeRef(element);
       onMeasuredElement(node.id, element);
       registerNodeElement(node.id, registrationKey, element, ancestorNodeIds, container);
@@ -1284,7 +1345,7 @@ function SortableCanvasNode({
       }}
       className={cn(
         "relative min-w-0",
-        isDragging && "opacity-20",
+        isDragging && "opacity-0",
         (draftSize !== null || resolvedLayoutItem.width.unit !== "auto") &&
           "[&>:last-child]:w-full",
         (draftSize !== null || resolvedLayoutItem.height.unit !== "auto") &&
@@ -3466,6 +3527,11 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
   );
 }
 
+const ignoreOverlaySelection = () => undefined;
+const ignoreOverlayFormValue = () => undefined;
+const ignoreOverlayNodeActivation = () => undefined;
+const ignoreOverlayRowActivation = () => undefined;
+
 function OverlayNodeContent({
   document,
   node,
@@ -3481,117 +3547,159 @@ function OverlayNodeContent({
   viewportWidth: number;
   formValues: Record<string, string>;
 }) {
+  const { t } = useI18n();
   if (isStructuredPrototypeContainerNode(node)) {
-    const columns =
-      node.type === "Grid"
-        ? resolveStructuredPrototypeGridColumns(node, viewportWidth)
-        : node.type === "Stack" && node.direction === "row"
-          ? 2
-          : 1;
-    return (
-      <div
-        className={cn(
-          "grid gap-2 rounded border border-border-subtle bg-surface p-2",
-          columns === 2 && "grid-cols-2",
-        )}
+    const renderedChildren = node.children.filter(
+      (child) => child.visibility === "visible" && runtimeNodeVisible(viewModel, child.id),
+    );
+    const padding =
+      node.type === "Freeform"
+        ? undefined
+        : `${node.padding.top}px ${node.padding.right}px ${node.padding.bottom}px ${node.padding.left}px`;
+    const style: CSSProperties & Partial<Record<"--prototype-text", string>> = {
+      ...(node.type === "Freeform" ? {} : { gap: node.gap, padding }),
+      ...(node.type === "Stack"
+        ? {
+            alignItems: node.align,
+            justifyContent: node.justify === "between" ? "space-between" : node.justify,
+          }
+        : {}),
+      ...(node.type === "Grid"
+        ? {
+            gridTemplateColumns: `repeat(${resolveStructuredPrototypeGridColumns(node, viewportWidth)}, minmax(0, 1fr))`,
+          }
+        : {}),
+      ...(node.type === "Form" ? SURFACE_TEXT_STYLE : {}),
+      ...(node.type === "Freeform" ? { position: "relative", overflow: "hidden" } : {}),
+    };
+    const className = cn(
+      "relative min-w-0 content-start",
+      node.type === "Stack" && (node.direction === "column" ? "flex flex-col" : "flex flex-row"),
+      node.type === "Grid" && "grid",
+      node.type === "Freeform" && "block",
+      node.type === "Form" &&
+        "flex flex-col border border-[color-mix(in_srgb,var(--prototype-text)_15%,transparent)] bg-[var(--prototype-surface)]",
+      node.type !== "Freeform" && renderedChildren.length === 0 && "min-h-24",
+    );
+    const children =
+      renderedChildren.length > 0 ? (
+        renderedChildren.map((child) => {
+          const layoutItem = resolveStructuredPrototypeLayoutItem(child, viewportWidth);
+          return (
+            <section
+              key={child.id}
+              className={cn(
+                "relative min-w-0",
+                layoutItem.width.unit !== "auto" && "[&>:last-child]:w-full",
+                layoutItem.height.unit !== "auto" && "[&>:last-child]:h-full",
+              )}
+              style={{ ...SURFACE_TEXT_STYLE, ...canvasLayoutStyle(layoutItem) }}
+            >
+              <OverlayNodeContent
+                document={document}
+                node={child}
+                runtimeState={runtimeState}
+                viewModel={viewModel}
+                viewportWidth={viewportWidth}
+                formValues={formValues}
+              />
+            </section>
+          );
+        })
+      ) : (
+        <div
+          className={cn(
+            "col-span-full grid min-h-20 place-items-center border border-dashed border-[color-mix(in_srgb,var(--prototype-text)_25%,transparent)] px-3 text-center text-sm text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)]",
+            node.type === "Freeform" && "absolute inset-4",
+          )}
+        >
+          {t("prototype.structured.canvas.empty")}
+        </div>
+      );
+    return node.type === "Form" ? (
+      <form
+        className={className}
+        style={style}
+        noValidate
+        onSubmit={(event) => event.preventDefault()}
       >
-        {node.children.slice(0, 6).map((child) => (
-          <div key={child.id} className="rounded border border-border-subtle bg-surface-raised p-2">
-            <OverlayNodeContent
-              document={document}
-              node={child}
-              runtimeState={runtimeState}
-              viewModel={viewModel}
-              viewportWidth={viewportWidth}
-              formValues={formValues}
-            />
-          </div>
-        ))}
+        {children}
+      </form>
+    ) : (
+      <div className={className} style={style}>
+        {children}
       </div>
     );
   }
-  if (node.type === "Text") {
-    return (
-      <div className="line-clamp-3 text-sm font-semibold">
-        {runtimeNodeText(viewModel, node.id, node.content)}
-      </div>
-    );
-  }
-  if (node.type === "Input") {
-    return (
-      <div className="grid gap-1 text-xs font-semibold">
-        {node.label}
-        <div className="min-h-8 rounded border border-border-muted bg-surface-input px-2 py-1 text-sm font-normal text-text-muted">
-          {(formValues[node.id] ?? node.value) || node.placeholder}
-        </div>
-      </div>
-    );
-  }
-  if (node.type === "Button") {
-    return (
-      <div className="inline-flex min-h-8 items-center rounded bg-brand px-3 text-xs font-semibold text-black">
-        {node.label}
-      </div>
-    );
-  }
-  const rows = runtimeNodeRows(viewModel, node.id);
-  const visibleRows = rows
-    ? rows
-        .slice(0, 3)
-        .map((row) =>
-          node.columns.map((column) => runtimeEntityFieldText(row, column.fieldId)).join(" · "),
-        )
-    : node.rows
-        .slice(0, 3)
-        .map((row) =>
-          node.columns
-            .map((column) => row.cells.find((cell) => cell.columnKey === column.key)?.value ?? "")
-            .join(" · "),
-        );
   return (
-    <div className="grid gap-1 text-xs">
-      {visibleRows.map((row, index) => (
-        <div key={`${row}-${index}`} className="truncate rounded bg-surface-input px-2 py-1">
-          {row}
-        </div>
-      ))}
-    </div>
+    <LeafNodeRenderer
+      document={document}
+      node={node}
+      runtimeState={runtimeState}
+      viewModel={viewModel}
+      editing
+      formValues={formValues}
+      disabled={false}
+      onSelect={ignoreOverlaySelection}
+      onFormValue={ignoreOverlayFormValue}
+      onNodeActivate={ignoreOverlayNodeActivation}
+      onRowActivate={ignoreOverlayRowActivation}
+    />
   );
 }
 
 export function StructuredPrototypeNodeDragOverlay({
+  kind,
   document,
   node,
   runtimeState,
   viewModel,
   viewportWidth,
   formValues,
+  previewScale,
 }: {
+  kind: "node" | "palette";
   document: StructuredPrototypeDocument;
   node: StructuredPrototypeNode;
   runtimeState: PrototypeRuntimeState | null;
   viewModel: RuntimeViewModel | null;
   viewportWidth: number;
   formValues: Record<string, string>;
+  previewScale: number;
 }) {
+  const layoutItem = resolveStructuredPrototypeLayoutItem(node, viewportWidth);
+  const scaled = previewScale !== 1;
   return (
-    <section
-      className="pointer-events-none max-h-[360px] min-w-48 max-w-[420px] overflow-hidden rounded-lg border border-brand bg-surface-raised p-3 text-foreground opacity-95 shadow-2xl ring-4 ring-brand-bg"
-      data-prototype-drag-overlay="node"
+    <div
+      className="pointer-events-none relative overflow-visible"
+      style={{
+        ...resolveStructuredPrototypeTheme(document),
+        width: scaled ? undefined : canvasLengthValue(layoutItem.width),
+        height: scaled ? undefined : canvasLengthValue(layoutItem.height),
+      }}
+      data-prototype-drag-overlay={kind}
+      data-prototype-drag-overlay-scale={previewScale}
+      aria-hidden
+      inert
     >
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-        {node.type} · {node.name}
-      </div>
-      <div className="mt-2 rounded-md border border-border-subtle bg-background/80 p-3">
+      <section
+        className="pointer-events-none relative min-w-0 origin-top-left"
+        style={{
+          ...SURFACE_TEXT_STYLE,
+          ...canvasLayoutStyle(layoutItem),
+          ...(layoutItem.width.unit === "auto" ? { width: "max-content" } : {}),
+          transform: scaled ? `scale(${previewScale})` : undefined,
+        }}
+      >
         <OverlayNodeContent
           document={document}
           node={node}
           runtimeState={runtimeState}
           viewModel={viewModel}
-          viewportWidth={Math.min(viewportWidth, 360)}
+          viewportWidth={viewportWidth}
           formValues={formValues}
         />
-      </div>
-    </section>
+      </section>
+    </div>
   );
 }

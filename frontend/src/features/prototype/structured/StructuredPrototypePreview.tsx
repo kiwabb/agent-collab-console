@@ -7,7 +7,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type PointerEvent,
   type WheelEvent,
 } from "react";
@@ -18,10 +17,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 
 import type { PrototypeRuntimeState, RuntimeEntity, RuntimeViewModel } from "../runtime/types";
-import {
-  resolvePrototypeShellTheme,
-  structuredPrototypeShowsRoleControl,
-} from "./prototypeRendererCore";
+import { structuredPrototypeShowsRoleControl } from "./prototypeRendererCore";
 import {
   StructuredPrototypeCanvas,
   type StructuredPrototypeMarqueeGestureEvent,
@@ -42,6 +38,7 @@ import {
   type StructuredPrototypePoint,
 } from "./structuredPrototypeViewportTransform";
 import type { StructuredPrototypeInteraction } from "./structuredPrototypeInteraction";
+import { resolveStructuredPrototypeTheme } from "./structuredPrototypeTheme";
 import type { StructuredPrototypeDocument, StructuredPrototypePage } from "./types";
 
 interface Props {
@@ -56,6 +53,7 @@ interface Props {
   dragGestureActive: boolean;
   activeInteractionKind: StructuredPrototypeInteraction["kind"];
   onZoomChange: (zoom: StructuredPrototypePreviewZoom) => void;
+  onEffectiveScaleChange: (scale: number) => void;
   selection: StructuredPrototypeNodeSelection;
   formValues: Record<string, string>;
   disabled: boolean;
@@ -119,29 +117,6 @@ export function resolveStructuredPrototypeEffectivePreviewScale({
   return zoom === "fit" ? (frozenFitScale ?? computedFitScale) : zoom;
 }
 
-function previewTheme(document: StructuredPrototypeDocument): CSSProperties {
-  const theme = resolvePrototypeShellTheme(document);
-  const style: CSSProperties & Record<`--prototype-${string}`, string> = {
-    colorScheme: document.settings.theme === "system" ? "light dark" : document.settings.theme,
-    "--prototype-accent": theme.accent,
-    "--prototype-accent-text": theme.accentText,
-    "--prototype-navigation-background": theme.navigationBackground,
-    "--prototype-navigation-text": theme.navigationText,
-    "--prototype-content-background": theme.contentBackground,
-    "--prototype-content-text": theme.contentText,
-    "--prototype-surface": theme.surface,
-    "--prototype-surface-text": theme.surfaceText,
-    "--prototype-text": "var(--prototype-content-text)",
-  };
-  document.tokens.colors.forEach((token, index) => {
-    style[`--prototype-color-${index}`] = token.value;
-  });
-  document.tokens.spacing.forEach((token, index) => {
-    style[`--prototype-space-${index}`] = token.value;
-  });
-  return style;
-}
-
 export function StructuredPrototypePreview({
   document,
   page,
@@ -154,6 +129,7 @@ export function StructuredPrototypePreview({
   dragGestureActive,
   activeInteractionKind,
   onZoomChange,
+  onEffectiveScaleChange,
   selection,
   formValues,
   disabled,
@@ -271,6 +247,9 @@ export function StructuredPrototypePreview({
     previewScaleRef.current = previewScale;
     zoomChangeRef.current = onZoomChange;
   }, [onZoomChange, previewScale]);
+  useLayoutEffect(() => {
+    onEffectiveScaleChange(previewScale);
+  }, [onEffectiveScaleChange, previewScale]);
   const computedFrameHeight = Math.max(page.viewport.height, previewFrameHeight);
   const frameHeight = frozenFrameHeight ?? computedFrameHeight;
   const transformGestureActive = dragGestureActive || resizeGestureActive;
@@ -510,7 +489,7 @@ export function StructuredPrototypePreview({
             frozenFrameHeight !== null || frozenFitScale !== null ? "true" : "false"
           }
           style={{
-            ...previewTheme(document),
+            ...resolveStructuredPrototypeTheme(document),
             width: `${viewportWidth}px`,
             minWidth: `${viewportWidth}px`,
             minHeight: `${Math.max(PREVIEW_MIN_FRAME_HEIGHT, page.viewport.height)}px`,

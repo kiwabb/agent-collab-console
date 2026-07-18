@@ -1050,10 +1050,19 @@ test("live node projection resolves each target from the current projected locat
   );
 });
 
-test("Studio recursively registers sortable children and fixed-width zoomable preview canvases", () => {
+test("Studio recursively registers sortable children and faithful drag mirrors", () => {
   const canvas = readCompactSource("features/prototype/structured/StructuredPrototypeCanvas.tsx");
   const studio = readCompactSource(
     "features/prototype/structured/StructuredPrototypeStudioPage.tsx",
+  );
+  const structuredDrag = readCompactSource(
+    "features/prototype/structured/structuredPrototypeDrag.ts",
+  );
+  const dragMirror = readCompactSource(
+    "features/prototype/structured/structuredPrototypeDragMirror.ts",
+  );
+  const dragMirrorView = readCompactSource(
+    "features/prototype/structured/StructuredPrototypeDragMirrorView.tsx",
   );
   const preview = readCompactSource("features/prototype/structured/StructuredPrototypePreview.tsx");
   const interaction = readCompactSource(
@@ -1069,11 +1078,25 @@ test("Studio recursively registers sortable children and fixed-width zoomable pr
   const controlsLayerStart = canvas.indexOf("function StructuredPrototypeSelectionControlsLayer");
   const canvasRootStart = canvas.indexOf("export function StructuredPrototypeCanvas");
   const canvasRootEnd = canvas.indexOf("function OverlayNodeContent");
+  const dragStartStart = studio.indexOf("const handleDragStart");
+  const dragOverStart = studio.indexOf("const handleDragOver");
+  const cancelMoveStart = studio.indexOf("const cancelActiveMove");
+  const commitMoveStart = studio.indexOf("const commitActiveMove");
+  const dragEndStart = studio.indexOf("const handleDragEnd");
+  const studioDragOverlayStart = studio.indexOf("<DragOverlay");
   assert.ok(sortableNodeStart >= 0 && controlsLayerStart > sortableNodeStart);
   assert.ok(canvasRootStart > controlsLayerStart && canvasRootEnd > canvasRootStart);
+  assert.ok(dragStartStart >= 0 && dragOverStart > dragStartStart);
+  assert.ok(cancelMoveStart > dragOverStart && commitMoveStart > cancelMoveStart);
+  assert.ok(dragEndStart > commitMoveStart && studioDragOverlayStart > dragEndStart);
   const sortableNodeSource = canvas.slice(sortableNodeStart, controlsLayerStart);
   const controlsLayerSource = canvas.slice(controlsLayerStart, canvasRootStart);
   const canvasRootSource = canvas.slice(canvasRootStart, canvasRootEnd);
+  const canvasDragOverlaySource = canvas.slice(canvasRootEnd);
+  const dragStartSource = studio.slice(dragStartStart, dragOverStart);
+  const cancelMoveSource = studio.slice(cancelMoveStart, commitMoveStart);
+  const commitMoveSource = studio.slice(commitMoveStart, dragEndStart);
+  const studioDragOverlaySource = studio.slice(studioDragOverlayStart);
 
   assert.match(canvas, /rectSortingStrategy/);
   assert.match(canvas, /ownerNodeId: node\.id/);
@@ -1189,8 +1212,147 @@ test("Studio recursively registers sortable children and fixed-width zoomable pr
   assert.match(canvas, /<OverlayNodeContent/);
   assert.match(canvas, /runtimeNodeText\(viewModel, node\.id, node\.content\)/);
   assert.match(canvas, /runtimeNodeRows\(viewModel, node\.id\)/);
-  assert.match(canvas, /data-prototype-drag-overlay="node"/);
-  assert.match(canvas, /isDragging && "opacity-20"/);
+  assert.match(sortableNodeSource, /isDragging && "opacity-0"/);
+  assert.doesNotMatch(sortableNodeSource, /opacity-20/);
+  assert.match(
+    sortableNodeSource,
+    /const dragMirrorSourceRef = useRef<HTMLElement \| null>\(null\)/,
+  );
+  assert.match(
+    sortableNodeSource,
+    /captureStructuredPrototypeDragMirror\(dragMirrorSourceRef\.current\)/,
+  );
+  assert.match(sortableNodeSource, /captureDragMirror,/);
+  assert.match(sortableNodeSource, /dragMirrorSourceRef\.current = element/);
+  assert.match(structuredDrag, /export function readStructuredPrototypeNodeDragMirrorCapture\(/);
+  assert.match(
+    structuredDrag,
+    /value\["kind"\] !== "node".*const capture = value\["captureDragMirror"\].*typeof capture === "function"/,
+  );
+  assert.match(
+    dragStartSource,
+    /const dragMirror =\s*readStructuredPrototypeNodeDragMirrorCapture\(event\.active\.data\.current\)\?\.\(\) \?\? null/,
+  );
+  assert.match(
+    dragStartSource,
+    /if \(dragMirror === null\).*setInteractionError\(t\("prototype\.structured\.canvas\.dragPreviewFailed"\)\).*return/,
+  );
+  assert.match(dragStartSource, /setActiveNodeDragMirror\(dragMirror\)/);
+  assert.doesNotMatch(dragStartSource, /requestAnimationFrame/);
+  const captureIndex = dragStartSource.indexOf(
+    "readStructuredPrototypeNodeDragMirrorCapture(event.active.data.current)?.()",
+  );
+  const nodeProjectionIndex = dragStartSource.indexOf(
+    'activeMoveProjectionRef.current = {kind: "node"',
+  );
+  const nodeInteractionIndex = dragStartSource.indexOf(
+    'beginInteraction({kind: "move", source: {kind: "node"',
+  );
+  assert.ok(
+    captureIndex >= 0 &&
+      nodeInteractionIndex > captureIndex &&
+      nodeProjectionIndex > nodeInteractionIndex,
+  );
+
+  assert.match(dragMirror, /const clonedNode = source\.cloneNode\(true\)/);
+  assert.match(
+    dragMirror,
+    /querySelectorAll<HTMLElement>\("\[data-prototype-drop-intent\]"\).*dropTarget\.remove\(\)/,
+  );
+  assert.match(
+    dragMirror,
+    /for \(const attribute of MIRROR_IDENTITY_ATTRIBUTES\) descendant\.removeAttribute\(attribute\)/,
+  );
+  assert.match(dragMirror, /"id", "for", "name"/);
+  assert.match(dragMirror, /"data-node-id", "data-container-id"/);
+  assert.match(dragMirror, /descendant\.removeAttribute\("autofocus"\)/);
+  assert.match(dragMirror, /descendant\.removeAttribute\("contenteditable"\)/);
+  assert.match(dragMirror, /descendant\.setAttribute\("tabindex", "-1"\)/);
+  assert.match(dragMirror, /element\.setAttribute\("aria-hidden", "true"\)/);
+  assert.match(dragMirror, /element\.setAttribute\("inert", ""\)/);
+  assert.match(dragMirror, /element\.style\.pointerEvents = "none"/);
+  assert.match(dragMirror, /element\.style\.opacity = "1"/);
+  assert.match(dragMirror, /Object\.assign\(element\.style, rootStyle\)/);
+  assert.match(dragMirror, /position: "relative"/);
+  assert.match(dragMirror, /top: "auto"/);
+  assert.match(dragMirror, /right: "auto"/);
+  assert.match(dragMirror, /bottom: "auto"/);
+  assert.match(dragMirror, /left: "auto"/);
+  assert.match(dragMirror, /width: `\$\{contentWidth\}px`/);
+  assert.match(dragMirror, /height: `\$\{contentHeight\}px`/);
+  assert.match(dragMirror, /maxWidth: "none"/);
+  assert.match(dragMirror, /maxHeight: "none"/);
+  assert.match(dragMirror, /flex: "0 0 auto"/);
+  assert.match(dragMirror, /alignSelf: "auto"/);
+  assert.match(dragMirror, /gridArea: "auto"/);
+  assert.match(dragMirror, /transform: "none"/);
+  assert.match(dragMirror, /transition: "none"/);
+
+  assert.match(dragMirror, /cloneElement\.value = sourceElement\.value/);
+  assert.match(dragMirror, /cloneElement\.checked = sourceElement\.checked/);
+  assert.match(dragMirror, /cloneElement\.indeterminate = sourceElement\.indeterminate/);
+  assert.match(dragMirror, /cloneOption\.selected = sourceOption\.selected/);
+  assert.match(dragMirror, /scrollLeft: sourceElement\.scrollLeft/);
+  assert.match(dragMirror, /scrollTop: sourceElement\.scrollTop/);
+  assert.match(
+    dragMirrorView,
+    /restoreStructuredPrototypeDragMirrorScrollState\(snapshot\.scrollStates\)/,
+  );
+
+  assert.match(dragMirror, /name\.startsWith\("--prototype-"\)/);
+  assert.match(dragMirror, /style\.getPropertyValue\(name\)\.trim\(\)/);
+  assert.match(dragMirror, /customProperties: collectPrototypeCustomProperties\(computedStyle\)/);
+  assert.match(dragMirrorView, /\.\.\.snapshot\.customProperties/);
+  assert.match(dragMirror, /clientWidth: bounds\.width/);
+  assert.match(dragMirror, /clientHeight: bounds\.height/);
+  assert.match(dragMirror, /contentWidth: source\.offsetWidth/);
+  assert.match(dragMirror, /contentHeight: source\.offsetHeight/);
+  assert.match(dragMirror, /scaleX: clientWidth \/ contentWidth/);
+  assert.match(dragMirror, /scaleY: clientHeight \/ contentHeight/);
+  assert.match(dragMirrorView, /width: snapshot\.geometry\.clientWidth/);
+  assert.match(dragMirrorView, /height: snapshot\.geometry\.clientHeight/);
+  assert.match(
+    dragMirrorView,
+    /transform: `scale\(\$\{snapshot\.geometry\.scaleX\}, \$\{snapshot\.geometry\.scaleY\}\)`/,
+  );
+  assert.match(dragMirrorView, /host\.replaceChildren\(snapshot\.element\)/);
+  assert.match(
+    dragMirrorView,
+    /if \(snapshot\.element\.parentElement === host\) host\.replaceChildren\(\)/,
+  );
+  assert.match(dragMirrorView, /data-prototype-drag-overlay="node"/);
+  assert.match(dragMirrorView, /data-prototype-drag-mirror="true"/);
+  assert.match(dragMirrorView, /aria-hidden inert/);
+
+  assert.match(
+    dragStartSource,
+    /const transientNode = materializeStructuredPrototypePalettePreviewNode\(\s*commandNode, sessionId,?\s*\).*setActivePaletteDragNode\(transientNode\).*transientNode,/,
+  );
+  assert.match(canvasDragOverlaySource, /data-prototype-drag-overlay=\{kind\}/);
+  assert.match(canvasDragOverlaySource, /aria-hidden inert/);
+  assert.match(canvasDragOverlaySource, /\.\.\.resolveStructuredPrototypeTheme\(document\)/);
+  assert.match(canvasDragOverlaySource, /renderedChildren\.map\(\(child\) =>/);
+  assert.match(canvasDragOverlaySource, /<LeafNodeRenderer/);
+  assert.match(studioDragOverlaySource, /kind="palette"/);
+  assert.match(studioDragOverlaySource, /node=\{activePaletteDragNode\}/);
+  assert.match(studioDragOverlaySource, /previewScale=\{effectivePreviewScale\}/);
+  assert.match(
+    studioDragOverlaySource,
+    /<StructuredPrototypeDragMirrorView snapshot=\{activeNodeDragMirror\}/,
+  );
+  assert.match(studioDragOverlaySource, /adjustScale=\{false\}/);
+  assert.doesNotMatch(studioDragOverlaySource, /kind="node"/);
+
+  for (const lifecycleSource of [cancelMoveSource, commitMoveSource]) {
+    assert.match(lifecycleSource, /setActiveNodeDragMirror\(null\)/);
+    assert.match(lifecycleSource, /setActivePaletteDragNode\(null\)/);
+  }
+  assert.match(studio, /onDragCancel=\{\(\) => \{.*cancelActiveMove\(session\)/);
+  assert.match(studio, /const handleDragEnd = .*cancelActiveMove\(session\).*commitActiveMove\(/);
+  assert.doesNotMatch(canvasDragOverlaySource, /node\.type\}.*node\.name/);
+  assert.doesNotMatch(studioDragOverlaySource, /paletteLabels\[activeDrag\.nodeType\]/);
+  assert.doesNotMatch(canvasDragOverlaySource, /\.slice\(0, 6\)/);
+  assert.doesNotMatch(canvasDragOverlaySource, /\.slice\(0, 3\)/);
   assert.match(studio, /<DragOverlay/);
   assert.match(studio, /collisionDetection=\{structuredPrototypeCollisionDetection\}/);
   assert.match(studio, /MeasuringStrategy\.Always/);
@@ -1200,7 +1362,6 @@ test("Studio recursively registers sortable children and fixed-width zoomable pr
   assert.match(studio, /requestAnimationFrame/);
   assert.match(studio, /clearActiveMoveProjection\(\)/);
   assert.match(studio, /zIndex=\{1000\}/);
-  assert.match(studio, /data-prototype-drag-overlay="palette"/);
   assert.match(studio, /data-prototype-drag-overlay="page"/);
   assert.match(studio, /readStructuredPrototypePageDragData\(event\.active\.data\.current\)/);
   assert.match(

@@ -69,6 +69,7 @@ import {
 import {
   readStructuredPrototypeDropTarget,
   readStructuredPrototypeNodeDragData,
+  readStructuredPrototypeNodeDragMirrorCapture,
   readStructuredPrototypePageDragData,
   readStructuredPrototypePaletteDragData,
   findStructuredPrototypeNodeLocation,
@@ -80,6 +81,8 @@ import {
   type StructuredPrototypeDropTarget,
   type StructuredPrototypeNodeLocation,
 } from "./structuredPrototypeDrag";
+import { StructuredPrototypeDragMirrorView } from "./StructuredPrototypeDragMirrorView";
+import type { StructuredPrototypeDragMirrorSnapshot } from "./structuredPrototypeDragMirror";
 import {
   isStructuredPrototypeContainerNode,
   type StructuredPrototypeContainerNode,
@@ -271,6 +274,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
   const [mode, setMode] = useState<StudioMode>("design");
   const [viewportOverride, setViewportOverride] = useState<StudioViewport | null>(null);
   const [previewZoom, setPreviewZoom] = useState<StructuredPrototypePreviewZoom>("fit");
+  const [effectivePreviewScale, setEffectivePreviewScale] = useState(1);
   const [gridSnappingEnabled, setGridSnappingEnabled] = useState(true);
   const [previewViewResetKey, setPreviewViewResetKey] = useState(0);
   const [canvasInteraction, setCanvasInteraction] = useState<CanvasInteraction>("edit");
@@ -296,6 +300,10 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
   const [projectedDocument, setProjectedDocument] = useState<ProjectedPrototypeDocument | null>(
     null,
   );
+  const [activeNodeDragMirror, setActiveNodeDragMirror] =
+    useState<StructuredPrototypeDragMirrorSnapshot | null>(null);
+  const [activePaletteDragNode, setActivePaletteDragNode] =
+    useState<StructuredPrototypeNode | null>(null);
   const projectedDocumentRef = useRef<ProjectedPrototypeDocument | null>(null);
   const activeMoveProjectionRef = useRef<ActiveMoveProjectionSession | null>(null);
   const interactionRef = useRef(interaction);
@@ -997,6 +1005,8 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       return;
     }
     clearActiveMoveProjection();
+    setActiveNodeDragMirror(null);
+    setActivePaletteDragNode(null);
     setInteractionError(null);
     const palette = readStructuredPrototypePaletteDragData(event.active.data.current);
     if (palette) {
@@ -1021,6 +1031,11 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         baseDocumentHash: currentDraft.documentHash,
       });
       if (sessionId === null) return;
+      const transientNode = materializeStructuredPrototypePalettePreviewNode(
+        commandNode,
+        sessionId,
+      );
+      setActivePaletteDragNode(transientNode);
       activeMoveProjectionRef.current = {
         kind: "palette",
         interactionSessionId: sessionId,
@@ -1028,7 +1043,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         authoritativeDocument: currentDraft.document,
         pageId: activePage.id,
         commandNode,
-        transientNode: materializeStructuredPrototypePalettePreviewNode(commandNode, sessionId),
+        transientNode,
         latestTarget: null,
         finalLocation: null,
         animationFrameId: null,
@@ -1037,12 +1052,19 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     }
     const dragged = readStructuredPrototypeNodeDragData(event.active.data.current);
     if (dragged) {
+      const dragMirror =
+        readStructuredPrototypeNodeDragMirrorCapture(event.active.data.current)?.() ?? null;
+      if (dragMirror === null) {
+        setInteractionError(t("prototype.structured.canvas.dragPreviewFailed"));
+        return;
+      }
       const sessionId = beginInteraction({
         kind: "move",
         source: { kind: "node", nodeId: dragged.nodeId },
         baseDocumentHash: currentDraft.documentHash,
       });
       if (sessionId === null) return;
+      setActiveNodeDragMirror(dragMirror);
       activeMoveProjectionRef.current = {
         kind: "node",
         interactionSessionId: sessionId,
@@ -1125,6 +1147,8 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     }
     if (session.animationFrameId !== null) cancelAnimationFrame(session.animationFrameId);
     if (activeMoveProjectionRef.current === session) activeMoveProjectionRef.current = null;
+    setActiveNodeDragMirror(null);
+    setActivePaletteDragNode(null);
     clearProjectedDocumentForSession(session.interactionSessionId);
     endInteraction(session.interactionSessionId);
   };
@@ -1136,6 +1160,8 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     if (!advanceInteraction(session.interactionSessionId, "committing")) return false;
     if (session.animationFrameId !== null) cancelAnimationFrame(session.animationFrameId);
     if (activeMoveProjectionRef.current === session) activeMoveProjectionRef.current = null;
+    setActiveNodeDragMirror(null);
+    setActivePaletteDragNode(null);
     const hoverProjection = projectedDocumentRef.current;
     if (hoverProjection?.ownerSessionId !== session.interactionSessionId) {
       setInteractionError(t("prototype.structured.canvas.invalidDrop"));
@@ -1368,10 +1394,6 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
   };
   const visibleError =
     interactionError ?? (controller.runtimeRecovery === null ? controller.error : null);
-  const activeDragNode =
-    activeDrag?.kind === "node"
-      ? findStructuredPrototypeNode(activePage.root, activeDrag.nodeId)
-      : null;
   const activeDragPage =
     activeDrag?.kind === "page"
       ? document.pages.find((page) => page.id === activeDrag.pageId)
@@ -2298,6 +2320,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
                     }
                     activeInteractionKind={interaction.kind}
                     onZoomChange={setPreviewZoom}
+                    onEffectiveScaleChange={setEffectivePreviewScale}
                     selection={activeNodeSelection}
                     formValues={formValues}
                     disabled={interactionCapabilities.documentControlsDisabled}
@@ -2564,22 +2587,19 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         zIndex={1000}
         dropAnimation={{ duration: 160, easing: "cubic-bezier(0.2, 0, 0, 1)" }}
       >
-        {activeDrag?.kind === "palette" ? (
-          <div
-            className="pointer-events-none min-w-44 rounded-lg border border-brand bg-surface-raised px-3 py-2 text-sm font-bold text-foreground opacity-95 shadow-2xl ring-4 ring-brand-bg"
-            data-prototype-drag-overlay="palette"
-          >
-            {paletteLabels[activeDrag.nodeType]}
-          </div>
-        ) : activeDragNode ? (
+        {activeDrag?.kind === "palette" && activePaletteDragNode !== null ? (
           <StructuredPrototypeNodeDragOverlay
+            kind="palette"
             document={document}
-            node={activeDragNode}
+            node={activePaletteDragNode}
             runtimeState={runtime.state}
             viewModel={runtime.viewModel}
             viewportWidth={activeOverlayViewportWidth}
             formValues={formValues}
+            previewScale={effectivePreviewScale}
           />
+        ) : activeDrag?.kind === "node" && activeNodeDragMirror !== null ? (
+          <StructuredPrototypeDragMirrorView snapshot={activeNodeDragMirror} />
         ) : activeDragPage ? (
           <div
             className="pointer-events-none min-w-48 rounded-lg border border-brand bg-surface-raised px-3 py-2 text-sm font-bold text-foreground opacity-95 shadow-2xl ring-4 ring-brand-bg"

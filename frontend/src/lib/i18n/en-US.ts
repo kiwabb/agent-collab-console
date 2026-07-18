@@ -2301,6 +2301,8 @@ const enUS = {
   "prototype.structured.canvas.freeformGroupArrangeFailed":
     "The selected components could not be arranged. Try again.",
   "prototype.structured.canvas.commitFailed": "The layout change could not be saved. Try again.",
+  "prototype.structured.canvas.dragPreviewFailed":
+    "Dragging could not start because the component preview was unavailable. Try again.",
   "prototype.structured.canvas.empty": "Drag components here",
   "prototype.structured.canvas.invalidDrop": "This component cannot be moved to that target",
   "prototype.structured.interaction.label": "Canvas interaction mode",
