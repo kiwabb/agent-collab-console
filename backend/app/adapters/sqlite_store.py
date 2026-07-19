@@ -145,6 +145,7 @@ class SQLiteStore:
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
     def _execute(
@@ -1832,13 +1833,23 @@ class SQLiteStore:
             for r in rows
         ]
 
-    def list_execution_process_runtime_rows(self, session_id: str) -> list[tuple[ExecutionProcess, CodexTask | None, list[CodexTaskMessage], list[LogEvent]]]:
+    def list_execution_process_runtime_rows(
+        self,
+        session_id: str,
+        *,
+        log_limit: int = 10000,
+    ) -> list[tuple[ExecutionProcess, CodexTask | None, list[CodexTaskMessage], list[LogEvent]]]:
         processes = self.list_execution_processes(session_id=session_id)
         rows: list[tuple[ExecutionProcess, CodexTask | None, list[CodexTaskMessage], list[LogEvent]]] = []
         for process in processes:
             task = self.load_codex_task(process.task_id)
             messages = self.list_codex_task_messages(process.task_id, execution_process_id=process.id)
-            logs = self.load_log_events(session_id, task_id=process.task_id, execution_process_id=process.id, limit=10000)
+            logs = self.load_log_events(
+                session_id,
+                task_id=process.task_id,
+                execution_process_id=process.id,
+                limit=log_limit,
+            )
             rows.append((process, task, messages, logs))
         return rows
 

@@ -75,6 +75,7 @@ export function useProjectStartupConfig(projectId: string, initialProject: Proje
   const [runStatus, setRunStatus] = useState<ProjectRunStatus | null>(null);
   const [runLogs, setRunLogs] = useState<ProjectRunLogLine[]>([]);
   const [startupConfig, setStartupConfig] = useState<ProjectStartupConfig | null>(null);
+  const [serviceStatuses, setServiceStatuses] = useState<Record<string, ProjectRunStatus>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [runRefreshErrors, setRunRefreshErrors] = useState<ProjectRunRefreshErrors>({
@@ -333,16 +334,16 @@ export function useProjectStartupConfig(projectId: string, initialProject: Proje
     try {
       const result = await startProjectRun(projectId);
       if (isProjectRunStartError(result)) {
-        if (result.error === "already_running" || result.error === "service_already_reachable") {
+        if (
+          result.error === "already_running" || result.error === "service_address_occupied"
+        ) {
+          const addressOccupied = result.error !== "already_running";
           addToast({
-            type: "info",
-            title:
-              result.error === "service_already_reachable"
-                ? t("startupConfig.serviceAlreadyReachable")
-                : t("projects.runAlreadyRunning"),
-            ...(result.error === "service_already_reachable" && result.url
-              ? { message: result.url }
-              : {}),
+            type: addressOccupied ? "error" : "info",
+            title: addressOccupied
+              ? t("startupConfig.occupiedUnknownTitle")
+              : t("projects.runAlreadyRunning"),
+            ...(addressOccupied && result.url ? { message: result.url } : {}),
           });
           try {
             setRunStatus(await getProjectRunStatus(projectId));
@@ -354,6 +355,12 @@ export function useProjectStartupConfig(projectId: string, initialProject: Proje
               updateProjectRunRefreshError(current, "status", message),
             );
           }
+        } else if (result.error === "startup_config_invalid") {
+          addToast({
+            type: "error",
+            title: t("startupConfig.invalidReadinessTitle"),
+            message: t("startupConfig.invalidReadinessDetail"),
+          });
         } else if (result.error === "no_run_command") {
           addToast({ type: "error", title: t("projects.runNoCommand") });
         } else if (result.error === "env_incomplete") {
@@ -411,7 +418,20 @@ export function useProjectStartupConfig(projectId: string, initialProject: Proje
     if (runBusy) return;
     setRunBusy(true);
     try {
-      await startAllProjectServices(projectId);
+      const result = await startAllProjectServices(projectId);
+      if (isProjectRunStartError(result)) {
+        addToast({
+          type: "error",
+          title:
+            result.error === "startup_config_invalid"
+              ? t("startupConfig.invalidReadinessTitle")
+              : result.error === "service_address_occupied"
+                ? t("startupConfig.occupiedUnknownTitle")
+                : t("projects.runStartFailed"),
+          message: result.message ?? result.url ?? result.pattern,
+        });
+        return;
+      }
       addToast({ type: "info", title: t("startupConfig.allServicesStarted") });
     } catch (err) {
       addToast({
@@ -441,10 +461,16 @@ export function useProjectStartupConfig(projectId: string, initialProject: Proje
     }
   }, [projectId, runBusy, addToast, t]);
 
+  const updateServiceStatus = useCallback((serviceId: string, status: ProjectRunStatus) => {
+    setServiceStatuses((current) => ({ ...current, [serviceId]: status }));
+  }, []);
+
   const isAnalyzing = analysisStarting || analysisTaskId !== null;
+  const hasInvalidStartupService =
+    startupConfig?.services.some((service) => service.readiness_probe === null) ?? false;
   const startupState = useMemo(
-    () =>
-      deriveProjectStartupState({
+    () => {
+      const derived = deriveProjectStartupState({
         project: {
           ...project,
           run_command: startupConfig?.services[0]?.run_command ?? project.run_command,
@@ -454,8 +480,53 @@ export function useProjectStartupConfig(projectId: string, initialProject: Proje
         runStatus: startupConfig?.services.length ? null : runStatus,
         isAnalysisActive: isAnalyzing,
         unsavedCount: envVars.filter((envVar) => envVar.dirty).length,
-      }),
-    [project, startupConfig, envVars, latestTask, runStatus, isAnalyzing],
+      });
+      if (hasInvalidStartupService) {
+        return {
+          ...derived,
+          configure: "error" as const,
+          run: "error" as const,
+          canStart: false,
+          readinessState: "invalid_config" as const,
+        };
+      }
+      if (startupConfig?.services.length) {
+        const statuses = startupConfig.services.map((service) => serviceStatuses[service.service_id]);
+        const anyRunning = statuses.some((status) => status?.running === true);
+        const anyAddressOccupied = statuses.some(
+          (status) => status?.service.state === "reachable",
+        );
+        const allReady = statuses.every((status) => status?.readiness.state === "ready");
+        const canStart =
+          derived.analysis === "complete" &&
+          derived.configure === "complete" &&
+          !anyRunning &&
+          !anyAddressOccupied;
+        return {
+          ...derived,
+          run: allReady
+            ? ("complete" as const)
+            : anyRunning
+              ? ("active" as const)
+              : canStart
+                ? ("ready" as const)
+                : ("pending" as const),
+          canStart,
+          readinessState: allReady ? ("ready" as const) : ("unreachable" as const),
+        };
+      }
+      return derived;
+    },
+    [
+      project,
+      startupConfig,
+      serviceStatuses,
+      envVars,
+      latestTask,
+      runStatus,
+      isAnalyzing,
+      hasInvalidStartupService,
+    ],
   );
 
   return {
@@ -467,6 +538,8 @@ export function useProjectStartupConfig(projectId: string, initialProject: Proje
     runStatus,
     runLogs,
     startupState,
+    hasInvalidStartupService,
+    updateServiceStatus,
     loading,
     loadError: loadError ?? selectProjectRunRefreshError(runRefreshErrors),
     analysisFeedback,

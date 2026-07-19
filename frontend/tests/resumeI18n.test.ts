@@ -62,6 +62,10 @@ test("selection provider keeps local storage reads out of hydration state initia
   const selectionProvider = readSource("features/workbench/state/SelectionProvider.tsx");
 
   assert.match(selectionProvider, /useState<string \| null>\(initial\?\.projectId \?\? null\)/);
-  assert.match(selectionProvider, /else setProjectIdState\(readLocal\(PROJECT_KEY\)\)/);
+  assert.match(
+    selectionProvider,
+    /else \{setProjectIdState\(readLocal\(PROJECT_KEY\)\);\}/,
+  );
+  assert.match(selectionProvider, /writeLocal\(PROJECT_KEY, nextProjectId\)/);
   assert.doesNotMatch(selectionProvider, /useState<string \| null>\([^)]*readLocal\(PROJECT_KEY\)/);
 });

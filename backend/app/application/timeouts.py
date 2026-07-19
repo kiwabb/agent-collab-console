@@ -38,6 +38,7 @@ this module is behaviour-preserving on its own.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import tempfile
 
@@ -70,6 +71,7 @@ DEFAULT_PROCESS_MAX_TIMEOUT_S = 1800
 DEFAULT_PROTOTYPE_UI_ENGINEER_PROCESS_MAX_TIMEOUT_S = 3600
 DEFAULT_PROTOTYPE_SNAP_WORKER_ATTEST_TIMEOUT_S = 5.0
 DEFAULT_PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S = 60.0
+DEFAULT_PROTOTYPE_RUNTIME_WORKER_TIMEOUT_S = 30.0
 DEFAULT_WORKFLOW_ORCHESTRATOR_LLM_ENABLED = True
 DEFAULT_WORKFLOW_ORCHESTRATOR_TIMEOUT_S = 28.0
 DEFAULT_WORKFLOW_ORCHESTRATOR_MAX_TOKENS = 8192
@@ -107,6 +109,7 @@ DEFAULT_PROJECT_SCRIPT_VERIFICATION_TIMEOUT_S = 180
 DEFAULT_PROJECT_SCRIPT_LOG_CAPTURE_TIMEOUT_S = 0.5
 DEFAULT_PROJECT_SERVICE_PROBE_TIMEOUT_S = 0.75
 DEFAULT_EVENT_BUS_BUFFER_SIZE = 1000
+DEFAULT_EVENT_BUS_LOG_RETRY_DELAY_S = 0.1
 DEFAULT_AUDIT_LOG_MAX_QUEUE = 10000
 DEFAULT_WS_WORKSPACE_QUEUE_MAXSIZE = 256
 DEFAULT_WS_LOG_QUEUE_MAXSIZE = 2048
@@ -334,6 +337,20 @@ def prototype_snap_worker_attest_many_timeout_s() -> float:
     return value if value > 0 else DEFAULT_PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S
 
 
+def prototype_runtime_worker_timeout_s() -> float:
+    name = "PROTOTYPE_RUNTIME_WORKER_TIMEOUT_S"
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return DEFAULT_PROTOTYPE_RUNTIME_WORKER_TIMEOUT_S
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise TimeoutConfigError(f"{name} must be a finite number greater than 0") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise TimeoutConfigError(f"{name} must be a finite number greater than 0")
+    return value
+
+
 def workflow_orchestrator_executor_id() -> str | None:
     return _env_str("WORKFLOW_ORCHESTRATOR_EXECUTOR_ID")
 
@@ -495,6 +512,11 @@ def cost_usd_per_m_cache_read() -> float:
 
 def event_bus_buffer_size() -> int:
     return max(1, _env_int("EVENT_BUS_BUFFER_SIZE", DEFAULT_EVENT_BUS_BUFFER_SIZE))
+
+
+def event_bus_log_retry_delay_s() -> float:
+    value = _env_float("EVENT_BUS_LOG_RETRY_DELAY_S", DEFAULT_EVENT_BUS_LOG_RETRY_DELAY_S)
+    return value if value > 0 else DEFAULT_EVENT_BUS_LOG_RETRY_DELAY_S
 
 
 def audit_log_max_queue() -> int:
@@ -725,6 +747,7 @@ def check_invariants() -> list[str]:
             "PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S",
             prototype_snap_worker_attest_many_timeout_s(),
         ),
+        ("PROTOTYPE_RUNTIME_WORKER_TIMEOUT_S", prototype_runtime_worker_timeout_s()),
         ("WORKFLOW_ORCHESTRATOR_TIMEOUT", workflow_orchestrator_timeout_s()),
         ("WORKFLOW_ORCHESTRATOR_MAX_TOKENS", workflow_orchestrator_max_tokens()),
         ("CONDUCTOR_LLM_TIMEOUT", conductor_llm_timeout_s()),

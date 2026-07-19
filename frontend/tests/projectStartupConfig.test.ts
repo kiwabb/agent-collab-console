@@ -72,6 +72,14 @@ const stopped: ProjectRunStatus = {
     checked_at: null,
     error: null,
   },
+  readiness: {
+    state: "unreachable",
+    url: null,
+    http_status: null,
+    checked_at: null,
+    identity_matched: false,
+    error: "connection_failed",
+  },
 };
 
 test("selectLatestProjectStartupTask ignores unrelated tasks and selects newest analysis", () => {
@@ -129,6 +137,7 @@ test("deriveProjectStartupState reports never analyzed", () => {
       canStart: false,
       runOutcome: "idle",
       serviceState: "not_configured",
+      readinessState: "unreachable",
     },
   );
 });
@@ -173,7 +182,7 @@ test("deriveProjectStartupState reports ready and running states", () => {
   assert.equal(ready.run, "ready");
   assert.equal(ready.canStart, true);
   assert.equal(ready.runOutcome, "idle");
-  assert.equal(running.run, "complete");
+  assert.equal(running.run, "active");
   assert.equal(running.canStart, false);
   assert.equal(running.runOutcome, "running");
 });
@@ -190,6 +199,7 @@ test("deriveProjectStartupState exposes a failed terminal run and allows retry",
       started_at: "2026-07-10T10:13:45Z",
       exit_code: 1,
       service: stopped.service,
+      readiness: stopped.readiness,
     },
   });
 
@@ -314,7 +324,7 @@ test("run refresh errors recover independently by request source", () => {
   assert.equal(selectProjectRunRefreshError(errors), "logs unavailable");
 });
 
-test("deriveProjectStartupState blocks duplicate start for an externally reachable service", () => {
+test("deriveProjectStartupState blocks an occupied address without marking startup complete", () => {
   const runStatus: ProjectRunStatus = {
     ...stopped,
     service: {
@@ -322,6 +332,48 @@ test("deriveProjectStartupState blocks duplicate start for an externally reachab
       url: "http://127.0.0.1:3000/",
       http_status: 404,
       checked_at: "2026-07-12T08:00:00Z",
+      error: null,
+    },
+    readiness: {
+      state: "occupied_unknown",
+      url: "http://127.0.0.1:3000/health",
+      http_status: 404,
+      checked_at: "2026-07-12T08:00:00Z",
+      identity_matched: false,
+      error: "identity_mismatch",
+    },
+  };
+  const state = deriveProjectStartupState({
+    project: project({ run_command: "npm run dev" }),
+    envVars: [],
+    latestTask: task(),
+    runStatus,
+  });
+
+  assert.equal(state.run, "pending");
+  assert.equal(state.runOutcome, "idle");
+  assert.equal(state.serviceState, "reachable");
+  assert.equal(state.readinessState, "occupied_unknown");
+  assert.equal(state.canStart, false);
+  assert.equal(deriveProjectRunPresentation(runStatus, state), "occupied_unknown");
+});
+
+test("externally started expected application completes readiness", () => {
+  const runStatus: ProjectRunStatus = {
+    ...stopped,
+    service: {
+      state: "reachable",
+      url: "http://127.0.0.1:3000/",
+      http_status: 200,
+      checked_at: "2026-07-12T08:00:00Z",
+      error: null,
+    },
+    readiness: {
+      state: "ready",
+      url: "http://127.0.0.1:3000/health",
+      http_status: 200,
+      checked_at: "2026-07-12T08:00:00Z",
+      identity_matched: true,
       error: null,
     },
   };
@@ -333,10 +385,63 @@ test("deriveProjectStartupState blocks duplicate start for an externally reachab
   });
 
   assert.equal(state.run, "complete");
-  assert.equal(state.runOutcome, "idle");
-  assert.equal(state.serviceState, "reachable");
   assert.equal(state.canStart, false);
-  assert.equal(deriveProjectRunPresentation(runStatus, state), "external_reachable");
+  assert.equal(deriveProjectRunPresentation(runStatus, state), "external_ready");
+});
+
+test("identified external application with an unhealthy status stays distinct from unknown occupation", () => {
+  const runStatus: ProjectRunStatus = {
+    ...stopped,
+    service: {
+      state: "reachable",
+      url: "http://127.0.0.1:3000/health",
+      http_status: 503,
+      checked_at: "2026-07-12T08:00:00Z",
+      error: null,
+    },
+    readiness: {
+      state: "identified_unready",
+      url: "http://127.0.0.1:3000/health",
+      http_status: 503,
+      checked_at: "2026-07-12T08:00:00Z",
+      identity_matched: true,
+      error: "unexpected_status",
+    },
+  };
+  const state = deriveProjectStartupState({
+    project: project({ run_command: "npm run dev" }),
+    envVars: [],
+    latestTask: task(),
+    runStatus,
+  });
+
+  assert.equal(state.run, "pending");
+  assert.equal(state.canStart, false);
+  assert.equal(deriveProjectRunPresentation(runStatus, state), "external_unhealthy");
+});
+
+test("legacy startup configuration is invalid and non-runnable", () => {
+  const runStatus: ProjectRunStatus = {
+    ...stopped,
+    readiness: {
+      state: "invalid_config",
+      url: null,
+      http_status: null,
+      checked_at: null,
+      identity_matched: false,
+      error: "readiness_not_configured",
+    },
+  };
+  const state = deriveProjectStartupState({
+    project: project({ run_command: "npm run dev" }),
+    envVars: [],
+    latestTask: task(),
+    runStatus,
+  });
+
+  assert.equal(state.run, "error");
+  assert.equal(state.canStart, false);
+  assert.equal(deriveProjectRunPresentation(runStatus, state), "invalid_config");
 });
 
 test("deriveProjectRunPresentation reports a managed process waiting for service readiness", () => {

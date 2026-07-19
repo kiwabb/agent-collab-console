@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from app.domain.states import SessionState
 
@@ -109,6 +109,42 @@ class Project(BaseModel):
     updated_at: datetime | None = None
 
 
+class ProjectReadinessJsonSubsetIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    kind: Literal["json_subset"]
+    expected: dict[str, JsonValue] = Field(min_length=1, max_length=50)
+
+
+class ProjectReadinessTextContainsIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    kind: Literal["text_contains"]
+    text: str = Field(min_length=1, max_length=1_000)
+
+
+ProjectReadinessIdentity = Annotated[
+    ProjectReadinessJsonSubsetIdentity | ProjectReadinessTextContainsIdentity,
+    Field(discriminator="kind"),
+]
+
+
+class ProjectReadinessProbe(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    kind: Literal["http"] = "http"
+    url: str = Field(min_length=1, max_length=2_000)
+    expected_status: int = Field(ge=100, le=599)
+    identity: ProjectReadinessIdentity
+
+
+class ProjectStartupEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    path: str = Field(min_length=1, max_length=2_000)
+    detail: str = Field(default="", max_length=4_000)
+
+
 class ProjectStartupService(BaseModel):
     project_id: str
     service_id: str
@@ -117,8 +153,9 @@ class ProjectStartupService(BaseModel):
     setup_command: str
     run_command: str
     access_url: str | None = None
+    readiness_probe: ProjectReadinessProbe | None = None
     depends_on: list[str] = Field(default_factory=list)
-    evidence: list[str] = Field(default_factory=list)
+    evidence: list[ProjectStartupEvidence] = Field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

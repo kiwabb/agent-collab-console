@@ -10,6 +10,7 @@ from typing import Protocol
 from uuid import uuid4
 
 import aiosqlite
+from pydantic import ValidationError
 
 from app.adapters.audit_log_query import build_audit_log_query as _build_audit_log_query
 from app.adapters.structured_prototype_store import (
@@ -47,6 +48,8 @@ from app.domain.models import (
     ProjectConductorState,
     ProjectEnvVar,
     ProjectMemoryEmbedding,
+    ProjectReadinessProbe,
+    ProjectStartupEvidence,
     ProjectStartupService,
     RuntimeCatalog,
     SelfImprovementApplicationEvent,
@@ -58,7 +61,7 @@ from app.domain.models import (
     WorkflowGraph,
     WorkflowNode,
 )
-from app.json_safety import object_dict_list, object_dict_or_none
+from app.json_safety import object_dict_list, object_dict_or_none, parse_json_value
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +81,34 @@ def _quote_sqlite_identifier(name: object) -> str:
     if not isinstance(name, str) or SQLITE_IDENTIFIER_RE.fullmatch(name) is None:
         raise ValueError(f"unsafe sqlite identifier: {name!r}")
     return f'"{name}"'
+
+
+def _project_readiness_probe(raw: object) -> ProjectReadinessProbe | None:
+    if not isinstance(raw, str) or not raw:
+        return None
+    parsed = parse_json_value(raw)
+    try:
+        return ProjectReadinessProbe.model_validate(parsed)
+    except ValidationError:
+        return None
+
+
+def _project_startup_evidence(raw: object) -> list[ProjectStartupEvidence]:
+    if not isinstance(raw, str) or not raw:
+        return []
+    parsed = parse_json_value(raw, default=[])
+    if not isinstance(parsed, list):
+        return []
+    evidence: list[ProjectStartupEvidence] = []
+    for item in parsed:
+        if isinstance(item, str) and item.strip():
+            evidence.append(ProjectStartupEvidence(path=item.strip()))
+            continue
+        try:
+            evidence.append(ProjectStartupEvidence.model_validate(item))
+        except ValidationError:
+            continue
+    return evidence
 
 
 def _log_events_query(*, has_task_id: bool, has_execution_process_id: bool, reverse: bool) -> str:
@@ -160,6 +191,8 @@ class AsyncSQLiteStore:
         self.db_path = db_path
         self._conn: aiosqlite.Connection | None = None
         self._conn_lock = asyncio.Lock()
+        self._init_lock = asyncio.Lock()
+        self._initialized_connection: aiosqlite.Connection | None = None
 
     async def close(self) -> None:
         """Close the connection. Call this on app shutdown."""
@@ -167,6 +200,7 @@ class AsyncSQLiteStore:
             if self._conn is not None:
                 await self._conn.close()
                 self._conn = None
+                self._initialized_connection = None
 
     async def _get_conn(self) -> aiosqlite.Connection:
         async with self._conn_lock:
@@ -174,6 +208,7 @@ class AsyncSQLiteStore:
                 self._conn = await aiosqlite.connect(self.db_path, timeout=30.0)
                 await self._conn.execute("PRAGMA journal_mode=WAL")
                 await self._conn.execute("PRAGMA synchronous=NORMAL")
+                await self._conn.execute("PRAGMA busy_timeout=30000")
             return self._conn
 
     async def _init_db(self) -> None:
@@ -551,6 +586,7 @@ class AsyncSQLiteStore:
                 setup_command TEXT NOT NULL DEFAULT '',
                 run_command TEXT NOT NULL,
                 access_url TEXT,
+                readiness_probe_json TEXT,
                 depends_on_json TEXT NOT NULL DEFAULT '[]',
                 evidence_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT,
@@ -559,6 +595,10 @@ class AsyncSQLiteStore:
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
             )
         """)
+        with suppress(aiosqlite.OperationalError):
+            await conn.execute(
+                "ALTER TABLE project_startup_services ADD COLUMN readiness_probe_json TEXT"
+            )
         await conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_project_startup_services_project_id "
             "ON project_startup_services(project_id)"
@@ -1050,6 +1090,12 @@ class AsyncSQLiteStore:
                 (12,),
             )
             current_version = 12
+        if current_version < 13:
+            await conn.execute(
+                "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
+                (13,),
+            )
+            current_version = 13
         if current_version < 14:
             for name, declaration in STRUCTURED_PROTOTYPE_GENERATION_SNAPSHOT_COLUMNS:
                 with suppress(aiosqlite.OperationalError):
@@ -1289,9 +1335,17 @@ class AsyncSQLiteStore:
         with suppress(aiosqlite.OperationalError):
             await conn.execute("ALTER TABLE workflow_nodes ADD COLUMN batch_key TEXT")
         await conn.commit()
+        self._initialized_connection = conn
 
     async def _ensure_db(self) -> None:
-        await self._init_db()
+        conn = await self._get_conn()
+        if self._initialized_connection is conn:
+            return
+        async with self._init_lock:
+            conn = await self._get_conn()
+            if self._initialized_connection is conn:
+                return
+            await self._init_db()
 
     def _format_datetime(self, dt: datetime | None) -> str | None:
         return dt.isoformat() if dt else None
@@ -2081,9 +2135,9 @@ class AsyncSQLiteStore:
                     """
                     INSERT INTO project_startup_services (
                         project_id, service_id, name, working_directory,
-                        setup_command, run_command, access_url, depends_on_json,
-                        evidence_json, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        setup_command, run_command, access_url, readiness_probe_json,
+                        depends_on_json, evidence_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         project_id,
@@ -2093,8 +2147,19 @@ class AsyncSQLiteStore:
                         service.setup_command,
                         service.run_command,
                         service.access_url,
+                        (
+                            json.dumps(
+                                service.readiness_probe.model_dump(mode="json"),
+                                ensure_ascii=False,
+                            )
+                            if service.readiness_probe is not None
+                            else None
+                        ),
                         json.dumps(service.depends_on, ensure_ascii=False),
-                        json.dumps(service.evidence, ensure_ascii=False),
+                        json.dumps(
+                            [item.model_dump(mode="json") for item in service.evidence],
+                            ensure_ascii=False,
+                        ),
                         self._format_datetime(service.created_at or now),
                         self._format_datetime(now),
                     ),
@@ -2131,8 +2196,8 @@ class AsyncSQLiteStore:
         async with conn.execute(
             """
             SELECT project_id, service_id, name, working_directory,
-                   setup_command, run_command, access_url, depends_on_json,
-                   evidence_json, created_at, updated_at
+                   setup_command, run_command, access_url, readiness_probe_json,
+                   depends_on_json, evidence_json, created_at, updated_at
             FROM project_startup_services
             WHERE project_id = ?
             ORDER BY service_id
@@ -2149,8 +2214,9 @@ class AsyncSQLiteStore:
                 setup_command=row["setup_command"],
                 run_command=row["run_command"],
                 access_url=row["access_url"],
+                readiness_probe=_project_readiness_probe(row["readiness_probe_json"]),
                 depends_on=json.loads(row["depends_on_json"]),
-                evidence=json.loads(row["evidence_json"]),
+                evidence=_project_startup_evidence(row["evidence_json"]),
                 created_at=self._parse_datetime(row["created_at"]),
                 updated_at=self._parse_datetime(row["updated_at"]),
             )
@@ -2703,7 +2769,10 @@ class AsyncSQLiteStore:
         ]
 
     async def list_execution_process_runtime_rows(
-        self, session_id: str
+        self,
+        session_id: str,
+        *,
+        log_limit: int = 10000,
     ) -> list[tuple[ExecutionProcess, CodexTask | None, list[CodexTaskMessage], list[LogEvent]]]:
         processes = await self.list_execution_processes(session_id=session_id)
         rows: list[
@@ -2715,7 +2784,10 @@ class AsyncSQLiteStore:
                 process.task_id, execution_process_id=process.id
             )
             logs = await self.load_log_events(
-                session_id, task_id=process.task_id, execution_process_id=process.id, limit=10000
+                session_id,
+                task_id=process.task_id,
+                execution_process_id=process.id,
+                limit=log_limit,
             )
             rows.append((process, task, messages, logs))
         return rows

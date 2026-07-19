@@ -177,6 +177,84 @@ worker = PrototypeSnapWorker()  # Adapter silently owns policy defaults.
 await worker.attest_many(request_id=request_id, evidence_jsons=evidence_jsons)
 ```
 
+## Scenario: Runtime Worker Deadline Policy
+
+### 1. Scope / Trigger
+
+- Trigger: changing structured prototype runtime initialize, apply, replay, or
+  describe execution deadlines, worker process lifecycle, or bootstrap wiring.
+- A slow valid runtime action must have a realistic local execution budget, but
+  a stuck Node worker must still be terminated and persisted as a failed operation.
+
+### 2. Signatures
+
+```python
+timeouts.prototype_runtime_worker_timeout_s() -> float
+
+PrototypeRuntimeWorker(
+    *,
+    timeout_s: float,
+    manifest_path: Path | None = None,
+    node_executable: str | None = None,
+)
+```
+
+Environment contract: `PROTOTYPE_RUNTIME_WORKER_TIMEOUT_S`, optional finite
+float greater than zero, default `30.0` seconds.
+
+### 3. Contracts
+
+- `application/timeouts.py` owns the runtime deadline policy and strict env parsing.
+- `bootstrap.py` injects the accessor result explicitly into `PrototypeRuntimeWorker`.
+- The same deadline covers `describe`, `initialize`, `apply`, and `replay` actions.
+- Invalid explicit configuration raises `TimeoutConfigError` during backend composition;
+  it must not silently fall back to a different operational deadline.
+- On timeout, kill and await the child process before raising `runtime_worker_timeout`.
+- Boundary logs include action, request/operation ID, configured deadline, and elapsed
+  milliseconds. Never log the runtime definition, state JSON, or event batches.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+|---|---|
+| Env absent | Use `30.0` seconds |
+| Finite env value greater than zero | Inject the configured value |
+| Zero, negative, non-numeric, NaN, or infinity | Raise `TimeoutConfigError`; backend startup fails |
+| Worker exits within deadline | Continue strict response/protocol/hash validation |
+| Worker exceeds deadline | Kill process, persist failed operation, return retryable `runtime_worker_timeout` |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a replay that needs more than five seconds but less than the configured deadline succeeds.
+- Base: a normal replay completes quickly and logs its actual elapsed time against `30.0` seconds.
+- Bad: remove the deadline and allow a hung runtime worker to retain resources indefinitely.
+- Bad: catch invalid configuration and silently construct a worker with the adapter's fallback.
+
+### 6. Tests Required
+
+- Timeout accessor tests assert the `30.0` default, valid float override, and strict refusal
+  of zero, negative, non-numeric, NaN, and infinity.
+- Bootstrap AST coverage asserts `timeout_s=timeouts.prototype_runtime_worker_timeout_s()`.
+- Adapter timeout coverage asserts the configured value reaches `asyncio.wait_for`, the child
+  is killed, and `runtime_worker_timeout` is raised.
+- A real runtime session replay verifies the configured deadline in logs and returns HTTP 200.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+worker = PrototypeRuntimeWorker()  # Hidden five-second operational policy.
+```
+
+Correct:
+
+```python
+worker = PrototypeRuntimeWorker(
+    timeout_s=timeouts.prototype_runtime_worker_timeout_s(),
+)
+```
+
 Correct:
 
 ```python

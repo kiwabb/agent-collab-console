@@ -170,6 +170,7 @@ HTML is a disposable renderer output for published previews. It is regenerated f
 | `STRUCTURED_PROTOTYPE_DATA_ROOT` | `structured-prototype-data` | Content-addressed objects and published render artifacts |
 | `STRUCTURED_PROTOTYPE_AI_MCP_ENDPOINT` | loopback backend endpoint | Claude UI Engineer conversation-edit MCP endpoint |
 | `STRUCTURED_PROTOTYPE_GENERATION_MCP_ENDPOINT` | loopback backend endpoint | Claude UI Engineer structured-generation MCP endpoint |
+| `PROTOTYPE_RUNTIME_WORKER_TIMEOUT_S` | `30` | Maximum seconds for one structured prototype runtime worker action; invalid values fail backend startup |
 
 ## Troubleshooting
 

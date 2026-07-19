@@ -68,12 +68,15 @@ test("structured prototype chrome uses the console theme instead of a standalone
   assert.doesNotMatch(generation, /#[0-9a-fA-F]{3,8}/);
 });
 
-test("structured prototype Studio fullscreen hides project chrome with an escapable overlay", () => {
+test("structured prototype Studio fullscreen stays below modal chrome and remains escapable", () => {
   const studio = readSource("features/prototype/structured/StructuredPrototypeStudioPage.tsx");
+  const dialog = readSource("components/ui/dialog.tsx");
 
   assert.match(studio, /isFullscreen/);
   assert.match(studio, /data-prototype-studio-fullscreen/);
-  assert.match(studio, /fixed inset-0 z-\[100\] h-dvh/);
+  assert.match(studio, /fixed inset-0 z-40 h-dvh/);
+  assert.match(dialog, /fixed inset-0 isolate z-50/);
+  assert.match(dialog, /fixed top-1\/2 left-1\/2 z-50/);
   assert.match(studio, /ui\.enterFullscreen/);
   assert.match(studio, /ui\.exitFullscreen/);
   assert.match(studio, /key: "Escape"/);

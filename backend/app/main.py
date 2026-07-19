@@ -296,6 +296,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.debug("project run manager shutdown failed", exc_info=True)
     try:
+        await event_bus.shutdown()
+    except Exception:
+        logger.warning("event bus log drain failed during shutdown", exc_info=True)
+    try:
         from app.application.audit_logger import audit_logger
 
         await audit_logger.shutdown()

@@ -26,6 +26,7 @@ import {
 import type { PrototypeRuntimeState, RuntimeEvent, RuntimeViewModel } from "../runtime/types";
 import { defaultRuntimeScenarioId } from "./structuredPrototypeDerived";
 import {
+  resolveStructuredPrototypeRecoveredOperationFailure,
   StructuredPrototypeOperationOutcomeError,
   StructuredPrototypeOperationRecoveryPendingError,
   waitForStructuredPrototypeOperationOutcome,
@@ -61,6 +62,7 @@ import {
   type StructuredPrototypeRuntimeResetEvidence,
 } from "./structuredPrototypeRuntimeRecovery";
 import type {
+  AppliedStructuredPrototypeCommands,
   StructuredPrototypeCommandBatch,
   StructuredPrototypeDraft,
   StructuredPrototypePublication,
@@ -83,8 +85,17 @@ interface StudioState {
   runtimeRecovery: StructuredPrototypeRuntimeRecoveryIssue | null;
 }
 
+export interface StructuredPrototypeCommandApplicationResult {
+  draft: StructuredPrototypeDraft;
+  allocatedEntityIds: AppliedStructuredPrototypeCommands["allocatedEntityIds"] | null;
+  runtimeReady: boolean;
+}
+
 interface StructuredPrototypeStudioController extends StudioState {
   applyCommands: (batch: StructuredPrototypeCommandBatch) => Promise<boolean>;
+  applyCommandsWithResult: (
+    batch: StructuredPrototypeCommandBatch,
+  ) => Promise<StructuredPrototypeCommandApplicationResult | null>;
   undo: () => Promise<boolean>;
   redo: () => Promise<boolean>;
   sendRuntimeEvents: (events: RuntimeEvent[]) => Promise<boolean>;
@@ -915,10 +926,12 @@ export function useStructuredPrototypeStudio(
     [projectId, stageDraftAndRebuildRuntime],
   );
 
-  const applyCommands = useCallback(
-    async (batch: StructuredPrototypeCommandBatch): Promise<boolean> => {
+  const applyCommandsWithResult = useCallback(
+    async (
+      batch: StructuredPrototypeCommandBatch,
+    ): Promise<StructuredPrototypeCommandApplicationResult | null> => {
       const currentDraft = studio.draft;
-      if (!currentDraft || studio.saving || studio.runtimeRecovery !== null) return false;
+      if (!currentDraft || studio.saving || studio.runtimeRecovery !== null) return null;
       setStudio((current) => ({ ...current, saving: true, error: null }));
       const requestKey = structuredPrototypeCommandRequestKey(
         currentDraft.draftId,
@@ -934,9 +947,10 @@ export function useStructuredPrototypeStudio(
           requestKey,
         });
       } catch (error) {
-        return reportMutationFailure("structured prototype command persistence failed", error);
+        reportMutationFailure("structured prototype command persistence failed", error);
+        return null;
       }
-      let applied: StructuredPrototypeDraft;
+      let applied: AppliedStructuredPrototypeCommands;
       try {
         applied = await applyStructuredPrototypeCommands(currentDraft.draftId, {
           contractVersion: 1,
@@ -951,27 +965,48 @@ export function useStructuredPrototypeStudio(
         try {
           reconciled = await reconcileAfterRequestFailure(descriptor);
         } catch (recoveryError) {
-          return reportMutationFailure(
+          reportMutationFailure(
             "structured prototype command recovery failed",
-            recoveryError,
+            resolveStructuredPrototypeRecoveredOperationFailure(error, recoveryError),
           );
+          return null;
+        }
+        if (reconciled.kind !== "draft") {
+          reportMutationFailure(
+            "structured prototype command recovery failed",
+            operationResourceMismatch("command recovery did not return a draft"),
+          );
+          return null;
         }
         try {
-          return await applyReconciledOperation(reconciled);
+          const runtimeReady = await applyReconciledOperation(reconciled);
+          return { draft: reconciled.draft, allocatedEntityIds: null, runtimeReady };
         } catch (rebuildError) {
-          return reportMutationFailure(
+          reportMutationFailure(
             "structured prototype command runtime rebuild failed",
             rebuildError,
           );
+          return {
+            draft: reconciled.draft,
+            allocatedEntityIds: null,
+            runtimeReady: false,
+          };
         }
       }
       try {
-        return await stageDraftAndRebuildRuntime(applied);
+        const runtimeReady = await stageDraftAndRebuildRuntime(applied);
+        return {
+          draft: applied,
+          allocatedEntityIds: applied.allocatedEntityIds,
+          runtimeReady,
+        };
       } catch (rebuildError) {
-        return reportMutationFailure(
-          "structured prototype command runtime rebuild failed",
-          rebuildError,
-        );
+        reportMutationFailure("structured prototype command runtime rebuild failed", rebuildError);
+        return {
+          draft: applied,
+          allocatedEntityIds: applied.allocatedEntityIds,
+          runtimeReady: false,
+        };
       }
     },
     [
@@ -983,6 +1018,12 @@ export function useStructuredPrototypeStudio(
       studio.runtimeRecovery,
       studio.saving,
     ],
+  );
+
+  const applyCommands = useCallback(
+    async (batch: StructuredPrototypeCommandBatch): Promise<boolean> =>
+      (await applyCommandsWithResult(batch))?.runtimeReady === true,
+    [applyCommandsWithResult],
   );
 
   const mutateHistory = useCallback(
@@ -1398,6 +1439,7 @@ export function useStructuredPrototypeStudio(
   return {
     ...studio,
     applyCommands,
+    applyCommandsWithResult,
     undo,
     redo,
     sendRuntimeEvents,

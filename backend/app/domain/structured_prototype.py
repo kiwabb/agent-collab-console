@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, cast
 
+PROTOTYPE_FORWARD_COMMAND_BATCH_MAX_BYTES = 262_144
 REPLAY_MANIFEST_SCHEMA_VERSION = 1
 _CONTENT_HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REPLAY_MANIFEST_KEYS = frozenset(

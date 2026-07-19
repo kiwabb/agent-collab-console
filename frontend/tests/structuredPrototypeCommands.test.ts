@@ -7,10 +7,14 @@ import type {
   StructuredPrototypeFreeformNode,
 } from "../src/features/prototype/structured/types";
 import {
+  addPageBatch,
   createPaletteNode,
+  deletePageBatch,
+  duplicatePageBatch,
   insertPaletteNodeBatch,
   moveFreeformSelectionBatch,
   moveNodeBatch,
+  movePositionedSelectionBatch,
   removeNodeBatch,
   removeNodesBatch,
   reorderPageBatch,
@@ -19,6 +23,10 @@ import {
   setRuntimeFlowNodePositionBatch,
   setRuntimeEntityFieldBatch,
   setFreeformGroupLayoutBatch,
+  setPositionedGroupLayoutBatch,
+  renamePageBatch,
+  structuredPrototypePageAllocationKey,
+  updateNodeNameBatch,
 } from "../src/features/prototype/structured/structuredPrototypeCommands";
 import { isStructuredPrototypeContainerNode } from "../src/features/prototype/structured/structuredPrototypeNodes";
 import {
@@ -110,7 +118,7 @@ test("all eight palette types produce bounded structured nodes", () => {
   assert.equal(table.type === "Table" ? table.columns[0]?.label : null, "Table");
 });
 
-test("palette insert and component move preserve explicit target position", () => {
+test("palette insert and component move preserve, clear, or set target position", () => {
   const text = createPaletteNode("Text", "new-text", formDefinition, labels);
   const root = commandDocument().pages[0]?.root;
   assert.ok(root && isStructuredPrototypeContainerNode(root));
@@ -128,6 +136,59 @@ test("palette insert and component move preserve explicit target position", () =
     targetSlot: null,
     targetIndex: 1,
   });
+  assert.deepEqual(moveNodeBatch("node", root, 1, null).commands[0], {
+    kind: "moveNode",
+    node: { kind: "existing", nodeId: "node" },
+    targetParent: { kind: "existing", nodeId: root.id },
+    targetSlot: null,
+    targetIndex: 1,
+    targetPosition: null,
+  });
+  const position = { x: "24", y: "48" };
+  assert.deepEqual(insertPaletteNodeBatch(root, 2, text, position).commands[0], {
+    kind: "insertNode",
+    parent: { kind: "existing", nodeId: root.id },
+    slot: null,
+    index: 2,
+    node: { ...text, layoutItem: { ...text.layoutItem, position } },
+  });
+  const positionedText = { ...text, layoutItem: { ...text.layoutItem, position } };
+  assert.deepEqual(insertPaletteNodeBatch(root, 2, positionedText).commands[0], {
+    kind: "insertNode",
+    parent: { kind: "existing", nodeId: root.id },
+    slot: null,
+    index: 2,
+    node: positionedText,
+  });
+  assert.deepEqual(insertPaletteNodeBatch(root, 2, positionedText, null).commands[0], {
+    kind: "insertNode",
+    parent: { kind: "existing", nodeId: root.id },
+    slot: null,
+    index: 2,
+    node: text,
+  });
+  assert.deepEqual(moveNodeBatch("node", root, 1, position).commands[0], {
+    kind: "moveNode",
+    node: { kind: "existing", nodeId: "node" },
+    targetParent: { kind: "existing", nodeId: root.id },
+    targetSlot: null,
+    targetIndex: 1,
+    targetPosition: position,
+  });
+
+  const freeform: StructuredPrototypeFreeformNode = {
+    id: "00000000-0000-4000-8000-000000000300",
+    type: "Freeform",
+    name: "Freeform",
+    visibility: "visible",
+    layoutItem: root.layoutItem,
+    responsive: [],
+    children: [],
+  };
+  assert.throws(() => insertPaletteNodeBatch(freeform, 0, text), /position is required/u);
+  assert.throws(() => insertPaletteNodeBatch(freeform, 0, text, null), /position is required/u);
+  assert.throws(() => moveNodeBatch("node", freeform, 0), /target position is required/u);
+  assert.throws(() => moveNodeBatch("node", freeform, 0, null), /target position is required/u);
 });
 
 test("freeform selection moves use positioned same-parent commands in document order", () => {
@@ -189,6 +250,38 @@ test("freeform selection moves use positioned same-parent commands in document o
   );
 });
 
+test("positioned selection moves support ordinary layout containers in document order", () => {
+  const root = commandDocument().pages[0]?.root;
+  assert.ok(root && isStructuredPrototypeContainerNode(root));
+  const first = root.children[0];
+  const second = root.children[1];
+  assert.ok(first && second);
+
+  const batch = movePositionedSelectionBatch(
+    root,
+    [
+      { nodeId: second.id, x: 300.125, y: 72.5 },
+      { nodeId: first.id, x: 12, y: 24 },
+    ],
+    "Move two positioned components",
+  );
+
+  assert.deepEqual(
+    batch.commands.map((command) => {
+      if (command.kind !== "moveNode" || command.node.kind !== "existing") return null;
+      return {
+        nodeId: command.node.nodeId,
+        targetIndex: command.targetIndex,
+        position: command.targetPosition,
+      };
+    }),
+    [
+      { nodeId: first.id, targetIndex: 0, position: { x: "12", y: "24" } },
+      { nodeId: second.id, targetIndex: 1, position: { x: "300.125", y: "72.5" } },
+    ],
+  );
+});
+
 test("component removal and page reordering use structured command contracts", () => {
   assert.deepEqual(removeNodeBatch("node-to-delete"), {
     commandContractVersion: 1,
@@ -216,6 +309,62 @@ test("component removal and page reordering use structured command contracts", (
       },
     ],
   });
+});
+
+test("page CRUD builders use deterministic allocation keys and contract version 1", () => {
+  const pageId = STRUCTURED_PROCUREMENT_IDS.pages.list;
+  const compactPageId = pageId.replaceAll("-", "");
+  assert.equal(structuredPrototypePageAllocationKey("add", pageId), `page-add-${compactPageId}`);
+  assert.equal(
+    structuredPrototypePageAllocationKey("duplicate", pageId),
+    `page-duplicate-${compactPageId}`,
+  );
+  assert.deepEqual(addPageBatch(pageId, "  Blank page  ", true), {
+    commandContractVersion: 1,
+    summary: "Add page",
+    commands: [
+      {
+        kind: "addPage",
+        afterPageId: pageId,
+        newPageKey: `page-add-${compactPageId}`,
+        title: "Blank page",
+        includeInNavigation: true,
+      },
+    ],
+  });
+  assert.deepEqual(duplicatePageBatch(pageId, "List copy"), {
+    commandContractVersion: 1,
+    summary: "Duplicate page",
+    commands: [
+      {
+        kind: "duplicatePage",
+        pageId,
+        newPageKey: `page-duplicate-${compactPageId}`,
+        title: "List copy",
+      },
+    ],
+  });
+  assert.deepEqual(renamePageBatch(pageId, "Renamed"), {
+    commandContractVersion: 1,
+    summary: "Rename page",
+    commands: [{ kind: "renamePage", pageId, title: "Renamed" }],
+  });
+  assert.deepEqual(deletePageBatch(pageId), {
+    commandContractVersion: 1,
+    summary: "Delete page",
+    commands: [{ kind: "deletePage", pageId }],
+  });
+  assert.throws(() => addPageBatch(pageId, "   ", false), /cannot be empty/u);
+  assert.throws(() => renamePageBatch(pageId, "x".repeat(81)), /cannot exceed 80/u);
+});
+
+test("node-name builder normalizes visible names and rejects empty input", () => {
+  assert.deepEqual(updateNodeNameBatch("node-id", "  Layer name  "), {
+    commandContractVersion: 1,
+    summary: "Rename component",
+    commands: [{ kind: "updateNodeName", nodeId: "node-id", name: "Layer name" }],
+  });
+  assert.throws(() => updateNodeNameBatch("node-id", "\t\n"), /cannot be empty/u);
 });
 
 test("group layout commands persist positions and resized frames in one atomic batch", () => {
@@ -249,6 +398,10 @@ test("group layout commands persist positions and resized frames in one atomic b
     },
   });
   assert.throws(() => setFreeformGroupLayoutBatch([], "position", "Empty"), /requires 1 to 100/);
+  assert.deepEqual(
+    setPositionedGroupLayoutBatch(items, "frame", "Resize positioned components"),
+    setFreeformGroupLayoutBatch(items, "frame", "Resize positioned components"),
+  );
 });
 
 test("navigation reorder commands deterministically transform the current order", () => {

@@ -6,6 +6,8 @@ import {
   type StructuredPrototypeOperationOutcome,
 } from "../src/lib/api/prototypes";
 import {
+  resolveStructuredPrototypeRecoveredOperationFailure,
+  StructuredPrototypeOperationOutcomeError,
   StructuredPrototypeOperationRecoveryPendingError,
   waitForStructuredPrototypeOperationOutcome,
 } from "../src/features/prototype/structured/structuredPrototypeOperationRecovery";
@@ -76,6 +78,42 @@ function operationOutcome(
     ...overrides,
   };
 }
+
+test("recovered terminal failure preserves a matching API error with blocking detail", () => {
+  const outcome = operationOutcome({
+    status: "failed",
+    resultManifestHash: null,
+    failureEvidenceHash: SHA,
+    errorCode: "command_page_scenario_start",
+  });
+  const recoveryError = new StructuredPrototypeOperationOutcomeError(outcome);
+  const requestError = new StructuredPrototypeApiError({
+    status: 422,
+    code: "command_page_scenario_start",
+    message: "page is the start page for scenario purchase-happy-path",
+    retryable: false,
+    operationId: outcome.operationId,
+    correlationId: outcome.correlationId,
+  });
+
+  assert.equal(
+    resolveStructuredPrototypeRecoveredOperationFailure(requestError, recoveryError),
+    requestError,
+  );
+  assert.match(requestError.message, /purchase-happy-path/u);
+  const mismatched = new StructuredPrototypeApiError({
+    status: 422,
+    code: "command_page_inbound_navigation",
+    message: "different failure",
+    retryable: false,
+    operationId: outcome.operationId,
+    correlationId: outcome.correlationId,
+  });
+  assert.equal(
+    resolveStructuredPrototypeRecoveredOperationFailure(mismatched, recoveryError),
+    recoveryError,
+  );
+});
 
 class MemoryStorage implements Storage {
   readonly values = new Map<string, string>();

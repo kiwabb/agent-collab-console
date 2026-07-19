@@ -106,9 +106,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   const { addToast } = useToast();
   const [project, setProject] = useState<Project | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [issuesByWs, setIssuesByWs] = useState<Record<string, CodexIssue[]>>(
-    {},
-  );
+  const [issuesByWs, setIssuesByWs] = useState<Record<string, CodexIssue[]>>({});
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
 
@@ -122,9 +120,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
 
   // Remote-update detection. `null` status = not yet loaded → badge shows
   // "checking…".
-  const [remoteStatus, setRemoteStatus] = useState<ProjectRemoteStatus | null>(
-    null,
-  );
+  const [remoteStatus, setRemoteStatus] = useState<ProjectRemoteStatus | null>(null);
   const [remoteChecking, setRemoteChecking] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
@@ -135,11 +131,10 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   const [runStatus, setRunStatus] = useState<ProjectRunStatus | null>(null);
   const [runBusy, setRunBusy] = useState(false);
   const [runLogs, setRunLogs] = useState<ProjectRunLogLine[]>([]);
-  const [runRefreshErrors, setRunRefreshErrors] =
-    useState<ProjectRunRefreshErrors>({
-      status: null,
-      logs: null,
-    });
+  const [runRefreshErrors, setRunRefreshErrors] = useState<ProjectRunRefreshErrors>({
+    status: null,
+    logs: null,
+  });
   const [logsOpen, setLogsOpen] = useState(false);
   const lastSeqRef = useRef(0);
   const logEndRef = useRef<HTMLDivElement | null>(null);
@@ -147,15 +142,12 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   const reportRunRefreshFailure = useCallback(
     (
       source: keyof ProjectRunRefreshErrors,
-      context:
-        "status load" | "service status poll" | "log poll" | "status resync",
+      context: "status load" | "service status poll" | "log poll" | "status resync",
       err: unknown,
     ) => {
       console.error(`project run ${context} failed:`, err);
       const message = err instanceof Error ? err.message : String(err);
-      setRunRefreshErrors((current) =>
-        updateProjectRunRefreshError(current, source, message),
-      );
+      setRunRefreshErrors((current) => updateProjectRunRefreshError(current, source, message));
     },
     [],
   );
@@ -164,25 +156,15 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [proj, ws] = await Promise.all([
-        getProject(projectId),
-        getWorkspaces(projectId),
-      ]);
+      const [proj, ws] = await Promise.all([getProject(projectId), getWorkspaces(projectId)]);
       setProject(proj);
       // Default workspace: never force the user to hand-create one. If a project
       // has no workspace yet, auto-create a default and drop straight into it.
       if (ws.length === 0 && !autoCreatedRef.current) {
         autoCreatedRef.current = true;
         try {
-          const name =
-            proj.name.trim().length >= 3
-              ? proj.name.trim()
-              : t("workspace.defaultName");
-          const created = await createWorkspace(
-            name,
-            projectId,
-            proj.repo_path ?? "",
-          );
+          const name = proj.name.trim().length >= 3 ? proj.name.trim() : t("workspace.defaultName");
+          const created = await createWorkspace(name, projectId, proj.repo_path ?? "");
           emitDataEvent("workspaces:changed");
           router.replace(`/workspaces/${created.id}`);
           return;
@@ -198,10 +180,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
       setWorkspaces(ws);
       // Load issues per workspace in parallel for the count column.
       const entries = await Promise.all(
-        ws.map(
-          async (w) =>
-            [w.id, await getCodexIssues(w.id).catch(() => [])] as const,
-        ),
+        ws.map(async (w) => [w.id, await getCodexIssues(w.id).catch(() => [])] as const),
       );
       setIssuesByWs(Object.fromEntries(entries));
     } catch (err) {
@@ -222,17 +201,14 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   // Fetch the project's remote status: immediately on mount / projectId change
   // (with a real `git fetch`), then poll on an interval. Failures stay silent —
   // the next poll (or a manual check) retries.
-  const loadRemoteStatus = useCallback(
-    async (id: string, opts: { fetch: boolean }) => {
-      setRemoteChecking(true);
-      try {
-        return await getProjectRemoteStatus(id, { fetch: opts.fetch });
-      } finally {
-        setRemoteChecking(false);
-      }
-    },
-    [],
-  );
+  const loadRemoteStatus = useCallback(async (id: string, opts: { fetch: boolean }) => {
+    setRemoteChecking(true);
+    try {
+      return await getProjectRemoteStatus(id, { fetch: opts.fetch });
+    } finally {
+      setRemoteChecking(false);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -259,8 +235,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
       const status = await loadRemoteStatus(projectId, { fetch: true });
       setRemoteStatus(status);
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : t("projects.syncFailedOffline");
+      const msg = err instanceof Error ? err.message : t("projects.syncFailedOffline");
       addToast({ type: "error", title: msg });
     }
   }, [projectId, loadRemoteStatus, addToast, t]);
@@ -299,9 +274,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
         const status = await getProjectRunStatus(projectId);
         if (!cancelled) {
           setRunStatus(status);
-          setRunRefreshErrors((current) =>
-            updateProjectRunRefreshError(current, "status", null),
-          );
+          setRunRefreshErrors((current) => updateProjectRunRefreshError(current, "status", null));
           if (status.running) setLogsOpen(true);
         }
       } catch (err) {
@@ -318,8 +291,9 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   // `exit_code` from each response keep `runStatus` fresh; once the process
   // stops, `running` flips false and the effect tears down the interval.
   const running = runStatus?.running ?? false;
-  const externalServiceReachable =
-    !running && runStatus?.service.state === "reachable";
+  const externalServiceReady = !running && runStatus?.readiness.state === "ready";
+  const occupiedUnknown =
+    !running && runStatus?.service.state === "reachable" && runStatus.readiness.state !== "ready";
   const pollServiceStatus = shouldPollProjectServiceStatus(runStatus);
   useEffect(() => {
     if (!pollServiceStatus) return;
@@ -329,9 +303,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
         const status = await getProjectRunStatus(projectId);
         if (cancelled) return;
         setRunStatus(status);
-        setRunRefreshErrors((current) =>
-          updateProjectRunRefreshError(current, "status", null),
-        );
+        setRunRefreshErrors((current) => updateProjectRunRefreshError(current, "status", null));
       } catch (err) {
         if (cancelled) return;
         reportRunRefreshFailure("status", "service status poll", err);
@@ -356,13 +328,9 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
           setRunLogs((prev) => [...prev, ...res.lines]);
         }
         setRunStatus((prev) =>
-          prev
-            ? { ...prev, running: res.running, exit_code: res.exit_code }
-            : prev,
+          prev ? { ...prev, running: res.running, exit_code: res.exit_code } : prev,
         );
-        setRunRefreshErrors((current) =>
-          updateProjectRunRefreshError(current, "logs", null),
-        );
+        setRunRefreshErrors((current) => updateProjectRunRefreshError(current, "logs", null));
       } catch (err) {
         if (cancelled) return;
         reportRunRefreshFailure("logs", "log poll", err);
@@ -389,23 +357,25 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
       if (isProjectRunStartError(result)) {
         if (
           result.error === "already_running" ||
-          result.error === "service_already_reachable"
+          result.error === "service_address_occupied" ||
+          result.error === "startup_config_invalid"
         ) {
           // Re-sync with the live status rather than show a hard error.
           try {
             const status = await getProjectRunStatus(projectId);
             setRunStatus(status);
-            setRunRefreshErrors((current) =>
-              updateProjectRunRefreshError(current, "status", null),
-            );
+            setRunRefreshErrors((current) => updateProjectRunRefreshError(current, "status", null));
           } catch (err) {
             reportRunRefreshFailure("status", "status resync", err);
           }
+          const needsRegeneration = result.error === "startup_config_invalid";
+          const occupied = result.error === "service_address_occupied";
           addToast({
-            type: "info",
-            title:
-              result.error === "service_already_reachable"
-                ? t("startupConfig.serviceAlreadyReachable")
+            type: needsRegeneration || occupied ? "error" : "info",
+            title: needsRegeneration
+              ? t("startupConfig.invalidReadinessTitle")
+              : occupied
+                ? t("startupConfig.occupiedUnknownTitle")
                 : t("projects.runAlreadyRunning"),
           });
         } else if (result.error === "no_run_command") {
@@ -427,8 +397,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
       setRunRefreshErrors({ status: null, logs: null });
       setLogsOpen(true);
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : t("projects.runStartFailed");
+      const msg = err instanceof Error ? err.message : t("projects.runStartFailed");
       addToast({ type: "error", title: msg });
     } finally {
       setRunBusy(false);
@@ -444,8 +413,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
       setRunRefreshErrors({ status: null, logs: null });
       addToast({ type: "success", title: t("projects.runStopped") });
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : t("projects.runStopFailed");
+      const msg = err instanceof Error ? err.message : t("projects.runStopFailed");
       addToast({ type: "error", title: msg });
     } finally {
       setRunBusy(false);
@@ -456,9 +424,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
     const q = query.trim().toLowerCase();
     if (!q) return workspaces;
     return workspaces.filter(
-      (w) =>
-        (w.title || w.id).toLowerCase().includes(q) ||
-        (w.cwd || "").toLowerCase().includes(q),
+      (w) => (w.title || w.id).toLowerCase().includes(q) || (w.cwd || "").toLowerCase().includes(q),
     );
   }, [workspaces, query]);
 
@@ -467,10 +433,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
     [issuesByWs],
   );
   const activeWorkspaces = useMemo(
-    () =>
-      workspaces.filter(
-        (w) => w.status === "running" || w.status === "responding",
-      ).length,
+    () => workspaces.filter((w) => w.status === "running" || w.status === "responding").length,
     [workspaces],
   );
 
@@ -497,11 +460,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
   const handleUpdate = useCallback(
     async (id: string, title: string, cwd: string, planFirstPm: boolean) => {
       try {
-        const next = await updateWorkspace(id, {
-          title,
-          cwd,
-          plan_first_pm: planFirstPm,
-        });
+        const next = await updateWorkspace(id, { title, cwd, plan_first_pm: planFirstPm });
         setWorkspaces((prev) => prev.map((w) => (w.id === id ? next : w)));
         emitDataEvent("workspaces:changed");
         addToast({ type: "success", title: t("workspace.toast.updated") });
@@ -608,10 +567,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
           title={t("projects.checkUpdate")}
           className="gap-1 md:ml-auto"
         >
-          <RefreshCw
-            size={14}
-            className={cn(remoteChecking && "animate-spin")}
-          />
+          <RefreshCw size={14} className={cn(remoteChecking && "animate-spin")} />
           {remoteChecking ? t("projects.checking") : t("projects.checkUpdate")}
         </Button>
         <Button
@@ -643,15 +599,12 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
             <Square size={14} />
             {runBusy ? t("projects.runStopping") : t("projects.runStop")}
           </Button>
-        ) : externalServiceReachable && runStatus?.service.url ? (
+        ) : externalServiceReady && runStatus?.readiness.url ? (
           <a
-            href={runStatus.service.url}
+            href={runStatus.readiness.url}
             target="_blank"
             rel="noreferrer"
-            className={cn(
-              buttonVariants({ variant: "outline", size: "sm" }),
-              "gap-1",
-            )}
+            className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1")}
           >
             <ExternalLink size={14} />
             {t("startupConfig.openService")}
@@ -661,13 +614,14 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
             size="sm"
             variant="outline"
             onClick={handleStartRun}
-            disabled={runBusy || !project?.run_command}
-            aria-label={t("projects.runStart")}
-            title={
-              project?.run_command
-                ? t("projects.runStart")
-                : t("projects.runNoCommand")
+            disabled={
+              runBusy ||
+              !project?.run_command ||
+              occupiedUnknown ||
+              runStatus?.readiness.state === "invalid_config"
             }
+            aria-label={t("projects.runStart")}
+            title={project?.run_command ? t("projects.runStart") : t("projects.runNoCommand")}
             className="gap-1"
           >
             <Play size={14} />
@@ -688,15 +642,9 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
           role="alert"
           className="flex items-start gap-2 rounded-lg border border-status-failed/40 bg-status-failed/10 px-3 py-2 text-[12px]"
         >
-          <AlertTriangle
-            size={14}
-            aria-hidden
-            className="mt-0.5 shrink-0 text-status-failed"
-          />
+          <AlertTriangle size={14} aria-hidden className="mt-0.5 shrink-0 text-status-failed" />
           <div className="min-w-0">
-            <p className="font-medium text-status-failed">
-              {t("projects.runRefreshFailed")}
-            </p>
+            <p className="font-medium text-status-failed">{t("projects.runRefreshFailed")}</p>
             <p className="break-words text-text-secondary">{runLoadError}</p>
           </div>
         </div>
@@ -716,9 +664,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
             <span className="font-semibold">{t("projects.runLogsTitle")}</span>
             <span className="text-text-muted">
               {running ? t("projects.runRunning") : t("projects.runStopped")}
-              {runStatus?.pid != null && running
-                ? ` · pid ${runStatus.pid}`
-                : ""}
+              {runStatus?.pid != null && running ? ` · pid ${runStatus.pid}` : ""}
               {!running && runStatus?.exit_code != null
                 ? ` · ${t("projects.runExitCode", { code: runStatus.exit_code })}`
                 : ""}
@@ -728,9 +674,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
                 type="button"
                 onClick={() => {
                   setRunLogs([]);
-                  lastSeqRef.current = runStatus?.running
-                    ? lastSeqRef.current
-                    : 0;
+                  lastSeqRef.current = runStatus?.running ? lastSeqRef.current : 0;
                 }}
                 className="rounded-md px-2 py-1 text-text-muted hover:bg-surface-input hover:text-foreground transition-colors"
               >
@@ -752,9 +696,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
                 key={l.seq}
                 className={cn(
                   "whitespace-pre-wrap break-all",
-                  l.stream === "stderr"
-                    ? "text-status-failed"
-                    : "text-text-secondary",
+                  l.stream === "stderr" ? "text-status-failed" : "text-text-secondary",
                 )}
               >
                 {l.line}
@@ -790,9 +732,7 @@ export function ProjectWorkspacesPage({ projectId }: Props) {
         ) : filtered.length === 0 ? (
           <div className="py-12 text-center">
             <p className="text-sm text-text-muted">
-              {query
-                ? t("workspace.emptyFiltered")
-                : t("workspace.emptyCreatePrompt")}
+              {query ? t("workspace.emptyFiltered") : t("workspace.emptyCreatePrompt")}
             </p>
             {!query && (
               <Button
@@ -888,15 +828,10 @@ function WorkspaceRow({
 }) {
   const { t } = useI18n();
   const kind = inferStatusKind(ws.status);
-  const isWorkspaceActive =
-    ws.status === "running" || ws.status === "responding";
+  const isWorkspaceActive = ws.status === "running" || ws.status === "responding";
   return (
     <li
-      data-density={
-        isWorkspaceActive
-          ? "project-workspaces-active-row"
-          : "project-workspaces-row"
-      }
+      data-density={isWorkspaceActive ? "project-workspaces-active-row" : "project-workspaces-row"}
       className={cn(
         "relative grid grid-cols-[minmax(0,1fr)_auto] gap-3 px-4 py-3 items-center overflow-hidden group hover:bg-surface-hover transition-colors lg:grid-cols-[1fr_120px_90px_1.6fr_120px_70px]",
         isWorkspaceActive && "motion-essential",
@@ -909,11 +844,7 @@ function WorkspaceRow({
           className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-running/70 to-transparent"
         />
       )}
-      <button
-        type="button"
-        onClick={onOpen}
-        className="min-w-0 flex items-center gap-2 text-left"
-      >
+      <button type="button" onClick={onOpen} className="min-w-0 flex items-center gap-2 text-left">
         <span className="size-1.5 rounded-full bg-brand/70 shrink-0" />
         <span className="text-[13px] font-medium truncate group-hover:text-brand transition-colors">
           {workspaceLabel(ws)}
@@ -925,11 +856,7 @@ function WorkspaceRow({
       </button>
       <div className="flex items-center gap-1.5">
         {isWorkspaceActive && (
-          <AgentThinkingIndicator
-            phase="dispatching"
-            size={12}
-            className="shrink-0"
-          />
+          <AgentThinkingIndicator phase="dispatching" size={12} className="shrink-0" />
         )}
         <StatusBadge kind={kind} label={humanStatus(t, ws.status)} />
       </div>
@@ -988,11 +915,7 @@ function WorkspaceFormDialog({
   title: string;
   initial: { title: string; cwd: string; planFirstPm?: boolean };
   defaultCwdHint: string;
-  onSubmit: (values: {
-    title: string;
-    cwd: string;
-    planFirstPm: boolean;
-  }) => void | Promise<void>;
+  onSubmit: (values: { title: string; cwd: string; planFirstPm: boolean }) => void | Promise<void>;
   submitLabel?: string;
   showPlanFirstPm?: boolean;
 }) {
@@ -1012,19 +935,14 @@ function WorkspaceFormDialog({
   }, [open, initial.title, initial.cwd, initial.planFirstPm]);
 
   const trimmedTitleLength = titleDraft.trim().length;
-  const showTitleMinLengthHint =
-    trimmedTitleLength > 0 && trimmedTitleLength < 3;
+  const showTitleMinLengthHint = trimmedTitleLength > 0 && trimmedTitleLength < 3;
   const canSubmit = trimmedTitleLength >= 3 && !saving;
 
   const submit = async () => {
     if (!canSubmit) return;
     setSaving(true);
     try {
-      await onSubmit({
-        title: titleDraft.trim(),
-        cwd: cwdDraft.trim(),
-        planFirstPm,
-      });
+      await onSubmit({ title: titleDraft.trim(), cwd: cwdDraft.trim(), planFirstPm });
     } finally {
       setSaving(false);
     }
@@ -1035,18 +953,12 @@ function WorkspaceFormDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>
-            {t("workspace.dialog.description")}
-          </DialogDescription>
+          <DialogDescription>{t("workspace.dialog.description")}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <Field
             label={t("workspace.field.title")}
-            hint={
-              showTitleMinLengthHint
-                ? t("workspace.field.titleMinLengthHint")
-                : undefined
-            }
+            hint={showTitleMinLengthHint ? t("workspace.field.titleMinLengthHint") : undefined}
             tone={showTitleMinLengthHint ? "warning" : "muted"}
           >
             <Input
@@ -1068,8 +980,7 @@ function WorkspaceFormDialog({
             hint={
               cwdDraft.trim().length === 0
                 ? t("workspace.field.defaultCwdHint", {
-                    path:
-                      defaultCwdHint || t("workspace.field.defaultCwdFallback"),
+                    path: defaultCwdHint || t("workspace.field.defaultCwdFallback"),
                   })
                 : undefined
             }
@@ -1077,9 +988,7 @@ function WorkspaceFormDialog({
             <Input
               value={cwdDraft}
               onChange={(e) => setCwdDraft(e.target.value)}
-              placeholder={
-                defaultCwdHint || t("workspace.field.workingDirPlaceholder")
-              }
+              placeholder={defaultCwdHint || t("workspace.field.workingDirPlaceholder")}
               className="bg-surface-input border-border-subtle font-mono text-[12px]"
             />
           </Field>
@@ -1103,11 +1012,7 @@ function WorkspaceFormDialog({
           )}
         </div>
         <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={saving}
-          >
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             {t("workspace.cancel")}
           </Button>
           <Button
@@ -1118,9 +1023,7 @@ function WorkspaceFormDialog({
               !canSubmit && "opacity-50",
             )}
           >
-            {saving
-              ? t("workspace.saving")
-              : submitLabel || t("workspace.create")}
+            {saving ? t("workspace.saving") : submitLabel || t("workspace.create")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1141,9 +1044,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="text-[11px] uppercase tracking-wider text-text-muted">
-        {label}
-      </span>
+      <span className="text-[11px] uppercase tracking-wider text-text-muted">{label}</span>
       <div className="mt-1">{children}</div>
       {hint && (
         <p
@@ -1167,16 +1068,10 @@ type Tint = "brand" | "running" | "info" | "done" | "failed";
 
 const TINT_TO_CSS: Record<Tint, { dot: string; iconBg: string }> = {
   brand: { dot: "bg-brand", iconBg: "bg-brand/15 text-brand" },
-  running: {
-    dot: "bg-status-running",
-    iconBg: "bg-status-running/15 text-status-running",
-  },
+  running: { dot: "bg-status-running", iconBg: "bg-status-running/15 text-status-running" },
   info: { dot: "bg-status-info", iconBg: "bg-status-info/15 text-status-info" },
   done: { dot: "bg-status-done", iconBg: "bg-status-done/15 text-status-done" },
-  failed: {
-    dot: "bg-status-failed",
-    iconBg: "bg-status-failed/15 text-status-failed",
-  },
+  failed: { dot: "bg-status-failed", iconBg: "bg-status-failed/15 text-status-failed" },
 };
 
 function Kpi({
@@ -1199,9 +1094,7 @@ function Kpi({
   const t = TINT_TO_CSS[tint];
   return (
     <div
-      data-density={
-        pulse ? "project-workspaces-active-kpi" : "project-workspaces-kpi"
-      }
+      data-density={pulse ? "project-workspaces-active-kpi" : "project-workspaces-kpi"}
       className={cn(
         "relative min-w-0 overflow-hidden px-3 py-3 transition-colors",
         pulse && "motion-essential",
@@ -1214,18 +1107,9 @@ function Kpi({
           className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-status-running/70 to-transparent"
         />
       )}
-      <div className="flex items-center justify-between mb-2">
-        <span
-          className={cn(
-            "size-7 rounded-md inline-flex items-center justify-center",
-            t.iconBg,
-          )}
-        >
-          {pulse ? (
-            <AgentThinkingIndicator phase="dispatching" size={14} />
-          ) : (
-            icon
-          )}
+      <div className="mb-2 flex items-center justify-between">
+        <span className={cn("size-7 rounded-md inline-flex items-center justify-center", t.iconBg)}>
+          {pulse ? <AgentThinkingIndicator phase="dispatching" size={14} /> : icon}
         </span>
         {pulse && (
           <span className="motion-essential relative inline-flex">
@@ -1234,9 +1118,7 @@ function Kpi({
         )}
       </div>
       <div>
-        <div className="text-[10px] uppercase tracking-wider text-text-muted">
-          {label}
-        </div>
+        <div className="text-[10px] uppercase tracking-wider text-text-muted">{label}</div>
         <div className="mt-0.5 truncate text-lg font-bold tabular-nums">
           {loading ? "—" : (valueText ?? value ?? 0)}
         </div>
@@ -1268,9 +1150,7 @@ function relTime(
   if (!Number.isFinite(timestamp)) return "—";
   const diff = Date.now() - timestamp;
   if (diff < 60_000) return t("workspace.time.now");
-  if (diff < 3_600_000)
-    return t("workspace.time.minutes", { count: Math.floor(diff / 60_000) });
-  if (diff < 86_400_000)
-    return t("workspace.time.hours", { count: Math.floor(diff / 3_600_000) });
+  if (diff < 3_600_000) return t("workspace.time.minutes", { count: Math.floor(diff / 60_000) });
+  if (diff < 86_400_000) return t("workspace.time.hours", { count: Math.floor(diff / 3_600_000) });
   return t("workspace.time.days", { count: Math.floor(diff / 86_400_000) });
 }

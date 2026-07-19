@@ -48,9 +48,9 @@ async def test_scoped_mcp_accepts_one_idempotent_strict_outcome() -> None:
     )
     service.bind_execution_process(session, "process-1")
     outcome_payload = {
-            "contractVersion": 1,
-            "kind": "answer",
-            "message": "当前原型有三页。",
+        "contractVersion": 1,
+        "kind": "answer",
+        "message": "当前原型有三页。",
     }
     arguments = _arguments(outcome_payload)
 
@@ -75,9 +75,10 @@ async def test_scoped_mcp_accepts_one_idempotent_strict_outcome() -> None:
     outcome, receipt, process_id = service.submitted_outcome(session)
     assert outcome.kind == "answer"
     assert process_id == "process-1"
-    assert receipt.request_hash == "sha256:" + hashlib.sha256(
-        canonical_json_bytes(arguments)
-    ).hexdigest()
+    assert (
+        receipt.request_hash
+        == "sha256:" + hashlib.sha256(canonical_json_bytes(arguments)).hexdigest()
+    )
     service.close_session(session)
     assert service.active_session_count() == 0
 
@@ -153,3 +154,12 @@ def test_scoped_mcp_exposes_bounded_json_string_contract() -> None:
     assert outcome_schema["type"] == "string"
     assert "$defs" in schema
     assert "x-outcomeSchema" in schema
+    definitions = schema["$defs"]
+    assert isinstance(definitions, dict)
+    assert {
+        "AddPageCommandV1",
+        "DeletePageCommandV1",
+        "DuplicatePageCommandV1",
+        "RenamePageCommandV1",
+        "UpdateNodeNameCommandV1",
+    } <= set(definitions)

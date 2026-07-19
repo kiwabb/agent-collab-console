@@ -26,6 +26,7 @@ def test_default_values_match_shipped_ladder(monkeypatch):
         "STRUCTURED_PROTOTYPE_PAGE_GENERATION_CONCURRENCY",
         "PROTOTYPE_SNAP_WORKER_ATTEST_TIMEOUT_S",
         "PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S",
+        "PROTOTYPE_RUNTIME_WORKER_TIMEOUT_S",
     ):
         monkeypatch.delenv(key, raising=False)
     # These are the shipped defaults. subagent_idle was raised 600→1200 so the
@@ -57,6 +58,7 @@ def test_default_values_match_shipped_ladder(monkeypatch):
     assert timeouts.prototype_ui_engineer_process_max_timeout_s() == 3600
     assert timeouts.prototype_snap_worker_attest_timeout_s() == 5.0
     assert timeouts.prototype_snap_worker_attest_many_timeout_s() == 60.0
+    assert timeouts.prototype_runtime_worker_timeout_s() == 30.0
     assert timeouts.workflow_orchestrator_llm_enabled() is True
     assert timeouts.workflow_orchestrator_executor_id() is None
     assert timeouts.workflow_orchestrator_model() is None
@@ -87,6 +89,7 @@ def test_default_values_match_shipped_ladder(monkeypatch):
     assert timeouts.self_improvement_proposal_interval_s() == 3600.0
     assert timeouts.self_improvement_proposal_limit() == 25
     assert timeouts.event_bus_buffer_size() == 1000
+    assert timeouts.event_bus_log_retry_delay_s() == 0.1
     assert timeouts.audit_log_max_queue() == 10000
     assert timeouts.ws_workspace_queue_maxsize() == 256
     assert timeouts.ws_log_queue_maxsize() == 2048
@@ -195,6 +198,16 @@ def test_prototype_snap_worker_timeout_knobs(monkeypatch):
         timeouts.prototype_snap_worker_attest_many_timeout_s()
         == timeouts.DEFAULT_PROTOTYPE_SNAP_WORKER_ATTEST_MANY_TIMEOUT_S
     )
+
+
+def test_prototype_runtime_worker_timeout_knob_is_strict(monkeypatch):
+    monkeypatch.setenv("PROTOTYPE_RUNTIME_WORKER_TIMEOUT_S", "45.5")
+    assert timeouts.prototype_runtime_worker_timeout_s() == 45.5
+
+    for invalid in ("0", "-1", "garbage", "nan", "inf"):
+        monkeypatch.setenv("PROTOTYPE_RUNTIME_WORKER_TIMEOUT_S", invalid)
+        with pytest.raises(timeouts.TimeoutConfigError):
+            timeouts.prototype_runtime_worker_timeout_s()
 
 
 def test_codex_app_server_knobs(monkeypatch):
@@ -392,21 +405,33 @@ def test_cost_rate_knobs(monkeypatch):
 
 def test_observability_queue_knobs(monkeypatch):
     monkeypatch.setenv("EVENT_BUS_BUFFER_SIZE", "7")
+    monkeypatch.setenv("EVENT_BUS_LOG_RETRY_DELAY_S", "0.25")
     monkeypatch.setenv("AUDIT_LOG_MAX_QUEUE", "11")
 
     assert timeouts.event_bus_buffer_size() == 7
+    assert timeouts.event_bus_log_retry_delay_s() == 0.25
     assert timeouts.audit_log_max_queue() == 11
 
     monkeypatch.setenv("EVENT_BUS_BUFFER_SIZE", "0")
+    monkeypatch.setenv("EVENT_BUS_LOG_RETRY_DELAY_S", "0")
     monkeypatch.setenv("AUDIT_LOG_MAX_QUEUE", "0")
 
     assert timeouts.event_bus_buffer_size() == 1
+    assert (
+        timeouts.event_bus_log_retry_delay_s()
+        == timeouts.DEFAULT_EVENT_BUS_LOG_RETRY_DELAY_S
+    )
     assert timeouts.audit_log_max_queue() == 1
 
     monkeypatch.setenv("EVENT_BUS_BUFFER_SIZE", "garbage")
+    monkeypatch.setenv("EVENT_BUS_LOG_RETRY_DELAY_S", "garbage")
     monkeypatch.setenv("AUDIT_LOG_MAX_QUEUE", "garbage")
 
     assert timeouts.event_bus_buffer_size() == timeouts.DEFAULT_EVENT_BUS_BUFFER_SIZE
+    assert (
+        timeouts.event_bus_log_retry_delay_s()
+        == timeouts.DEFAULT_EVENT_BUS_LOG_RETRY_DELAY_S
+    )
     assert timeouts.audit_log_max_queue() == timeouts.DEFAULT_AUDIT_LOG_MAX_QUEUE
 
 

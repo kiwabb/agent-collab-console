@@ -897,9 +897,7 @@ class BaseProcessRuntime:
             delta_text = string_value(delta.get("text"))
             delta_thinking = string_value(delta.get("thinking"))
             delta_preview = delta_text or delta_thinking
-            import logging as _lstream
-
-            _lstream.getLogger(__name__).info(
+            logger.debug(
                 "[LLM token] task=%s delta_type=%s chars=%d preview=%s",
                 task_id,
                 dt,

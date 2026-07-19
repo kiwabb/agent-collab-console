@@ -3,11 +3,11 @@ import test from "node:test";
 
 import { readCompactSource } from "./sourceTestUtils";
 
-test("Freeform pointer-up persists one evidence-linked same-parent move batch", () => {
+test("positioned pointer-up persists one evidence-linked same-parent move batch", () => {
   const studio = readCompactSource(
     "features/prototype/structured/StructuredPrototypeStudioPage.tsx",
   );
-  const moveStart = studio.indexOf("const moveFreeformNode = async");
+  const moveStart = studio.indexOf("const movePositionedNode = async");
   const moveEnd = studio.indexOf("const handleFreeformMoveError", moveStart);
   assert.ok(moveStart >= 0 && moveEnd > moveStart);
   const move = studio.slice(moveStart, moveEnd);
@@ -24,16 +24,17 @@ test("Freeform pointer-up persists one evidence-linked same-parent move batch", 
   assert.match(move, /const replay = replayStructuredPrototypeFreeformMove\(evidenceCapture\)/);
   assert.match(move, /x !== replay\.position\.x/);
   assert.match(move, /y !== replay\.position\.y/);
-  assert.match(move, /freeformSelection\.parent\.id !== moveInteraction\.freeformId/);
+  assert.match(move, /positionedSelection\.parent\.id !== moveInteraction\.freeformId/);
+  assert.match(move, /positionedSelection\.parent\.type === "Freeform"/);
   assert.match(move, /sameOrderedIds\(currentGridIds, capturedGridIds\)/);
 
   assert.match(move, /deltaX = replay\.position\.x - replay\.canonicalInput\.selectionBounds\.x/);
   assert.match(move, /deltaY = replay\.position\.y - replay\.canonicalInput\.selectionBounds\.y/);
   assert.doesNotMatch(move, /evidenceCapture\.finalPosition|evidenceCapture\.diagnostics/);
   assert.match(move, /if \(!projectedItems\.some\(\(item\) => item\.changed\)\)/);
-  assert.match(move, /moveFreeformSelectionBatch\(/);
+  assert.match(move, /movePositionedSelectionBatch\(/);
   assert.match(move, /projectedItems\.map\(/);
-  assert.doesNotMatch(move, /setNodeLayout|setFreeformGroupLayoutBatch|projectedItems\.filter/);
+  assert.doesNotMatch(move, /setNodeLayout|setPositionedGroupLayoutBatch|projectedItems\.filter/);
 
   assert.match(move, /serializeStructuredPrototypeFreeformMoveEvidence\(/);
   for (const field of [

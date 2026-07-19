@@ -34,7 +34,7 @@ export function ProjectRunStatusPanel({
   const logEndRef = useRef<HTMLDivElement>(null);
   const managedRunning = runStatus?.running === true;
   const presentation = deriveProjectRunPresentation(runStatus, startupState);
-  const externalReachable = presentation === "external_reachable";
+  const externalReady = presentation === "external_ready";
   const runFailed = startupState.runOutcome === "failed";
   const runCompleted = startupState.runOutcome === "completed";
   const runStopped = startupState.runOutcome === "stopped";
@@ -50,10 +50,33 @@ export function ProjectRunStatusPanel({
   }
 
   switch (presentation) {
-    case "external_reachable":
+    case "external_ready":
       title = t("startupConfig.externalServiceTitle");
       detail = t("startupConfig.externalServiceDetail", {
+        url: runStatus?.readiness.url ?? "",
+      });
+      break;
+    case "external_unhealthy":
+      title = t("startupConfig.externalUnhealthyTitle");
+      detail = t("startupConfig.externalUnhealthyDetail", {
+        url: runStatus?.readiness.url ?? "",
+        status: runStatus?.readiness.http_status ?? "",
+      });
+      break;
+    case "occupied_unknown":
+      title = t("startupConfig.occupiedUnknownTitle");
+      detail = t("startupConfig.occupiedUnknownDetail", {
         url: runStatus?.service.url ?? "",
+      });
+      break;
+    case "invalid_config":
+      title = t("startupConfig.invalidReadinessTitle");
+      detail = t("startupConfig.invalidReadinessDetail");
+      break;
+    case "managed_unhealthy":
+      title = t("startupConfig.serviceUnhealthyTitle");
+      detail = t("startupConfig.serviceUnhealthyDetail", {
+        url: runStatus?.readiness.url ?? "",
       });
       break;
     case "managed_starting":
@@ -124,9 +147,9 @@ export function ProjectRunStatusPanel({
             <Square size={15} />
             {runBusy ? t("projects.runStopping") : t("projects.runStop")}
           </Button>
-        ) : externalReachable && runStatus?.service.url ? (
+        ) : externalReady && runStatus?.readiness.url ? (
           <a
-            href={runStatus.service.url}
+            href={runStatus.readiness.url}
             target="_blank"
             rel="noreferrer"
             className={cn(buttonVariants({ variant: "outline" }), "min-h-11 shrink-0 gap-2")}

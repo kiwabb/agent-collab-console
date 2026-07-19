@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import {
   getProjectServiceRunLogs,
   getProjectServiceRunStatus,
+  isProjectRunStartError,
   startProjectServiceRun,
   stopProjectServiceRun,
 } from "@/lib/api/projects";
@@ -18,9 +19,15 @@ interface Props {
   projectId: string;
   service: ProjectStartupService;
   disabled: boolean;
+  onStatusChange: (serviceId: string, status: ProjectRunStatus) => void;
 }
 
-export function ProjectStartupServicePanel({ projectId, service, disabled }: Props) {
+export function ProjectStartupServicePanel({
+  projectId,
+  service,
+  disabled,
+  onStatusChange,
+}: Props) {
   const { t } = useI18n();
   const [status, setStatus] = useState<ProjectRunStatus | null>(null);
   const [logs, setLogs] = useState<ProjectRunLogLine[]>([]);
@@ -32,6 +39,7 @@ export function ProjectStartupServicePanel({ projectId, service, disabled }: Pro
     try {
       const nextStatus = await getProjectServiceRunStatus(projectId, service.service_id);
       setStatus(nextStatus);
+      onStatusChange(service.service_id, nextStatus);
       if (nextStatus.running) {
         const nextLogs = await getProjectServiceRunLogs(
           projectId,
@@ -48,7 +56,7 @@ export function ProjectStartupServicePanel({ projectId, service, disabled }: Pro
       console.error("startup service refresh failed", err);
       setError(err instanceof Error ? err.message : t("startupConfig.loadFailed"));
     }
-  }, [projectId, service.service_id, t]);
+  }, [onStatusChange, projectId, service.service_id, t]);
 
   useEffect(() => {
     void refresh();
@@ -62,7 +70,20 @@ export function ProjectStartupServicePanel({ projectId, service, disabled }: Pro
     try {
       setLogs([]);
       lastSeqRef.current = 0;
-      setStatus(await startProjectServiceRun(projectId, service.service_id));
+      const result = await startProjectServiceRun(projectId, service.service_id);
+      if (isProjectRunStartError(result)) {
+        setError(
+          result.error === "startup_config_invalid"
+            ? t("startupConfig.invalidReadinessDetail")
+            : result.error === "service_address_occupied"
+              ? t("startupConfig.occupiedUnknownDetail", { url: result.url ?? "" })
+              : result.message ?? result.pattern ?? t("projects.runStartFailed"),
+        );
+        await refresh();
+        return;
+      }
+      setStatus(result);
+      onStatusChange(service.service_id, result);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("projects.runStartFailed"));
     } finally {
@@ -74,7 +95,9 @@ export function ProjectStartupServicePanel({ projectId, service, disabled }: Pro
     setBusy(true);
     setError(null);
     try {
-      setStatus(await stopProjectServiceRun(projectId, service.service_id));
+      const nextStatus = await stopProjectServiceRun(projectId, service.service_id);
+      setStatus(nextStatus);
+      onStatusChange(service.service_id, nextStatus);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("projects.runStopFailed"));
     } finally {
@@ -82,12 +105,25 @@ export function ProjectStartupServicePanel({ projectId, service, disabled }: Pro
     }
   };
 
-  const reachable = status?.service.state === "reachable";
-  const stateLabel = status?.running
-    ? t("startupConfig.runLogsRunning")
-    : reachable
-      ? t("startupConfig.serviceState.reachable")
-      : t("startupConfig.serviceState.offline");
+  const ready = status?.readiness.state === "ready";
+  const addressOccupied = status?.service.state === "reachable";
+  const occupiedUnknown = status?.readiness.state === "occupied_unknown";
+  const invalidConfig =
+    service.readiness_probe === null || status?.readiness.state === "invalid_config";
+  const identifiedUnready = status?.readiness.state === "identified_unready";
+  const stateLabel = ready
+    ? t("startupConfig.serviceState.ready")
+    : invalidConfig
+      ? t("startupConfig.serviceState.invalidConfig")
+      : identifiedUnready
+        ? t("startupConfig.serviceState.unhealthy")
+        : occupiedUnknown
+          ? t("startupConfig.serviceState.occupiedUnknown")
+          : status?.running
+            ? t("startupConfig.serviceState.starting")
+            : status?.readiness.state === "unreachable"
+              ? t("startupConfig.serviceState.offline")
+              : t("startupConfig.serviceState.unknown");
 
   return (
     <article className="overflow-hidden rounded-lg border border-border-subtle bg-surface-raised">
@@ -101,7 +137,11 @@ export function ProjectStartupServicePanel({ projectId, service, disabled }: Pro
             <span
               className={cn(
                 "text-xs font-semibold",
-                status?.running || reachable ? "text-status-done" : "text-text-muted",
+                ready
+                  ? "text-status-done"
+                  : occupiedUnknown || invalidConfig || identifiedUnready
+                    ? "text-status-failed"
+                    : "text-text-muted",
               )}
             >
               {stateLabel}
@@ -111,6 +151,11 @@ export function ProjectStartupServicePanel({ projectId, service, disabled }: Pro
           <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs leading-5">
             {service.run_command}
           </pre>
+          <p className="mt-2 break-words text-xs text-text-muted">
+            {service.readiness_probe
+              ? t("startupConfig.readinessProbe", { url: service.readiness_probe.url })
+              : t("startupConfig.invalidReadinessDetail")}
+          </p>
           {service.depends_on.length > 0 && (
             <p className="mt-2 text-xs text-text-muted">
               {t("startupConfig.dependsOn", { services: service.depends_on.join(", ") })}
@@ -118,7 +163,7 @@ export function ProjectStartupServicePanel({ projectId, service, disabled }: Pro
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {service.access_url && (
+          {ready && service.access_url && (
             <a
               href={service.access_url}
               target="_blank"
@@ -139,8 +184,12 @@ export function ProjectStartupServicePanel({ projectId, service, disabled }: Pro
               <Square size={14} />
               {t("projects.runStop")}
             </Button>
-          ) : reachable ? null : (
-            <Button size="sm" onClick={() => void start()} disabled={busy || disabled}>
+          ) : ready ? null : (
+            <Button
+              size="sm"
+              onClick={() => void start()}
+              disabled={busy || disabled || addressOccupied || invalidConfig}
+            >
               <Play size={14} />
               {t("projects.runStart")}
             </Button>
@@ -162,7 +211,14 @@ export function ProjectStartupServicePanel({ projectId, service, disabled }: Pro
           <FileCode2 size={14} />
           {t("startupConfig.evidence")}
         </div>
-        <p className="mt-1 break-words text-xs text-text-muted">{service.evidence.join(", ")}</p>
+        <ul className="mt-1 space-y-1 text-xs text-text-muted">
+          {service.evidence.map((item) => (
+            <li key={item.path} className="break-words">
+              <span className="font-mono">{item.path}</span>
+              {item.detail ? ` — ${item.detail}` : ""}
+            </li>
+          ))}
+        </ul>
       </div>
 
       {(status?.running || logs.length > 0) && (

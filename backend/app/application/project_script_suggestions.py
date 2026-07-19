@@ -10,24 +10,24 @@ import signal
 from pathlib import Path
 from typing import Awaitable, Callable, Literal  # noqa: UP035
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.application import timeouts
 from app.application.local_service_probe import (
     LocalServiceUrlError,
     canonicalize_local_service_url,
-    probe_local_service,
 )
 from app.application.project_command import (
     ProjectCommandError,
     build_project_child_env,
     parse_project_command,
 )
+from app.application.project_service_readiness import evaluate_project_service
 from app.application.qa_output_redaction import (
     SecretOutputRedactionError,
     SecretOutputRedactor,
 )
-from app.domain.models import Project
+from app.domain.models import Project, ProjectReadinessProbe
 from app.json_safety import object_dict, parse_json_object
 
 ScriptSuggestionRunner = Callable[[str], Awaitable[str | None]]
@@ -57,6 +57,7 @@ class ProjectScriptSuggestion(BaseModel):
     run_command: str
     agent_name: str = "Operations Engineer"
     access_url: str | None = None
+    readiness_probe: ProjectReadinessProbe | None = None
     notes: list[str] = Field(default_factory=list)
     verification: ProjectScriptVerification | None = None
     env_vars: list[EnvVarEntry] = Field(default_factory=list)
@@ -148,6 +149,7 @@ def build_project_script_suggestion_prompt(
             '  "setup_script": "one-time setup command(s), or empty string",',
             '  "run_command": "long-running local dev command, or empty string",',
             '  "access_url": "http://localhost:port if discoverable, or null",',
+            '  "readiness_probe": {"kind":"http","url":"http://localhost:port/health","expected_status":200,"identity":{"kind":"json_subset","expected":{"service":"stable-app-id","status":"ready"}}},',
             '  "notes": ["short operational notes, verification assumptions, or risks"],',
             '  "env_vars": [',
             '    {"name": "VAR_NAME", "value": "inferred_default_or_null", "secret": false, "source": "where you found this"}',
@@ -162,6 +164,7 @@ def build_project_script_suggestion_prompt(
             "- Prefer docker compose when compose files are the only startup evidence.",
             "- Use cd when the command belongs to a subdirectory, such as cd frontend && npm run dev.",
             "- If an access URL or port is documented in README, compose ports, or scripts, set access_url.",
+            "- readiness_probe is required for verification: use a loopback URL, exact expected status, and stable application-specific json_subset or text_contains identity. Status alone is not identity.",
             "- Keep commands safe and non-destructive. Do not include rm -rf, git reset, git clean, database drops, or migrations.",
             "- If a command is not discoverable from evidence, return an empty string for that field.",
             "- No markdown fences, no comments, no explanation.",
@@ -251,6 +254,14 @@ def parse_project_script_suggestion(raw_text: str) -> ProjectScriptSuggestion | 
     parsed = parse_json_object(json_text)
     if parsed is None:
         return None
+    try:
+        readiness_probe = (
+            ProjectReadinessProbe.model_validate(parsed["readiness_probe"])
+            if isinstance(parsed.get("readiness_probe"), dict)
+            else None
+        )
+    except ValidationError:
+        readiness_probe = None
     return ProjectScriptSuggestion(
         setup_script=_read_string(parsed, ("setup_script", "setupScript", "setup")),
         run_command=_read_string(
@@ -258,6 +269,7 @@ def parse_project_script_suggestion(raw_text: str) -> ProjectScriptSuggestion | 
             ("run_command", "runCommand", "launch_command", "launchCommand", "startCommand"),
         ),
         access_url=_read_string(parsed, ("access_url", "accessUrl", "url")) or None,
+        readiness_probe=readiness_probe,
         notes=_read_string_list(parsed, "notes"),
         env_vars=_read_env_vars(parsed),
     )
@@ -510,19 +522,30 @@ async def _terminate_process(proc: asyncio.subprocess.Process) -> None:
             await asyncio.wait_for(proc.wait(), timeout=2.0)
 
 
-async def _probe_access_urls(urls: list[str]) -> tuple[str | None, str | None]:
-    if not urls:
-        return None, "No local access URL or port was discoverable."
-    last_error: str | None = None
-    for url in urls:
-        result = await probe_local_service(url)
-        if result["state"] == "reachable":
-            return (
-                result["url"],
-                f"Access check reached {result['url']} with HTTP {result['http_status']}.",
-            )
-        last_error = result["error"] or result["state"]
-    return None, f"Access checks failed for {', '.join(urls)}: {last_error or 'unreachable'}."
+async def _probe_access_urls(
+    urls: list[str],
+    readiness_probe: ProjectReadinessProbe | None,
+) -> tuple[str | None, str | None]:
+    if readiness_probe is None:
+        return None, "Application readiness identity is not configured; launch cannot be verified."
+    evaluation = await evaluate_project_service(readiness_probe)
+    readiness = evaluation["readiness"]
+    if readiness["state"] == "ready":
+        return (
+            readiness["url"],
+            f"Application readiness matched at {readiness['url']} with HTTP {readiness['http_status']}.",
+        )
+    occupied = evaluation["service"]["state"] == "reachable"
+    if occupied:
+        return None, (
+            f"Address responded at {readiness['url']}, but application readiness failed: "
+            f"{readiness['error'] or readiness['state']}."
+        )
+    checked = urls or [readiness_probe.url]
+    return None, (
+        f"Application readiness checks failed for {', '.join(checked)}: "
+        f"{readiness['error'] or readiness['state']}."
+    )
 
 
 async def verify_project_launch(
@@ -606,7 +629,10 @@ async def verify_project_launch(
             exit_code = None
         await _wait_for_process_startup_output(reader_signals)
         urls = _candidate_access_urls(root, suggestion, logs)
-        reached_url, access_message = await _probe_access_urls(urls)
+        reached_url, access_message = await _probe_access_urls(
+            urls,
+            suggestion.readiness_probe,
+        )
         if reached_url is not None:
             suggestion.access_url = reached_url
             return ProjectScriptVerification(

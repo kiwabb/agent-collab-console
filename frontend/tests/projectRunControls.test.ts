@@ -95,7 +95,8 @@ const STARTUP_CONFIG_KEYS = [
   "startupConfig.retryRun",
   "startupConfig.runLogsTitle",
   "startupConfig.runLogsExited",
-  "startupConfig.serviceAlreadyReachable",
+  "startupConfig.occupiedUnknownTitle",
+  "startupConfig.invalidReadinessTitle",
   "startupConfig.externalServiceTitle",
   "startupConfig.serviceStartingTitle",
   "startupConfig.serviceOfflineTitle",
@@ -138,7 +139,8 @@ test("Startup Config owns analysis polling and project run actions", () => {
   assert.match(hook, /getProjectRunStatus/);
   assert.match(hook, /getProjectRunLogs/);
   assert.match(hook, /shouldPollProjectServiceStatus\(runStatus\)/);
-  assert.match(hook, /service_already_reachable/);
+  assert.match(hook, /service_address_occupied/);
+  assert.match(hook, /startup_config_invalid/);
   assert.match(hook, /lastRunLogSeqRef/);
   assert.match(hook, /window\.setInterval\(pollStatus, SERVICE_STATUS_POLL_MS\)/);
   assert.match(hook, /window\.setInterval\(pollLogs, RUN_LOG_POLL_MS\)/);
@@ -150,7 +152,8 @@ test("Startup Config owns analysis polling and project run actions", () => {
   assert.match(page, /ProjectRunStatusPanel/);
   assert.match(runPanel, /startupConfig\.failedDetail/);
   assert.match(runPanel, /startupConfig\.runLogsTitle/);
-  assert.match(runPanel, /externalReachable/);
+  assert.match(runPanel, /externalReady/);
+  assert.match(runPanel, /occupied_unknown/);
   assert.match(runPanel, /managedRunning/);
   assert.match(runPanel, /startupConfig\.openService/);
 });
@@ -160,7 +163,9 @@ test("project run status keeps managed ownership separate from service reachabil
 
   assert.match(types, /export interface ProjectRunServiceStatus/);
   assert.match(types, /service: ProjectRunServiceStatus/);
-  assert.match(types, /service_already_reachable/);
+  assert.match(types, /readiness: ProjectApplicationReadinessStatus/);
+  assert.match(types, /service_address_occupied/);
+  assert.match(types, /startup_config_invalid/);
 });
 
 test("ProjectScriptTaskResponse keeps reused as a required boolean", () => {

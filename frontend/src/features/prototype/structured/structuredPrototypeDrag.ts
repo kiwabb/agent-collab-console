@@ -6,6 +6,10 @@ import {
 } from "./structuredPrototypeNodes";
 import type { StructuredPrototypePaletteType } from "./StructuredPrototypePalette";
 import type { StructuredPrototypeDragMirrorCapture } from "./structuredPrototypeDragMirror";
+import {
+  readStructuredPrototypeLayerDragData,
+  readStructuredPrototypeLayerDropData,
+} from "./structuredPrototypeLayerTreeModel";
 import type {
   NewStructuredPrototypeNode,
   StructuredPrototypeDocument,
@@ -72,7 +76,8 @@ interface RemovedStructuredPrototypeNode {
 export interface StructuredPrototypeNodeLocation {
   parentId: string;
   index: number;
-  position?: StructuredPrototypeFreeformPosition;
+  /** Move projections use null to request an explicit return to flow layout. */
+  position?: StructuredPrototypeFreeformPosition | null;
 }
 
 export interface StructuredPrototypeNodeMoveProjection {
@@ -156,6 +161,30 @@ export function readStructuredPrototypeNodeDragData(
     parentId: value["parentId"],
     index: value["index"],
   };
+}
+
+export function structuredPrototypeNodeDragMatchesSelection(
+  dragData: unknown,
+  selectedNodeIds: readonly string[],
+): boolean {
+  const draggedNode = readStructuredPrototypeNodeDragData(dragData);
+  return draggedNode !== null && selectedNodeIds.includes(draggedNode.nodeId);
+}
+
+export type StructuredPrototypeSelectionChromeState =
+  "visible" | "hidden-during-node-drag" | "hidden-during-freeform-move";
+
+export function resolveStructuredPrototypeSelectionChromeState(
+  dragData: unknown,
+  selectedNodeIds: readonly string[],
+  freeformMovePhase: "idle" | "armed" | "preview" | "pending",
+): StructuredPrototypeSelectionChromeState {
+  if (structuredPrototypeNodeDragMatchesSelection(dragData, selectedNodeIds)) {
+    return "hidden-during-node-drag";
+  }
+  return freeformMovePhase === "preview" || freeformMovePhase === "pending"
+    ? "hidden-during-freeform-move"
+    : "visible";
 }
 
 export function readStructuredPrototypeNodeDragMirrorCapture(
@@ -304,6 +333,14 @@ function compareDropTargets(
 }
 
 export const structuredPrototypeCollisionDetection: CollisionDetection = (args) => {
+  const layerDrag = readStructuredPrototypeLayerDragData(args.active.data.current);
+  if (layerDrag !== null) {
+    const droppableContainers = args.droppableContainers.filter(
+      (container) => readStructuredPrototypeLayerDropData(container.data.current) !== null,
+    );
+    const scopedArgs = { ...args, droppableContainers };
+    return args.pointerCoordinates === null ? closestCenter(scopedArgs) : pointerWithin(scopedArgs);
+  }
   const pageDrag = readStructuredPrototypePageDragData(args.active.data.current);
   const structuredDrag =
     readStructuredPrototypePaletteDragData(args.active.data.current) ??
@@ -369,13 +406,16 @@ function findProjectedContainerNode(
 function nodeForTargetContainer(
   node: StructuredPrototypeNode,
   parent: StructuredPrototypeContainerNode,
-  targetPosition: StructuredPrototypeFreeformPosition | undefined,
+  targetPosition: StructuredPrototypeFreeformPosition | null | undefined,
 ): StructuredPrototypeNode | null {
   if (parent.type === "Freeform") {
-    if (targetPosition === undefined) return null;
+    if (targetPosition === undefined || targetPosition === null) return null;
     return { ...node, layoutItem: { ...node.layoutItem, position: targetPosition } };
   }
-  if (targetPosition !== undefined) return null;
+  if (targetPosition === undefined) return node;
+  if (targetPosition !== null) {
+    return { ...node, layoutItem: { ...node.layoutItem, position: targetPosition } };
+  }
   if (node.layoutItem.position === undefined) return node;
   const layoutItem = { ...node.layoutItem };
   delete layoutItem.position;
@@ -475,7 +515,7 @@ export function projectStructuredPrototypeNodeInsert(
   parentId: string,
   index: number,
   node: StructuredPrototypeNode,
-  targetPosition?: StructuredPrototypeFreeformPosition,
+  targetPosition?: StructuredPrototypeFreeformPosition | null,
 ): StructuredPrototypeDocument | null {
   const page = document.pages.find((candidate) => candidate.id === pageId);
   if (
@@ -607,7 +647,7 @@ export function projectStructuredPrototypeNodeMove(
   nodeId: string,
   targetParentId: string,
   targetIndex: number,
-  targetPosition?: StructuredPrototypeFreeformPosition,
+  targetPosition?: StructuredPrototypeFreeformPosition | null,
 ): StructuredPrototypeDocument | null {
   const page = document.pages.find((candidate) => candidate.id === pageId);
   if (page === undefined || page.root.id === nodeId) return null;
@@ -632,7 +672,7 @@ export function projectStructuredPrototypeNodeMoveToDropTarget(
   pageId: string,
   nodeId: string,
   target: StructuredPrototypeDropTarget,
-  targetPosition?: StructuredPrototypeFreeformPosition,
+  targetPosition?: StructuredPrototypeFreeformPosition | null,
 ): StructuredPrototypeNodeMoveProjection | null {
   const location = findStructuredPrototypeNodeLocation(document, pageId, nodeId);
   if (location === null) return null;
@@ -643,14 +683,9 @@ export function projectStructuredPrototypeNodeMoveToDropTarget(
   if (nodeId === target.parentId) return null;
   const positionUnchanged =
     targetPosition === undefined ||
-    (location.position?.x === targetPosition.x && location.position.y === targetPosition.y);
-  if (
-    location.parentId === target.parentId &&
-    location.index === targetIndex &&
-    positionUnchanged
-  ) {
-    return { document, location };
-  }
+    (targetPosition === null
+      ? location.position === undefined
+      : location.position?.x === targetPosition.x && location.position.y === targetPosition.y);
   const projected = projectStructuredPrototypeNodeMove(
     document,
     pageId,
@@ -659,16 +694,23 @@ export function projectStructuredPrototypeNodeMoveToDropTarget(
     targetIndex,
     targetPosition,
   );
-  return projected === null
-    ? null
-    : {
-        document: projected,
-        location: {
-          parentId: target.parentId,
-          index: targetIndex,
-          ...(targetPosition === undefined ? {} : { position: targetPosition }),
-        },
-      };
+  if (projected === null) return null;
+  if (
+    location.parentId === target.parentId &&
+    location.index === targetIndex &&
+    positionUnchanged
+  ) {
+    return { document, location };
+  }
+  const projectedPosition = targetPosition === undefined ? location.position : targetPosition;
+  return {
+    document: projected,
+    location: {
+      parentId: target.parentId,
+      index: targetIndex,
+      ...(projectedPosition === undefined ? {} : { position: projectedPosition }),
+    },
+  };
 }
 
 export function projectStructuredPrototypePageReorder(

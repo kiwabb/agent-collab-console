@@ -18,6 +18,26 @@ import type { StructuredPrototypeContainerNode } from "./structuredPrototypeNode
 
 export const STRUCTURED_PROTOTYPE_COMMAND_BATCH_LIMIT = 100;
 
+export type StructuredPrototypePageAllocationKind = "add" | "duplicate";
+
+export function structuredPrototypePageAllocationKey(
+  kind: StructuredPrototypePageAllocationKind,
+  pageId: string,
+): string {
+  return `page-${kind}-${pageId.replaceAll("-", "")}`;
+}
+
+function normalizedCommandName(value: string, label: string): string {
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    throw new Error(`${label} cannot be empty`);
+  }
+  if (normalized.length > 80) {
+    throw new Error(`${label} cannot exceed 80 characters`);
+  }
+  return normalized;
+}
+
 const AUTO_LAYOUT_ITEM: StructuredPrototypeLayoutItem = {
   width: { unit: "auto", value: null },
   minWidth: null,
@@ -165,17 +185,19 @@ export function insertPaletteNodeBatch(
   parent: StructuredPrototypeContainerNode,
   index: number,
   node: NewStructuredPrototypeNode,
-  targetPosition?: StructuredPrototypeFreeformPosition,
+  targetPosition?: StructuredPrototypeFreeformPosition | null,
 ): StructuredPrototypeCommandBatch {
-  const position = targetPosition ?? node.layoutItem.position;
-  if (parent.type === "Freeform" && position === undefined) {
+  if (parent.type === "Freeform" && (targetPosition === undefined || targetPosition === null)) {
     throw new Error("a position is required to insert a node into a Freeform container");
   }
-  if (parent.type !== "Freeform" && position !== undefined) {
-    throw new Error("position is only valid for a direct child of a Freeform container");
-  }
+  const flowLayoutItem = { ...node.layoutItem };
+  delete flowLayoutItem.position;
   const positionedNode =
-    position === undefined ? node : { ...node, layoutItem: { ...node.layoutItem, position } };
+    targetPosition === undefined
+      ? node
+      : targetPosition === null
+        ? { ...node, layoutItem: flowLayoutItem }
+        : { ...node, layoutItem: { ...node.layoutItem, position: targetPosition } };
   return {
     commandContractVersion: 1,
     summary: `Insert ${node.type} component`,
@@ -195,13 +217,10 @@ export function moveNodeBatch(
   nodeId: string,
   parent: StructuredPrototypeContainerNode,
   targetIndex: number,
-  targetPosition?: StructuredPrototypeFreeformPosition,
+  targetPosition?: StructuredPrototypeFreeformPosition | null,
 ): StructuredPrototypeCommandBatch {
-  if (parent.type === "Freeform" && targetPosition === undefined) {
+  if (parent.type === "Freeform" && (targetPosition === undefined || targetPosition === null)) {
     throw new Error("a target position is required to move a node into a Freeform container");
-  }
-  if (parent.type !== "Freeform" && targetPosition !== undefined) {
-    throw new Error("targetPosition is only valid for a Freeform target container");
   }
   return {
     commandContractVersion: 1,
@@ -219,26 +238,29 @@ export function moveNodeBatch(
   };
 }
 
-export interface StructuredPrototypeFreeformMoveCommandItem {
+export interface StructuredPrototypePositionedMoveCommandItem {
   nodeId: string;
   x: number;
   y: number;
 }
 
-export function moveFreeformSelectionBatch(
-  parent: StructuredPrototypeFreeformNode,
-  items: readonly StructuredPrototypeFreeformMoveCommandItem[],
+export type StructuredPrototypeFreeformMoveCommandItem =
+  StructuredPrototypePositionedMoveCommandItem;
+
+export function movePositionedSelectionBatch(
+  parent: StructuredPrototypeContainerNode,
+  items: readonly StructuredPrototypePositionedMoveCommandItem[],
   summary: string,
 ): StructuredPrototypeCommandBatch {
   if (items.length === 0 || items.length > STRUCTURED_PROTOTYPE_COMMAND_BATCH_LIMIT) {
     throw new Error(
-      `a freeform move batch requires 1 to ${STRUCTURED_PROTOTYPE_COMMAND_BATCH_LIMIT} items`,
+      `a positioned move batch requires 1 to ${STRUCTURED_PROTOTYPE_COMMAND_BATCH_LIMIT} items`,
     );
   }
-  const itemsById = new Map<string, StructuredPrototypeFreeformMoveCommandItem>();
+  const itemsById = new Map<string, StructuredPrototypePositionedMoveCommandItem>();
   for (const item of items) {
     if (itemsById.has(item.nodeId)) {
-      throw new Error(`freeform move node is duplicated: ${item.nodeId}`);
+      throw new Error(`positioned move node is duplicated: ${item.nodeId}`);
     }
     itemsById.set(item.nodeId, item);
   }
@@ -260,7 +282,7 @@ export function moveFreeformSelectionBatch(
     ];
   });
   if (commands.length !== items.length) {
-    throw new Error("every freeform move node must be a direct child of the target Freeform");
+    throw new Error("every positioned move node must be a direct child of the target container");
   }
   return {
     commandContractVersion: 1,
@@ -269,7 +291,15 @@ export function moveFreeformSelectionBatch(
   };
 }
 
-export function setFreeformGroupLayoutBatch(
+export function moveFreeformSelectionBatch(
+  parent: StructuredPrototypeFreeformNode,
+  items: readonly StructuredPrototypeFreeformMoveCommandItem[],
+  summary: string,
+): StructuredPrototypeCommandBatch {
+  return movePositionedSelectionBatch(parent, items, summary);
+}
+
+export function setPositionedGroupLayoutBatch(
   items: readonly StructuredPrototypeGroupTransformItem[],
   mode: "position" | "frame",
   summary: string,
@@ -307,6 +337,14 @@ export function setFreeformGroupLayoutBatch(
   };
 }
 
+export function setFreeformGroupLayoutBatch(
+  items: readonly StructuredPrototypeGroupTransformItem[],
+  mode: "position" | "frame",
+  summary: string,
+): StructuredPrototypeCommandBatch {
+  return setPositionedGroupLayoutBatch(items, mode, summary);
+}
+
 export function removeNodeBatch(nodeId: string): StructuredPrototypeCommandBatch {
   return removeNodesBatch([nodeId]);
 }
@@ -316,6 +354,16 @@ export function removeNodesBatch(nodeIds: readonly string[]): StructuredPrototyp
     commandContractVersion: 1,
     summary: nodeIds.length === 1 ? "Remove component" : `Remove ${nodeIds.length} components`,
     commands: nodeIds.map((nodeId) => ({ kind: "removeNode", nodeId })),
+  };
+}
+
+export function updateNodeNameBatch(nodeId: string, name: string): StructuredPrototypeCommandBatch {
+  return {
+    commandContractVersion: 1,
+    summary: "Rename component",
+    commands: [
+      { kind: "updateNodeName", nodeId, name: normalizedCommandName(name, "Component name") },
+    ],
   };
 }
 
@@ -334,6 +382,57 @@ export function reorderPageBatch(
     commandContractVersion: 1,
     summary: "Reorder page",
     commands: [{ kind: "reorderPage", pageId, targetIndex }, ...navigationCommands],
+  };
+}
+
+export function addPageBatch(
+  afterPageId: string,
+  title: string,
+  includeInNavigation: boolean,
+): StructuredPrototypeCommandBatch {
+  return {
+    commandContractVersion: 1,
+    summary: "Add page",
+    commands: [
+      {
+        kind: "addPage",
+        afterPageId,
+        newPageKey: structuredPrototypePageAllocationKey("add", afterPageId),
+        title: normalizedCommandName(title, "Page title"),
+        includeInNavigation,
+      },
+    ],
+  };
+}
+
+export function duplicatePageBatch(pageId: string, title: string): StructuredPrototypeCommandBatch {
+  return {
+    commandContractVersion: 1,
+    summary: "Duplicate page",
+    commands: [
+      {
+        kind: "duplicatePage",
+        pageId,
+        newPageKey: structuredPrototypePageAllocationKey("duplicate", pageId),
+        title: normalizedCommandName(title, "Page title"),
+      },
+    ],
+  };
+}
+
+export function renamePageBatch(pageId: string, title: string): StructuredPrototypeCommandBatch {
+  return {
+    commandContractVersion: 1,
+    summary: "Rename page",
+    commands: [{ kind: "renamePage", pageId, title: normalizedCommandName(title, "Page title") }],
+  };
+}
+
+export function deletePageBatch(pageId: string): StructuredPrototypeCommandBatch {
+  return {
+    commandContractVersion: 1,
+    summary: "Delete page",
+    commands: [{ kind: "deletePage", pageId }],
   };
 }
 

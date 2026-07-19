@@ -40,6 +40,18 @@ npm run dev
 
 | 页面 | 路由 | 接口 |
 |---|---|---|
+| 后端就绪检查 | — | `GET /api/health/ready`（固定返回 `service=admin-demo-backend`、`status=ready`） |
 | 仪表盘 | `/dashboard` | `GET /api/dashboard` |
 | 用户管理 | `/users` | `GET /api/users` |
 | 订单管理 | `/orders` | `GET /api/orders` |
+
+## 启动就绪识别
+
+项目启动分析应为两个服务分别保存严格的 HTTP 就绪探针：
+
+- 后端：`http://127.0.0.1:8080/api/health/ready`，期望 HTTP 200，JSON 子集为
+  `{"service":"admin-demo-backend","status":"ready"}`。
+- 前端：`http://127.0.0.1:5173/`，期望 HTTP 200，文本包含
+  `Northstar 管理后台`。
+
+两个探针独立判断，端口有任意 HTTP 响应只表示地址被占用，不表示本应用已就绪。

@@ -1,38 +1,49 @@
 import { STRUCTURED_PROTOTYPE_GROUP_TRANSFORM_MAX_ITEMS } from "./structuredPrototypeGroupTransform";
-import { isStructuredPrototypeContainerNode } from "./structuredPrototypeNodes";
+import {
+  isStructuredPrototypeContainerNode,
+  type StructuredPrototypeContainerNode,
+} from "./structuredPrototypeNodes";
 import type { StructuredPrototypeFreeformNode, StructuredPrototypeNode } from "./types";
 
-export interface StructuredPrototypeFreeformGroupSelectionItem {
+export interface StructuredPrototypePositionedSelectionItem {
   node: StructuredPrototypeNode;
   x: number;
   y: number;
 }
+
+export interface StructuredPrototypePositionedSelection {
+  parent: StructuredPrototypeContainerNode;
+  items: StructuredPrototypePositionedSelectionItem[];
+}
+
+export type StructuredPrototypeFreeformGroupSelectionItem =
+  StructuredPrototypePositionedSelectionItem;
 
 export interface StructuredPrototypeFreeformGroupSelection {
   parent: StructuredPrototypeFreeformNode;
   items: StructuredPrototypeFreeformGroupSelectionItem[];
 }
 
-export function resolveStructuredPrototypeFreeformSelection(
+export function resolveStructuredPrototypePositionedSelection(
   root: StructuredPrototypeNode,
   nodeIds: readonly string[],
-): StructuredPrototypeFreeformGroupSelection | null {
+): StructuredPrototypePositionedSelection | null {
   if (nodeIds.length < 1 || nodeIds.length > STRUCTURED_PROTOTYPE_GROUP_TRANSFORM_MAX_ITEMS) {
     return null;
   }
   const requestedNodeIds = new Set(nodeIds);
   if (requestedNodeIds.size !== nodeIds.length) return null;
 
-  let parent: StructuredPrototypeFreeformNode | null = null;
+  let parent: StructuredPrototypeContainerNode | null = null;
   let invalid = false;
-  const itemsByNodeId = new Map<string, StructuredPrototypeFreeformGroupSelectionItem>();
+  const itemsByNodeId = new Map<string, StructuredPrototypePositionedSelectionItem>();
 
   const visit = (node: StructuredPrototypeNode): void => {
     if (!isStructuredPrototypeContainerNode(node)) return;
     for (const child of node.children) {
       if (requestedNodeIds.has(child.id)) {
         const position = child.layoutItem.position;
-        if (node.type !== "Freeform" || position === undefined) {
+        if (position === undefined) {
           invalid = true;
         } else if (parent !== null && parent.id !== node.id) {
           invalid = true;
@@ -61,6 +72,23 @@ export function resolveStructuredPrototypeFreeformSelection(
       return item;
     }),
   };
+}
+
+export function resolveStructuredPrototypePositionedGroupSelection(
+  root: StructuredPrototypeNode,
+  nodeIds: readonly string[],
+): StructuredPrototypePositionedSelection | null {
+  if (nodeIds.length < 2) return null;
+  return resolveStructuredPrototypePositionedSelection(root, nodeIds);
+}
+
+export function resolveStructuredPrototypeFreeformSelection(
+  root: StructuredPrototypeNode,
+  nodeIds: readonly string[],
+): StructuredPrototypeFreeformGroupSelection | null {
+  const selection = resolveStructuredPrototypePositionedSelection(root, nodeIds);
+  if (selection === null || selection.parent.type !== "Freeform") return null;
+  return { parent: selection.parent, items: selection.items };
 }
 
 export function resolveStructuredPrototypeFreeformGroupSelection(

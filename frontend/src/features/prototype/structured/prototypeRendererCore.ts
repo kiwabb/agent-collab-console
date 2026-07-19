@@ -212,8 +212,10 @@ function layoutRules(node: StructuredPrototypeNode): string[] {
     rules.push("position:absolute", `left:${item.position.x}px`, `top:${item.position.y}px`);
   }
   if (node.visibility === "hidden") rules.push("display:none");
+  if (isStructuredPrototypeContainerNode(node) && item.position === undefined) {
+    rules.push("position:relative");
+  }
   if (node.type === "Freeform") {
-    if (item.position === undefined) rules.push("position:relative");
     rules.push("overflow:hidden");
   }
   if (node.type === "Stack") {

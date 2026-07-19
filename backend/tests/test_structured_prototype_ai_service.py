@@ -1193,6 +1193,106 @@ def test_page_and_selection_scopes_accept_their_related_behavior_rule(
     StructuredPrototypeAiService._validate_command_scope(document, batch, selection)
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        {
+            "kind": "addPage",
+            "afterPageId": fixture_id("page-list"),
+            "newPageKey": "ai-add-page",
+            "title": "AI page",
+            "includeInNavigation": False,
+        },
+        {
+            "kind": "duplicatePage",
+            "pageId": fixture_id("page-list"),
+            "newPageKey": "ai-duplicate-page",
+            "title": "AI page copy",
+        },
+        {"kind": "renamePage", "pageId": fixture_id("page-list"), "title": "AI title"},
+        {"kind": "deletePage", "pageId": fixture_id("page-list")},
+    ],
+)
+def test_page_scope_accepts_its_page_commands_and_selection_scope_refuses_them(
+    command: dict[str, object],
+) -> None:
+    document = _new_document().materialize(fixture_id("ai-page-command-document"))
+    batch = DomainCommandBatchV1.model_validate(
+        {
+            "commandContractVersion": 1,
+            "summary": "Edit selected page",
+            "commands": [command],
+        },
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+    page_selection = PrototypeAiSelectionV1(
+        scope="page",
+        page_id=fixture_id("page-list"),
+        selected_node_ids=[],
+        flow_id=None,
+        viewport="desktop",
+    )
+    StructuredPrototypeAiService._validate_command_scope(document, batch, page_selection)
+    node_selection = page_selection.model_copy(
+        update={
+            "scope": "selection",
+            "selected_node_ids": [fixture_id("title-list")],
+        }
+    )
+    with pytest.raises(StructuredPrototypeAiServiceError) as error:
+        StructuredPrototypeAiService._validate_command_scope(document, batch, node_selection)
+    assert error.value.code == "scope_violation"
+
+
+def test_ai_node_name_scope_accepts_only_nodes_inside_the_selection() -> None:
+    document = _new_document().materialize(fixture_id("ai-node-name-document"))
+    selection = PrototypeAiSelectionV1(
+        scope="selection",
+        page_id=fixture_id("page-list"),
+        selected_node_ids=[fixture_id("title-list")],
+        flow_id=None,
+        viewport="desktop",
+    )
+    accepted = DomainCommandBatchV1.model_validate(
+        {
+            "commandContractVersion": 1,
+            "summary": "Rename selected node",
+            "commands": [
+                {
+                    "kind": "updateNodeName",
+                    "nodeId": fixture_id("title-list"),
+                    "name": "AI title layer",
+                }
+            ],
+        },
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+    StructuredPrototypeAiService._validate_command_scope(document, accepted, selection)
+    outside = DomainCommandBatchV1.model_validate(
+        {
+            "commandContractVersion": 1,
+            "summary": "Rename another page node",
+            "commands": [
+                {
+                    "kind": "updateNodeName",
+                    "nodeId": fixture_id("title-detail"),
+                    "name": "Outside layer",
+                }
+            ],
+        },
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+    with pytest.raises(StructuredPrototypeAiServiceError) as error:
+        StructuredPrototypeAiService._validate_command_scope(document, outside, selection)
+    assert error.value.code == "scope_violation"
+
+
 @pytest.mark.parametrize("violation", ["add", "other-rule", "outside-target"])
 @pytest.mark.asyncio
 async def test_flow_scope_refuses_unrelated_behavior_rule_edits(

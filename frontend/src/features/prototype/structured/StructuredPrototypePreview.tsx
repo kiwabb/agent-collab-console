@@ -591,8 +591,8 @@ export function StructuredPrototypePreview({
                 selection={selection}
                 formValues={formValues}
                 disabled={disabled}
-                dragDisabled={dragDisabled}
-                resizeDisabled={resizeDisabled}
+                dragDisabled={dragDisabled || spacePressed}
+                resizeDisabled={resizeDisabled || spacePressed}
                 gridSnappingEnabled={gridSnappingEnabled}
                 marqueeDisabled={interactionBlocked || spacePressed}
                 onSelect={onSelectNode}

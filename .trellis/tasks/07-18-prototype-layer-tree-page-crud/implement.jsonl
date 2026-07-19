@@ -1,0 +1,11 @@
+{"file":".trellis/spec/ccgui/frontend/index.md","reason":"Frontend package conventions and pre-development routing."}
+{"file":".trellis/spec/ccgui/frontend/component-guidelines.md","reason":"Editor pane composition, accessibility, i18n, and component boundaries."}
+{"file":".trellis/spec/ccgui/frontend/state-management.md","reason":"Local navigator state versus durable structured command state and recovery."}
+{"file":".trellis/spec/ccgui/frontend/type-safety.md","reason":"Strict discriminated command types and boundary parsing."}
+{"file":".trellis/spec/ccgui/frontend/quality-guidelines.md","reason":"Focused frontend tests and quality gates."}
+{"file":".trellis/spec/vibe-kanban/backend/index.md","reason":"Backend layer ownership and typed service conventions."}
+{"file":".trellis/spec/vibe-kanban/backend/error-handling.md","reason":"Fail-closed domain errors and transport mapping for invalid page mutations."}
+{"file":".trellis/spec/vibe-kanban/backend/database-guidelines.md","reason":"Structured command journal, deterministic replay, and operation recovery contracts."}
+{"file":".trellis/spec/vibe-kanban/backend/quality-guidelines.md","reason":"Backend typing, source hygiene, and focused test requirements."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Page commands span browser, API, domain, journal, replay, and publication."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse the existing node/page command and traversal machinery."}

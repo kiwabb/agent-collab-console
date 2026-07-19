@@ -28,7 +28,6 @@ import {
   AlignVerticalJustifyEnd,
   AlignVerticalJustifyStart,
   AlignVerticalSpaceBetween,
-  GripVertical,
   Layers3,
 } from "lucide-react";
 
@@ -58,7 +57,10 @@ import {
   type StructuredPrototypeDropRect,
   type StructuredPrototypeMeasuredDropArea,
 } from "./structuredPrototypeDropAreas";
-import { resolveStructuredPrototypeActiveLayoutNodeId } from "./structuredPrototypeDrag";
+import {
+  resolveStructuredPrototypeSelectionChromeState,
+  resolveStructuredPrototypeActiveLayoutNodeId,
+} from "./structuredPrototypeDrag";
 import {
   canonicalStructuredPrototypeFreeformValue,
   resolveStructuredPrototypeFreeformResize,
@@ -72,8 +74,8 @@ import {
 import { StructuredPrototypeFreeformGridOverlay } from "./StructuredPrototypeFreeformGridOverlay";
 import { resolveStructuredPrototypeFreeformGrids } from "./structuredPrototypeFreeformGrids";
 import {
-  resolveStructuredPrototypeFreeformGroupSelection,
-  resolveStructuredPrototypeFreeformSelection,
+  resolveStructuredPrototypePositionedGroupSelection,
+  resolveStructuredPrototypePositionedSelection,
 } from "./structuredPrototypeGroupSelection";
 import {
   resolveStructuredPrototypeGroupAlignment,
@@ -123,7 +125,6 @@ import {
 } from "./useStructuredPrototypeFreeformMove";
 import type {
   StructuredPrototypeDocument,
-  StructuredPrototypeFreeformNode,
   StructuredPrototypeFreeformGrid,
   StructuredPrototypeLayoutItem,
   StructuredPrototypeLength,
@@ -261,7 +262,7 @@ interface StructuredPrototypeSortableControlRegistration {
   controls: StructuredPrototypeSortableControls;
 }
 
-interface StructuredPrototypeFreeformSnapContext {
+interface StructuredPrototypePositionedSnapContext {
   readonly freeformId: string;
   readonly selectedNodeIds: readonly string[];
   readonly directSiblings: readonly Readonly<StructuredPrototypeFreeformSnapSibling>[];
@@ -290,7 +291,7 @@ interface StructuredPrototypeResizeGesture {
   projectionFrame: number | null;
   direction: StructuredPrototypeResizeDirection;
   groupItems: readonly StructuredPrototypeGroupTransformItem[] | null;
-  snapContext: StructuredPrototypeFreeformSnapContext | null;
+  snapContext: StructuredPrototypePositionedSnapContext | null;
   previewScale: number;
   activated: boolean;
   handle: HTMLButtonElement;
@@ -331,49 +332,101 @@ export type StructuredPrototypeResizeDirection = FreeformResizeDirection;
 const GROUP_RESIZE_HANDLES: readonly {
   direction: StructuredPrototypeResizeDirection;
   className: string;
+  markerClassName: string;
   translate: string;
 }[] = [
   {
     direction: "northwest",
     className: "bottom-full right-full origin-bottom-right cursor-nwse-resize",
+    markerClassName: "bottom-0 right-0 translate-x-1/2 translate-y-1/2",
     translate: "",
   },
   {
     direction: "north",
     className: "bottom-full left-1/2 origin-bottom cursor-ns-resize",
+    markerClassName: "bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2",
     translate: "translateX(-50%) ",
   },
   {
     direction: "northeast",
     className: "bottom-full left-full origin-bottom-left cursor-nesw-resize",
+    markerClassName: "bottom-0 left-0 -translate-x-1/2 translate-y-1/2",
     translate: "",
   },
   {
     direction: "east",
     className: "left-full top-1/2 origin-left cursor-ew-resize",
+    markerClassName: "left-0 top-1/2 -translate-x-1/2 -translate-y-1/2",
     translate: "translateY(-50%) ",
   },
   {
     direction: "southeast",
     className: "left-full top-full origin-top-left cursor-nwse-resize",
+    markerClassName: "left-0 top-0 -translate-x-1/2 -translate-y-1/2",
     translate: "",
   },
   {
     direction: "south",
     className: "left-1/2 top-full origin-top cursor-ns-resize",
+    markerClassName: "left-1/2 top-0 -translate-x-1/2 -translate-y-1/2",
     translate: "translateX(-50%) ",
   },
   {
     direction: "southwest",
     className: "right-full top-full origin-top-right cursor-nesw-resize",
+    markerClassName: "right-0 top-0 translate-x-1/2 -translate-y-1/2",
     translate: "",
   },
   {
     direction: "west",
     className: "right-full top-1/2 origin-right cursor-ew-resize",
+    markerClassName: "right-0 top-1/2 translate-x-1/2 -translate-y-1/2",
     translate: "translateY(-50%) ",
   },
 ];
+const SELECTION_MOVE_EDGE_HIT_SIZE = 10;
+
+function StructuredPrototypeSelectionMoveEdges({
+  handleScale,
+  disabled,
+}: {
+  handleScale: number;
+  disabled: boolean;
+}) {
+  const hitSize = SELECTION_MOVE_EDGE_HIT_SIZE * handleScale;
+  const edgeClassName = cn(
+    "absolute touch-none cursor-move active:cursor-grabbing",
+    disabled ? "pointer-events-none" : "pointer-events-auto",
+  );
+  return (
+    <>
+      <span
+        aria-hidden
+        className={cn(edgeClassName, "left-1/2 top-0 w-full")}
+        style={{ height: hitSize, minWidth: hitSize, transform: "translate(-50%, -50%)" }}
+        data-prototype-selection-move-edge="top"
+      />
+      <span
+        aria-hidden
+        className={cn(edgeClassName, "bottom-0 left-1/2 w-full")}
+        style={{ height: hitSize, minWidth: hitSize, transform: "translate(-50%, 50%)" }}
+        data-prototype-selection-move-edge="bottom"
+      />
+      <span
+        aria-hidden
+        className={cn(edgeClassName, "left-0 top-1/2 h-full")}
+        style={{ minHeight: hitSize, transform: "translate(-50%, -50%)", width: hitSize }}
+        data-prototype-selection-move-edge="left"
+      />
+      <span
+        aria-hidden
+        className={cn(edgeClassName, "right-0 top-1/2 h-full")}
+        style={{ minHeight: hitSize, transform: "translate(50%, -50%)", width: hitSize }}
+        data-prototype-selection-move-edge="right"
+      />
+    </>
+  );
+}
 
 export type StructuredPrototypeNodeSelectionIntent = "primary" | "replace" | "toggle";
 
@@ -845,7 +898,10 @@ function SortableCanvasContainer({
   const activeIndex =
     renderedChildren.find(({ child }) => child.id === activeNodeId)?.index ?? null;
   const measuredLayoutChildren = useMemo(
-    () => renderedChildren.filter(({ child }) => child.id !== activeNodeId),
+    () =>
+      renderedChildren.filter(
+        ({ child }) => child.id !== activeNodeId && child.layoutItem.position === undefined,
+      ),
     [activeNodeId, renderedChildren],
   );
   const dropLayout =
@@ -1396,7 +1452,7 @@ function SortableCanvasNode({
 interface StructuredPrototypeSelectionControlTarget {
   node: StructuredPrototypeNode;
   element: HTMLElement;
-  freeformPositioned: boolean;
+  positioned: boolean;
 }
 
 function sameStructuredPrototypeSelectionBoundsMap(
@@ -1476,6 +1532,12 @@ function StructuredPrototypeSelectionControlsLayer({
   const [boundsByNodeId, setBoundsByNodeId] = useState(
     new Map<string, StructuredPrototypeSelectionBounds>(),
   );
+  const selectionChromeState = resolveStructuredPrototypeSelectionChromeState(
+    active?.data.current,
+    targets.map((target) => target.node.id),
+    freeformMovePhase,
+  );
+  const selectionChromeHidden = selectionChromeState !== "visible";
   const measure = useCallback(() => {
     const next = new Map<string, StructuredPrototypeSelectionBounds>();
     if (canvasElement !== null) {
@@ -1510,18 +1572,8 @@ function StructuredPrototypeSelectionControlsLayer({
     };
   }, [canvasElement, measure, registryVersion, targets]);
   useLayoutEffect(() => {
-    measure();
-  }, [freeformMoveDraft, measure, resizeDraft]);
-  useEffect(() => {
-    if (active === null || !targets.some((target) => target.node.id === active.id)) return;
-    let animationFrameId = 0;
-    const measureDuringDrag = () => {
-      measure();
-      animationFrameId = requestAnimationFrame(measureDuringDrag);
-    };
-    animationFrameId = requestAnimationFrame(measureDuringDrag);
-    return () => cancelAnimationFrame(animationFrameId);
-  }, [active, measure, targets]);
+    if (!selectionChromeHidden) measure();
+  }, [freeformMoveDraft, measure, resizeDraft, selectionChromeHidden]);
 
   const handleScale = resolveStructuredPrototypeInverseScale(previewScale);
   const activeSnapGuideOverlay =
@@ -1583,12 +1635,12 @@ function StructuredPrototypeSelectionControlsLayer({
   }, [boundsByNodeId, groupMoveEnabled, targets]);
   const primaryTarget = targets.find((target) => target.node.id === primaryNodeId) ?? null;
   const singleTransformEnabled = targets.length === 1;
-  const readFreeformTransformItems = useCallback((): {
+  const readPositionedTransformItems = useCallback((): {
     items: StructuredPrototypeGroupTransformItem[];
     containerWidth: number;
     containerHeight: number;
   } | null => {
-    if (targets.length === 0 || targets.some((target) => !target.freeformPositioned)) return null;
+    if (targets.length === 0 || targets.some((target) => !target.positioned)) return null;
     const inverseScale = resolveStructuredPrototypeInverseScale(previewScale);
     const measured = targets.map((target) => {
       const position = target.node.layoutItem.position;
@@ -1632,7 +1684,7 @@ function StructuredPrototypeSelectionControlsLayer({
   }, [previewScale, targets]);
   const readGroupTransformItems = (): StructuredPrototypeGroupTransformItem[] | null => {
     if (!groupMoveEnabled) return null;
-    return readFreeformTransformItems()?.items ?? null;
+    return readPositionedTransformItems()?.items ?? null;
   };
   useEffect(() => {
     if (!editing || dragDisabled) return;
@@ -1665,7 +1717,7 @@ function StructuredPrototypeSelectionControlsLayer({
         default:
           return;
       }
-      const selection = readFreeformTransformItems();
+      const selection = readPositionedTransformItems();
       if (selection === null) return;
       event.preventDefault();
       void onFreeformSelectionNudge(
@@ -1680,7 +1732,7 @@ function StructuredPrototypeSelectionControlsLayer({
     };
     globalThis.window.addEventListener("keydown", handleKeyDown);
     return () => globalThis.window.removeEventListener("keydown", handleKeyDown);
-  }, [dragDisabled, editing, onFreeformSelectionNudge, readFreeformTransformItems]);
+  }, [dragDisabled, editing, onFreeformSelectionNudge, readPositionedTransformItems]);
   const arrangeGroupAlignment = (alignment: StructuredPrototypeGroupAlignment): void => {
     const items = readGroupTransformItems();
     if (items === null) return;
@@ -1695,6 +1747,7 @@ function StructuredPrototypeSelectionControlsLayer({
     <div
       className="pointer-events-none absolute inset-0 z-40"
       data-prototype-controls-layer="selection"
+      data-prototype-selection-chrome={selectionChromeState}
       data-prototype-selection-count={targets.length}
       data-prototype-keyboard-nudge="arrow-shift-10"
       data-prototype-snap-guide-count={
@@ -1818,167 +1871,177 @@ function StructuredPrototypeSelectionControlsLayer({
             top: groupBounds.top,
             width: groupBounds.width,
             height: groupBounds.height,
+            outlineColor: selectionChromeHidden ? "transparent" : undefined,
             outlineWidth: handleScale,
           }}
           data-prototype-group-selection-controls="true"
           data-prototype-group-selection-count={targets.length}
         >
-          <div
-            className="pointer-events-auto absolute bottom-full left-1/2 z-20 flex origin-bottom items-center rounded-md border border-[color-mix(in_srgb,var(--prototype-text)_15%,transparent)] bg-[var(--prototype-surface)] p-1 text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)] shadow-sm"
-            style={{
-              marginBottom: 44 * handleScale,
-              transform: `translateX(-50%) scale(${handleScale})`,
-            }}
-            role="toolbar"
-            aria-label={t("prototype.structured.canvas.groupTools")}
-            data-prototype-freeform-group-toolbar="true"
+          <button
+            type="button"
+            className="pointer-events-none absolute inset-0 z-0 border-0 bg-transparent p-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)]"
+            aria-label={t("prototype.structured.canvas.dragSelection", {
+              count: String(targets.length),
+            })}
+            disabled={dragDisabled}
+            onFocus={() => onSelect(primaryTarget.node.id, "primary")}
+            onPointerDown={(event) => onFreeformMovePointerDown(primaryTarget.node.id, event)}
+            data-prototype-selection-move-surface="group-freeform"
           >
-            <button
-              type="button"
-              className="grid size-8 cursor-move place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] active:cursor-grabbing disabled:pointer-events-none disabled:opacity-40"
-              aria-label={t("prototype.structured.canvas.dragSelection", {
-                count: String(targets.length),
-              })}
-              title={t("prototype.structured.canvas.dragSelection", {
-                count: String(targets.length),
-              })}
+            <StructuredPrototypeSelectionMoveEdges
+              handleScale={handleScale}
               disabled={dragDisabled}
-              onFocus={() => onSelect(primaryTarget.node.id, "primary")}
-              onPointerDown={(event) => onFreeformMovePointerDown(primaryTarget.node.id, event)}
-              data-prototype-freeform-group-move-handle="true"
+            />
+          </button>
+          <div
+            className="contents"
+            style={{ visibility: selectionChromeHidden ? "hidden" : "visible" }}
+            aria-hidden={selectionChromeHidden || undefined}
+            data-prototype-selection-tools="group"
+          >
+            <div
+              className="pointer-events-auto absolute bottom-full left-1/2 z-20 flex origin-bottom items-center rounded-md border border-[color-mix(in_srgb,var(--prototype-text)_15%,transparent)] bg-[var(--prototype-surface)] p-1 text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)] shadow-sm"
+              style={{
+                marginBottom: 44 * handleScale,
+                transform: `translateX(-50%) scale(${handleScale})`,
+              }}
+              role="toolbar"
+              aria-label={t("prototype.structured.canvas.groupTools")}
+              data-prototype-freeform-group-toolbar="true"
             >
-              <GripVertical size={14} aria-hidden />
-            </button>
-            <span className="mx-1 h-5 border-l border-[color-mix(in_srgb,var(--prototype-text)_15%,transparent)]" />
-            <button
-              type="button"
-              className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
-              aria-label={t("prototype.structured.canvas.alignLeft")}
-              title={t("prototype.structured.canvas.alignLeft")}
-              disabled={dragDisabled}
-              onClick={() => arrangeGroupAlignment("left")}
-            >
-              <AlignHorizontalJustifyStart size={14} aria-hidden />
-            </button>
-            <button
-              type="button"
-              className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
-              aria-label={t("prototype.structured.canvas.alignCenter")}
-              title={t("prototype.structured.canvas.alignCenter")}
-              disabled={dragDisabled}
-              onClick={() => arrangeGroupAlignment("center")}
-            >
-              <AlignHorizontalJustifyCenter size={14} aria-hidden />
-            </button>
-            <button
-              type="button"
-              className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
-              aria-label={t("prototype.structured.canvas.alignRight")}
-              title={t("prototype.structured.canvas.alignRight")}
-              disabled={dragDisabled}
-              onClick={() => arrangeGroupAlignment("right")}
-            >
-              <AlignHorizontalJustifyEnd size={14} aria-hidden />
-            </button>
-            <button
-              type="button"
-              className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
-              aria-label={t("prototype.structured.canvas.alignTop")}
-              title={t("prototype.structured.canvas.alignTop")}
-              disabled={dragDisabled}
-              onClick={() => arrangeGroupAlignment("top")}
-            >
-              <AlignVerticalJustifyStart size={14} aria-hidden />
-            </button>
-            <button
-              type="button"
-              className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
-              aria-label={t("prototype.structured.canvas.alignMiddle")}
-              title={t("prototype.structured.canvas.alignMiddle")}
-              disabled={dragDisabled}
-              onClick={() => arrangeGroupAlignment("middle")}
-            >
-              <AlignVerticalJustifyCenter size={14} aria-hidden />
-            </button>
-            <button
-              type="button"
-              className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
-              aria-label={t("prototype.structured.canvas.alignBottom")}
-              title={t("prototype.structured.canvas.alignBottom")}
-              disabled={dragDisabled}
-              onClick={() => arrangeGroupAlignment("bottom")}
-            >
-              <AlignVerticalJustifyEnd size={14} aria-hidden />
-            </button>
-            <span className="mx-1 h-5 border-l border-[color-mix(in_srgb,var(--prototype-text)_15%,transparent)]" />
-            <button
-              type="button"
-              className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
-              aria-label={t("prototype.structured.canvas.distributeHorizontal")}
-              title={t("prototype.structured.canvas.distributeHorizontal")}
-              disabled={dragDisabled || targets.length < 3}
-              onClick={() => arrangeGroupDistribution("horizontal")}
-            >
-              <AlignHorizontalSpaceBetween size={14} aria-hidden />
-            </button>
-            <button
-              type="button"
-              className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
-              aria-label={t("prototype.structured.canvas.distributeVertical")}
-              title={t("prototype.structured.canvas.distributeVertical")}
-              disabled={dragDisabled || targets.length < 3}
-              onClick={() => arrangeGroupDistribution("vertical")}
-            >
-              <AlignVerticalSpaceBetween size={14} aria-hidden />
-            </button>
-          </div>
-          {GROUP_RESIZE_HANDLES.map((handle) => (
-            <button
-              key={handle.direction}
-              type="button"
-              className={cn(
-                "pointer-events-auto absolute z-10 grid size-8 place-items-center bg-transparent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-0",
-                handle.className,
-              )}
-              style={{ transform: `${handle.translate}scale(${handleScale})` }}
-              aria-label={t("prototype.structured.canvas.resizeSelection", {
-                count: String(targets.length),
-              })}
-              title={t("prototype.structured.canvas.resizeSelection", {
-                count: String(targets.length),
-              })}
-              disabled={resizeDisabled}
-              onFocus={() => onSelect(primaryTarget.node.id, "primary")}
-              onPointerDown={(event) =>
-                onResizePointerDown(primaryTarget.node.id, handle.direction, event)
-              }
-              data-prototype-group-resize-direction={handle.direction}
-            >
+              <button
+                type="button"
+                className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
+                aria-label={t("prototype.structured.canvas.alignLeft")}
+                title={t("prototype.structured.canvas.alignLeft")}
+                disabled={dragDisabled}
+                onClick={() => arrangeGroupAlignment("left")}
+              >
+                <AlignHorizontalJustifyStart size={14} aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
+                aria-label={t("prototype.structured.canvas.alignCenter")}
+                title={t("prototype.structured.canvas.alignCenter")}
+                disabled={dragDisabled}
+                onClick={() => arrangeGroupAlignment("center")}
+              >
+                <AlignHorizontalJustifyCenter size={14} aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
+                aria-label={t("prototype.structured.canvas.alignRight")}
+                title={t("prototype.structured.canvas.alignRight")}
+                disabled={dragDisabled}
+                onClick={() => arrangeGroupAlignment("right")}
+              >
+                <AlignHorizontalJustifyEnd size={14} aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
+                aria-label={t("prototype.structured.canvas.alignTop")}
+                title={t("prototype.structured.canvas.alignTop")}
+                disabled={dragDisabled}
+                onClick={() => arrangeGroupAlignment("top")}
+              >
+                <AlignVerticalJustifyStart size={14} aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
+                aria-label={t("prototype.structured.canvas.alignMiddle")}
+                title={t("prototype.structured.canvas.alignMiddle")}
+                disabled={dragDisabled}
+                onClick={() => arrangeGroupAlignment("middle")}
+              >
+                <AlignVerticalJustifyCenter size={14} aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
+                aria-label={t("prototype.structured.canvas.alignBottom")}
+                title={t("prototype.structured.canvas.alignBottom")}
+                disabled={dragDisabled}
+                onClick={() => arrangeGroupAlignment("bottom")}
+              >
+                <AlignVerticalJustifyEnd size={14} aria-hidden />
+              </button>
+              <span className="mx-1 h-5 border-l border-[color-mix(in_srgb,var(--prototype-text)_15%,transparent)]" />
+              <button
+                type="button"
+                className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
+                aria-label={t("prototype.structured.canvas.distributeHorizontal")}
+                title={t("prototype.structured.canvas.distributeHorizontal")}
+                disabled={dragDisabled || targets.length < 3}
+                onClick={() => arrangeGroupDistribution("horizontal")}
+              >
+                <AlignHorizontalSpaceBetween size={14} aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="grid size-8 cursor-pointer place-items-center rounded-sm hover:bg-[color-mix(in_srgb,var(--prototype-accent)_12%,transparent)] focus-visible:outline-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-40"
+                aria-label={t("prototype.structured.canvas.distributeVertical")}
+                title={t("prototype.structured.canvas.distributeVertical")}
+                disabled={dragDisabled || targets.length < 3}
+                onClick={() => arrangeGroupDistribution("vertical")}
+              >
+                <AlignVerticalSpaceBetween size={14} aria-hidden />
+              </button>
+            </div>
+            {GROUP_RESIZE_HANDLES.map((handle) => (
+              <button
+                key={handle.direction}
+                type="button"
+                className={cn(
+                  "pointer-events-auto absolute z-10 grid size-8 place-items-center bg-transparent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-0",
+                  handle.className,
+                )}
+                style={{ transform: `${handle.translate}scale(${handleScale})` }}
+                aria-label={t("prototype.structured.canvas.resizeSelection", {
+                  count: String(targets.length),
+                })}
+                title={t("prototype.structured.canvas.resizeSelection", {
+                  count: String(targets.length),
+                })}
+                disabled={resizeDisabled}
+                onFocus={() => onSelect(primaryTarget.node.id, "primary")}
+                onPointerDown={(event) =>
+                  onResizePointerDown(primaryTarget.node.id, handle.direction, event)
+                }
+                data-prototype-group-resize-direction={handle.direction}
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "absolute size-2 border border-[var(--prototype-accent)] bg-[var(--prototype-surface)]",
+                    handle.markerClassName,
+                  )}
+                />
+              </button>
+            ))}
+            {freeformMoveDraft?.groupItems !== undefined && (
               <span
-                aria-hidden
-                className="size-2.5 border-2 border-[var(--prototype-accent)] bg-[var(--prototype-surface)]"
-              />
-            </button>
-          ))}
-          {freeformMoveDraft?.groupItems !== undefined && (
-            <span
-              className="pointer-events-none absolute bottom-0 left-0 z-10 origin-bottom-left bg-[var(--prototype-accent)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--prototype-accent-text)]"
-              style={{ transform: `scale(${handleScale})` }}
-              aria-live="polite"
-            >
-              x {canonicalStructuredPrototypeFreeformValue(freeformMoveDraft.x)} / y{" "}
-              {canonicalStructuredPrototypeFreeformValue(freeformMoveDraft.y)}
-            </span>
-          )}
-          {resizeDraft?.groupItems !== undefined && (
-            <span
-              className="pointer-events-none absolute bottom-0 left-0 z-10 origin-bottom-left bg-[var(--prototype-accent)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--prototype-accent-text)]"
-              style={{ transform: `scale(${handleScale})` }}
-              aria-live="polite"
-            >
-              {Math.round(resizeDraft.width)} x {Math.round(resizeDraft.height)}
-            </span>
-          )}
+                className="pointer-events-none absolute bottom-0 left-0 z-10 origin-bottom-left bg-[var(--prototype-accent)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--prototype-accent-text)]"
+                style={{ transform: `scale(${handleScale})` }}
+                aria-live="polite"
+              >
+                x {canonicalStructuredPrototypeFreeformValue(freeformMoveDraft.x)} / y{" "}
+                {canonicalStructuredPrototypeFreeformValue(freeformMoveDraft.y)}
+              </span>
+            )}
+            {resizeDraft?.groupItems !== undefined && (
+              <span
+                className="pointer-events-none absolute bottom-0 left-0 z-10 origin-bottom-left bg-[var(--prototype-accent)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--prototype-accent-text)]"
+                style={{ transform: `scale(${handleScale})` }}
+                aria-live="polite"
+              >
+                {Math.round(resizeDraft.width)} x {Math.round(resizeDraft.height)}
+              </span>
+            )}
+          </div>
         </div>
       )}
       {editing &&
@@ -2001,6 +2064,7 @@ function StructuredPrototypeSelectionControlsLayer({
                 top: bounds.top,
                 width: bounds.width,
                 height: bounds.height,
+                outlineColor: selectionChromeHidden ? "transparent" : undefined,
                 outlineWidth: handleScale,
               }}
               data-prototype-selection-controls={primary ? "true" : undefined}
@@ -2011,233 +2075,154 @@ function StructuredPrototypeSelectionControlsLayer({
               data-prototype-resize-phase={primary ? resizePhase : undefined}
               data-prototype-resize-last-end={primary ? resizeLastEnd : undefined}
               data-prototype-resize-direction={primary ? resizeDirection : undefined}
-              data-prototype-freeform-positioned={target.freeformPositioned ? "true" : "false"}
+              data-prototype-freeform-positioned={target.positioned ? "true" : "false"}
               data-prototype-freeform-move-phase={
-                primary && target.freeformPositioned ? freeformMovePhase : undefined
+                primary && target.positioned ? freeformMovePhase : undefined
               }
               data-prototype-freeform-move-last-end={
-                primary && target.freeformPositioned ? freeformMoveLastEnd : undefined
+                primary && target.positioned ? freeformMoveLastEnd : undefined
               }
             >
-              {primary && singleTransformEnabled && target.freeformPositioned && (
+              {primary && singleTransformEnabled && target.positioned && (
                 <button
                   type="button"
-                  className="pointer-events-auto absolute bottom-full left-full z-20 grid size-8 origin-bottom-left cursor-move place-items-center border border-[color-mix(in_srgb,var(--prototype-text)_15%,transparent)] bg-[var(--prototype-surface)] text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)] shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] active:cursor-grabbing disabled:pointer-events-none disabled:opacity-0"
-                  style={{ marginLeft: 44 * handleScale, transform: `scale(${handleScale})` }}
+                  className="pointer-events-none absolute inset-0 z-0 border-0 bg-transparent p-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)]"
                   aria-label={t("prototype.structured.canvas.drag", { name: target.node.name })}
                   disabled={dragDisabled}
                   onFocus={() => onSelect(target.node.id, "primary")}
                   onPointerDown={(event) => onFreeformMovePointerDown(target.node.id, event)}
-                  data-prototype-freeform-move-handle="true"
+                  data-prototype-selection-move-surface="freeform"
                 >
-                  <GripVertical size={14} aria-hidden />
+                  <StructuredPrototypeSelectionMoveEdges
+                    handleScale={handleScale}
+                    disabled={dragDisabled}
+                  />
                 </button>
               )}
               {primary &&
                 singleTransformEnabled &&
-                target.freeformPositioned &&
+                !target.positioned &&
                 sortableControls !== null && (
                   <button
                     ref={sortableControls.setActivatorNodeRef}
                     type="button"
-                    className="pointer-events-auto absolute bottom-full right-full z-20 grid size-8 origin-bottom-right cursor-grab place-items-center border border-[color-mix(in_srgb,var(--prototype-text)_15%,transparent)] bg-[var(--prototype-surface)] text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)] shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] active:cursor-grabbing disabled:pointer-events-none disabled:opacity-0"
-                    style={{ marginRight: 44 * handleScale, transform: `scale(${handleScale})` }}
-                    aria-label={t("prototype.structured.canvas.reparent", {
-                      name: target.node.name,
-                    })}
-                    title={t("prototype.structured.canvas.reparent", { name: target.node.name })}
-                    disabled={dragDisabled}
-                    onFocus={() => onSelect(target.node.id, "primary")}
-                    data-prototype-freeform-layer-handle="true"
-                    {...sortableControls.attributes}
-                    {...sortableControls.listeners}
-                  >
-                    <Layers3 size={14} aria-hidden />
-                  </button>
-                )}
-              {primary &&
-                singleTransformEnabled &&
-                !target.freeformPositioned &&
-                sortableControls !== null && (
-                  <button
-                    ref={sortableControls.setActivatorNodeRef}
-                    type="button"
-                    className="pointer-events-auto absolute bottom-full right-0 z-10 grid size-8 origin-bottom-right cursor-grab place-items-center border border-[color-mix(in_srgb,var(--prototype-text)_15%,transparent)] bg-[var(--prototype-surface)] text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)] shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] active:cursor-grabbing disabled:pointer-events-none disabled:opacity-0"
-                    style={{ transform: `scale(${handleScale})` }}
+                    className="pointer-events-none absolute inset-0 z-0 border-0 bg-transparent p-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)]"
                     aria-label={t("prototype.structured.canvas.drag", { name: target.node.name })}
                     disabled={dragDisabled}
                     onFocus={() => onSelect(target.node.id, "primary")}
+                    data-prototype-selection-move-surface="sortable"
                     {...sortableControls.attributes}
                     {...sortableControls.listeners}
                   >
-                    <GripVertical size={14} aria-hidden />
-                  </button>
-                )}
-              {primary && singleTransformEnabled && (
-                <>
-                  {target.freeformPositioned && (
-                    <button
-                      type="button"
-                      className="pointer-events-auto absolute bottom-full right-full z-20 size-8 origin-bottom-right cursor-nwse-resize rounded-br-md border-b border-r border-[color-mix(in_srgb,var(--prototype-text)_18%,transparent)] bg-[var(--prototype-surface)] text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)] shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-0"
-                      style={{ transform: `scale(${handleScale})` }}
-                      aria-label={t("prototype.structured.canvas.resize", {
-                        name: target.node.name,
-                      })}
-                      disabled={resizeDisabled}
-                      onFocus={() => onSelect(target.node.id, "primary")}
-                      onPointerDown={(event) =>
-                        onResizePointerDown(target.node.id, "northwest", event)
-                      }
-                      data-prototype-resize-direction="northwest"
-                    >
-                      <span
-                        aria-hidden
-                        className="absolute bottom-1 right-1 h-3 w-3 border-b-2 border-r-2"
-                      />
-                    </button>
-                  )}
-                  {target.freeformPositioned && (
-                    <button
-                      type="button"
-                      className="pointer-events-auto absolute right-full top-1/2 z-10 size-8 origin-right cursor-ew-resize rounded-l-md border-y border-l border-[color-mix(in_srgb,var(--prototype-text)_18%,transparent)] bg-[var(--prototype-surface)] text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)] shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-0"
-                      style={{ transform: `translateY(-50%) scale(${handleScale})` }}
-                      aria-label={t("prototype.structured.canvas.resizeWidth", {
-                        name: target.node.name,
-                      })}
-                      disabled={resizeDisabled}
-                      onFocus={() => onSelect(target.node.id, "primary")}
-                      onPointerDown={(event) => onResizePointerDown(target.node.id, "west", event)}
-                      data-prototype-resize-direction="west"
-                    >
-                      <span aria-hidden className="absolute inset-y-2 left-1/2 border-l-2" />
-                    </button>
-                  )}
-                  {target.freeformPositioned && (
-                    <button
-                      type="button"
-                      className="pointer-events-auto absolute bottom-full left-1/2 z-10 size-8 origin-bottom cursor-ns-resize rounded-t-md border-x border-t border-[color-mix(in_srgb,var(--prototype-text)_18%,transparent)] bg-[var(--prototype-surface)] text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)] shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-0"
-                      style={{ transform: `translateX(-50%) scale(${handleScale})` }}
-                      aria-label={t("prototype.structured.canvas.resizeHeight", {
-                        name: target.node.name,
-                      })}
-                      disabled={resizeDisabled}
-                      onFocus={() => onSelect(target.node.id, "primary")}
-                      onPointerDown={(event) => onResizePointerDown(target.node.id, "north", event)}
-                      data-prototype-resize-direction="north"
-                    >
-                      <span aria-hidden className="absolute inset-x-2 top-1/2 border-t-2" />
-                    </button>
-                  )}
-                  {target.freeformPositioned && (
-                    <button
-                      type="button"
-                      className="pointer-events-auto absolute bottom-full left-full z-20 size-8 origin-bottom-left cursor-nesw-resize rounded-bl-md border-b border-l border-[color-mix(in_srgb,var(--prototype-text)_18%,transparent)] bg-[var(--prototype-surface)] text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)] shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-0"
-                      style={{ transform: `scale(${handleScale})` }}
-                      aria-label={t("prototype.structured.canvas.resize", {
-                        name: target.node.name,
-                      })}
-                      disabled={resizeDisabled}
-                      onFocus={() => onSelect(target.node.id, "primary")}
-                      onPointerDown={(event) =>
-                        onResizePointerDown(target.node.id, "northeast", event)
-                      }
-                      data-prototype-resize-direction="northeast"
-                    >
-                      <span
-                        aria-hidden
-                        className="absolute bottom-1 left-1 h-3 w-3 border-b-2 border-l-2"
-                      />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="pointer-events-auto absolute left-full top-1/2 z-10 size-8 origin-left cursor-ew-resize rounded-r-md border-y border-r border-[color-mix(in_srgb,var(--prototype-text)_18%,transparent)] bg-[var(--prototype-surface)] text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)] shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-0"
-                    style={{ transform: `translateY(-50%) scale(${handleScale})` }}
-                    aria-label={t("prototype.structured.canvas.resizeWidth", {
-                      name: target.node.name,
-                    })}
-                    disabled={resizeDisabled}
-                    onFocus={() => onSelect(target.node.id, "primary")}
-                    onPointerDown={(event) => onResizePointerDown(target.node.id, "east", event)}
-                    data-prototype-resize-direction="east"
-                  >
-                    <span aria-hidden className="absolute inset-y-2 left-1/2 border-l-2" />
-                  </button>
-                  <button
-                    type="button"
-                    className="pointer-events-auto absolute left-1/2 top-full z-10 size-8 origin-top cursor-ns-resize rounded-b-md border-x border-b border-[color-mix(in_srgb,var(--prototype-text)_18%,transparent)] bg-[var(--prototype-surface)] text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)] shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-0"
-                    style={{ transform: `translateX(-50%) scale(${handleScale})` }}
-                    aria-label={t("prototype.structured.canvas.resizeHeight", {
-                      name: target.node.name,
-                    })}
-                    disabled={resizeDisabled}
-                    onFocus={() => onSelect(target.node.id, "primary")}
-                    onPointerDown={(event) => onResizePointerDown(target.node.id, "south", event)}
-                    data-prototype-resize-direction="south"
-                  >
-                    <span aria-hidden className="absolute inset-x-2 top-1/2 border-t-2" />
-                  </button>
-                  {target.freeformPositioned && (
-                    <button
-                      type="button"
-                      className="pointer-events-auto absolute right-full top-full z-20 size-8 origin-top-right cursor-nesw-resize rounded-tr-md border-r border-t border-[color-mix(in_srgb,var(--prototype-text)_18%,transparent)] bg-[var(--prototype-surface)] text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)] shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-0"
-                      style={{ transform: `scale(${handleScale})` }}
-                      aria-label={t("prototype.structured.canvas.resize", {
-                        name: target.node.name,
-                      })}
-                      disabled={resizeDisabled}
-                      onFocus={() => onSelect(target.node.id, "primary")}
-                      onPointerDown={(event) =>
-                        onResizePointerDown(target.node.id, "southwest", event)
-                      }
-                      data-prototype-resize-direction="southwest"
-                    >
-                      <span
-                        aria-hidden
-                        className="absolute right-1 top-1 h-3 w-3 border-r-2 border-t-2"
-                      />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="pointer-events-auto absolute right-0 top-full z-10 size-8 origin-top-right cursor-nwse-resize rounded-bl-md border-b border-l border-[color-mix(in_srgb,var(--prototype-text)_18%,transparent)] bg-[var(--prototype-surface)] text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)] shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-0"
-                    style={{ transform: `scale(${handleScale})` }}
-                    aria-label={t("prototype.structured.canvas.resize", {
-                      name: target.node.name,
-                    })}
-                    disabled={resizeDisabled}
-                    onFocus={() => onSelect(target.node.id, "primary")}
-                    onPointerDown={(event) =>
-                      onResizePointerDown(target.node.id, "southeast", event)
-                    }
-                    data-prototype-resize-direction="southeast"
-                  >
-                    <span
-                      aria-hidden
-                      className="absolute bottom-1 right-1 h-3 w-3 border-b-2 border-r-2"
+                    <StructuredPrototypeSelectionMoveEdges
+                      handleScale={handleScale}
+                      disabled={dragDisabled}
                     />
                   </button>
-                </>
-              )}
-              {primary && singleTransformEnabled && selectedDraft !== null && (
-                <span
-                  className="pointer-events-none absolute bottom-0 left-0 z-10 origin-bottom-left bg-[var(--prototype-accent)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--prototype-accent-text)]"
-                  style={{ transform: `scale(${handleScale})` }}
-                  aria-live="polite"
-                >
-                  {selectedDraft.width} x {selectedDraft.height}
-                </span>
-              )}
-              {primary && singleTransformEnabled && selectedMoveDraft !== null && (
-                <span
-                  className="pointer-events-none absolute bottom-0 left-0 z-10 origin-bottom-left bg-[var(--prototype-accent)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--prototype-accent-text)]"
-                  style={{ transform: `scale(${handleScale})` }}
-                  aria-live="polite"
-                >
-                  x {canonicalStructuredPrototypeFreeformValue(selectedMoveDraft.x)} / y{" "}
-                  {canonicalStructuredPrototypeFreeformValue(selectedMoveDraft.y)}
-                </span>
-              )}
+                )}
+              <div
+                className="contents"
+                style={{ visibility: selectionChromeHidden ? "hidden" : "visible" }}
+                aria-hidden={selectionChromeHidden || undefined}
+                data-prototype-selection-tools={primary ? "primary" : "secondary"}
+              >
+                {primary &&
+                  singleTransformEnabled &&
+                  target.positioned &&
+                  sortableControls !== null && (
+                    <button
+                      ref={sortableControls.setActivatorNodeRef}
+                      type="button"
+                      className="pointer-events-auto absolute bottom-full right-full z-20 grid size-8 origin-bottom-right cursor-grab place-items-center bg-transparent text-[color-mix(in_srgb,var(--prototype-text)_64%,transparent)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] active:cursor-grabbing disabled:pointer-events-none disabled:opacity-0"
+                      style={{ marginRight: 44 * handleScale, transform: `scale(${handleScale})` }}
+                      aria-label={t("prototype.structured.canvas.reparent", {
+                        name: target.node.name,
+                      })}
+                      title={t("prototype.structured.canvas.reparent", { name: target.node.name })}
+                      disabled={dragDisabled}
+                      onFocus={() => onSelect(target.node.id, "primary")}
+                      data-prototype-freeform-layer-handle="true"
+                      {...sortableControls.attributes}
+                      {...sortableControls.listeners}
+                    >
+                      <span className="grid size-5 place-items-center rounded-[3px] border border-[color-mix(in_srgb,var(--prototype-text)_15%,transparent)] bg-[var(--prototype-surface)] shadow-sm">
+                        <Layers3 size={12} aria-hidden />
+                      </span>
+                    </button>
+                  )}
+                {primary && singleTransformEnabled && (
+                  <>
+                    {(target.positioned
+                      ? GROUP_RESIZE_HANDLES
+                      : GROUP_RESIZE_HANDLES.filter(
+                          (handle) =>
+                            handle.direction === "east" ||
+                            handle.direction === "south" ||
+                            handle.direction === "southeast",
+                        )
+                    ).map((handle) => {
+                      const label =
+                        handle.direction === "east" || handle.direction === "west"
+                          ? t("prototype.structured.canvas.resizeWidth", {
+                              name: target.node.name,
+                            })
+                          : handle.direction === "north" || handle.direction === "south"
+                            ? t("prototype.structured.canvas.resizeHeight", {
+                                name: target.node.name,
+                              })
+                            : t("prototype.structured.canvas.resize", {
+                                name: target.node.name,
+                              });
+                      return (
+                        <button
+                          key={handle.direction}
+                          type="button"
+                          className={cn(
+                            "pointer-events-auto absolute z-10 grid size-8 place-items-center bg-transparent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--prototype-accent)] disabled:pointer-events-none disabled:opacity-0",
+                            handle.className,
+                          )}
+                          style={{ transform: `${handle.translate}scale(${handleScale})` }}
+                          aria-label={label}
+                          title={label}
+                          disabled={resizeDisabled}
+                          onFocus={() => onSelect(target.node.id, "primary")}
+                          onPointerDown={(event) =>
+                            onResizePointerDown(target.node.id, handle.direction, event)
+                          }
+                          data-prototype-resize-direction={handle.direction}
+                        >
+                          <span
+                            aria-hidden
+                            className={cn(
+                              "absolute size-2 border border-[var(--prototype-accent)] bg-[var(--prototype-surface)]",
+                              handle.markerClassName,
+                            )}
+                          />
+                        </button>
+                      );
+                    })}
+                  </>
+                )}
+                {primary && singleTransformEnabled && selectedDraft !== null && (
+                  <span
+                    className="pointer-events-none absolute bottom-0 left-0 z-10 origin-bottom-left bg-[var(--prototype-accent)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--prototype-accent-text)]"
+                    style={{ transform: `scale(${handleScale})` }}
+                    aria-live="polite"
+                  >
+                    {selectedDraft.width} x {selectedDraft.height}
+                  </span>
+                )}
+                {primary && singleTransformEnabled && selectedMoveDraft !== null && (
+                  <span
+                    className="pointer-events-none absolute bottom-0 left-0 z-10 origin-bottom-left bg-[var(--prototype-accent)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--prototype-accent-text)]"
+                    style={{ transform: `scale(${handleScale})` }}
+                    aria-live="polite"
+                  >
+                    x {canonicalStructuredPrototypeFreeformValue(selectedMoveDraft.x)} / y{" "}
+                    {canonicalStructuredPrototypeFreeformValue(selectedMoveDraft.y)}
+                  </span>
+                )}
+              </div>
             </div>
           );
         })}
@@ -2292,17 +2277,17 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
   const marqueeGestureChangeRef = useRef(onMarqueeGestureChange);
   const selectionChangeRef = useRef(onSelectionChange);
   const mountedRef = useRef(true);
-  const freeformGroupSelection = useMemo(
-    () => resolveStructuredPrototypeFreeformGroupSelection(page.root, props.selection.nodeIds),
+  const positionedGroupSelection = useMemo(
+    () => resolveStructuredPrototypePositionedGroupSelection(page.root, props.selection.nodeIds),
     [page.root, props.selection.nodeIds],
   );
-  const readFreeformGroupTransform = useCallback((): {
+  const readPositionedGroupTransform = useCallback((): {
     items: StructuredPrototypeGroupTransformItem[];
     container: HTMLElement;
   } | null => {
-    if (freeformGroupSelection === null) return null;
+    if (positionedGroupSelection === null) return null;
     const inverseScale = resolveStructuredPrototypeInverseScale(previewScale);
-    const measuredItems = freeformGroupSelection.items.map((item) => {
+    const measuredItems = positionedGroupSelection.items.map((item) => {
       const element = nodeElementRegistrationsRef.current.get(item.node.id)?.element;
       const container = element?.parentElement;
       return element === undefined || container === undefined || container === null
@@ -2332,14 +2317,14 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
       return null;
     }
     return { items: resolvedItems.map((item) => item.item), container };
-  }, [freeformGroupSelection, previewScale]);
+  }, [positionedGroupSelection, previewScale]);
 
-  const resolveFreeformSnapContext = useCallback(
+  const resolvePositionedSnapContext = useCallback(
     (
-      parent: StructuredPrototypeFreeformNode,
+      parent: StructuredPrototypeContainerNode,
       selectedNodeIds: readonly string[],
       container: HTMLElement,
-    ): StructuredPrototypeFreeformSnapContext | null => {
+    ): StructuredPrototypePositionedSnapContext | null => {
       if (canvasElement === null || container.clientWidth <= 0 || container.clientHeight <= 0) {
         return null;
       }
@@ -2383,8 +2368,8 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
         freeformId: parent.id,
         selectedNodeIds: [...selectedNodeIds],
         directSiblings,
-        grids: resolveStructuredPrototypeFreeformGrids(parent),
-        gridSnappingEnabled: props.gridSnappingEnabled,
+        grids: parent.type === "Freeform" ? resolveStructuredPrototypeFreeformGrids(parent) : [],
+        gridSnappingEnabled: parent.type === "Freeform" && props.gridSnappingEnabled,
         previewScale,
         guideOverlayFrame: {
           x: (containerRect.left - canvasRect.left) * inverseScale + container.clientLeft,
@@ -2397,18 +2382,18 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
     [canvasElement, previewScale, props.gridSnappingEnabled, props.viewModel],
   );
 
-  const resolveFreeformMoveStartFrame = useCallback(
+  const resolvePositionedMoveStartFrame = useCallback(
     (nodeId: string) => {
       if (
-        freeformGroupSelection !== null &&
+        positionedGroupSelection !== null &&
         props.selection.primaryNodeId === nodeId &&
-        freeformGroupSelection.items.some((item) => item.node.id === nodeId)
+        positionedGroupSelection.items.some((item) => item.node.id === nodeId)
       ) {
-        const group = readFreeformGroupTransform();
+        const group = readPositionedGroupTransform();
         if (group === null) return null;
         const bounds = resolveStructuredPrototypeGroupTransformBounds(group.items);
-        const snapContext = resolveFreeformSnapContext(
-          freeformGroupSelection.parent,
+        const snapContext = resolvePositionedSnapContext(
+          positionedGroupSelection.parent,
           group.items.map((item) => item.nodeId),
           group.container,
         );
@@ -2423,7 +2408,7 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
           ...snapContext,
         };
       }
-      const selection = resolveStructuredPrototypeFreeformSelection(page.root, [nodeId]);
+      const selection = resolveStructuredPrototypePositionedSelection(page.root, [nodeId]);
       const item = selection?.items[0];
       const position = item?.node.layoutItem.position;
       const element = nodeElementRegistrationsRef.current.get(nodeId)?.element;
@@ -2438,7 +2423,7 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
       ) {
         return null;
       }
-      const snapContext = resolveFreeformSnapContext(selection.parent, [nodeId], container);
+      const snapContext = resolvePositionedSnapContext(selection.parent, [nodeId], container);
       if (snapContext === null) return null;
       const rect = element.getBoundingClientRect();
       const inverseScale = resolveStructuredPrototypeInverseScale(previewScale);
@@ -2453,12 +2438,12 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
       };
     },
     [
-      freeformGroupSelection,
+      positionedGroupSelection,
       page.root,
       previewScale,
       props.selection.primaryNodeId,
-      readFreeformGroupTransform,
-      resolveFreeformSnapContext,
+      readPositionedGroupTransform,
+      resolvePositionedSnapContext,
     ],
   );
   const freeformMove = useStructuredPrototypeFreeformMove({
@@ -2467,7 +2452,7 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
     onMoveNode: onFreeformMoveNode,
     onMoveError: onFreeformMoveError,
     onGestureChange: onFreeformMoveGestureChange,
-    resolveStartFrame: resolveFreeformMoveStartFrame,
+    resolveStartFrame: resolvePositionedMoveStartFrame,
   });
   const {
     acknowledge: acknowledgeFreeformMove,
@@ -2480,25 +2465,25 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
   const freeformMoveDraft = useMemo<StructuredPrototypeFreeformMoveDraft | null>(() => {
     if (
       rawFreeformMoveDraft === null ||
-      freeformGroupSelection === null ||
+      positionedGroupSelection === null ||
       props.selection.primaryNodeId !== rawFreeformMoveDraft.nodeId ||
-      !freeformGroupSelection.items.some((item) => item.node.id === rawFreeformMoveDraft.nodeId)
+      !positionedGroupSelection.items.some((item) => item.node.id === rawFreeformMoveDraft.nodeId)
     ) {
       return rawFreeformMoveDraft;
     }
-    const groupX = Math.min(...freeformGroupSelection.items.map((item) => item.x));
-    const groupY = Math.min(...freeformGroupSelection.items.map((item) => item.y));
+    const groupX = Math.min(...positionedGroupSelection.items.map((item) => item.x));
+    const groupY = Math.min(...positionedGroupSelection.items.map((item) => item.y));
     const deltaX = rawFreeformMoveDraft.x - groupX;
     const deltaY = rawFreeformMoveDraft.y - groupY;
     return {
       ...rawFreeformMoveDraft,
-      groupItems: freeformGroupSelection.items.map((item) => ({
+      groupItems: positionedGroupSelection.items.map((item) => ({
         nodeId: item.node.id,
         x: item.x + deltaX,
         y: item.y + deltaY,
       })),
     };
-  }, [freeformGroupSelection, props.selection.primaryNodeId, rawFreeformMoveDraft]);
+  }, [positionedGroupSelection, props.selection.primaryNodeId, rawFreeformMoveDraft]);
 
   useLayoutEffect(() => {
     resizeErrorRef.current = onResizeError;
@@ -2896,10 +2881,10 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
         direction === "east" || direction === "south" || direction === "southeast";
       if (!directionSupportsUnpositioned && positioned === undefined) return;
       const group =
-        freeformGroupSelection !== null &&
+        positionedGroupSelection !== null &&
         props.selection.primaryNodeId === nodeId &&
-        freeformGroupSelection.items.some((item) => item.node.id === nodeId)
-          ? readFreeformGroupTransform()
+        positionedGroupSelection.items.some((item) => item.node.id === nodeId)
+          ? readPositionedGroupTransform()
           : null;
       if (endResizeGesture("pointercancel") !== null) {
         setResizeDraft(null);
@@ -2912,18 +2897,18 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
       const containerElement = nodeElement.parentElement;
       const groupBounds =
         group === null ? null : resolveStructuredPrototypeGroupTransformBounds(group.items);
-      const singleFreeformSelection =
+      const singlePositionedSelection =
         group === null && positioned !== undefined
-          ? resolveStructuredPrototypeFreeformSelection(page.root, [nodeId])
+          ? resolveStructuredPrototypePositionedSelection(page.root, [nodeId])
           : null;
       const snapParent =
-        group === null ? singleFreeformSelection?.parent : freeformGroupSelection?.parent;
+        group === null ? singlePositionedSelection?.parent : positionedGroupSelection?.parent;
       const snapContainer = group?.container ?? containerElement;
       const snapSelectedNodeIds = group?.items.map((item) => item.nodeId) ?? [nodeId];
       const snapContext =
         snapParent === undefined || snapContainer === null
           ? null
-          : resolveFreeformSnapContext(snapParent, snapSelectedNodeIds, snapContainer);
+          : resolvePositionedSnapContext(snapParent, snapSelectedNodeIds, snapContainer);
       const pointerId = event.pointerId;
       const sessionId = resizeGestureChangeRef.current({
         phase: "start",
@@ -3351,10 +3336,10 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
       onSelect,
       page.root,
       previewScale,
-      freeformGroupSelection,
+      positionedGroupSelection,
       props.selection.primaryNodeId,
-      readFreeformGroupTransform,
-      resolveFreeformSnapContext,
+      readPositionedGroupTransform,
+      resolvePositionedSnapContext,
       resizeDisabled,
     ],
   );
@@ -3439,7 +3424,7 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
               {
                 node,
                 element: registration.element,
-                freeformPositioned: node.layoutItem.position !== undefined,
+                positioned: node.layoutItem.position !== undefined,
               },
             ];
       }),
@@ -3504,8 +3489,8 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
         dragDisabled={props.dragDisabled}
         resizeDisabled={props.resizeDisabled}
         groupMoveEnabled={
-          freeformGroupSelection !== null &&
-          freeformGroupSelection.items.length === selectionTargets.length
+          positionedGroupSelection !== null &&
+          positionedGroupSelection.items.length === selectionTargets.length
         }
         freeformMoveDraft={freeformMoveDraft}
         freeformMoveGuideOverlay={freeformMoveGuideOverlay}

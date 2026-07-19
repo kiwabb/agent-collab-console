@@ -41,3 +41,21 @@ def test_bootstrap_injects_snap_worker_timeout_policy() -> None:
         _timeout_accessor_name(call, "attest_many_timeout_s")
         == "prototype_snap_worker_attest_many_timeout_s"
     )
+
+
+def test_bootstrap_injects_runtime_worker_timeout_policy() -> None:
+    bootstrap_path = Path(__file__).parents[1] / "app" / "bootstrap.py"
+    module = ast.parse(bootstrap_path.read_text(encoding="utf-8"))
+    runtime_worker_calls = [
+        node
+        for node in ast.walk(module)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "PrototypeRuntimeWorker"
+    ]
+
+    assert len(runtime_worker_calls) == 1
+    assert (
+        _timeout_accessor_name(runtime_worker_calls[0], "timeout_s")
+        == "prototype_runtime_worker_timeout_s"
+    )

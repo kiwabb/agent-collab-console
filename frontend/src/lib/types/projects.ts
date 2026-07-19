@@ -24,6 +24,22 @@ export interface ProjectRunServiceStatus {
   error: string | null;
 }
 
+export type ProjectApplicationReadinessState =
+  | "ready"
+  | "unreachable"
+  | "occupied_unknown"
+  | "identified_unready"
+  | "invalid_config";
+
+export interface ProjectApplicationReadinessStatus {
+  state: ProjectApplicationReadinessState;
+  url: string | null;
+  http_status: number | null;
+  checked_at: string | null;
+  identity_matched: boolean;
+  error: string | null;
+}
+
 export interface ProjectRunStatus {
   running: boolean;
   command: string | null;
@@ -31,6 +47,7 @@ export interface ProjectRunStatus {
   started_at: string | null;
   exit_code: number | null;
   service: ProjectRunServiceStatus;
+  readiness: ProjectApplicationReadinessStatus;
 }
 
 /** One captured line from a running project process. */
@@ -51,7 +68,12 @@ export interface ProjectRunLogsResponse {
 
 /** Refusal reason returned (409) by `POST /run/start`. */
 export type ProjectRunStartReason =
-  "no_run_command" | "already_running" | "service_already_reachable" | "refused" | "env_incomplete";
+  | "no_run_command"
+  | "already_running"
+  | "service_address_occupied"
+  | "startup_config_invalid"
+  | "refused"
+  | "env_incomplete";
 
 export interface ProjectRunEnvError {
   name: string;

@@ -76,6 +76,18 @@ def _payload() -> dict[str, object]:
                         "setup_command": "",
                         "run_command": "mvn spring-boot:run",
                         "access_url": "http://127.0.0.1:8080",
+                        "readiness_probe": {
+                            "kind": "http",
+                            "url": "http://127.0.0.1:8080/api/health/ready",
+                            "expected_status": 200,
+                            "identity": {
+                                "kind": "json_subset",
+                                "expected": {
+                                    "service": "admin-demo-backend",
+                                    "status": "ready",
+                                },
+                            },
+                        },
                         "depends_on": [],
                         "evidence": [
                             {"path": "backend/pom.xml", "detail": "Spring Boot Maven project"}
@@ -88,6 +100,15 @@ def _payload() -> dict[str, object]:
                         "setup_command": "npm install",
                         "run_command": "npm run dev",
                         "access_url": "http://127.0.0.1:5173",
+                        "readiness_probe": {
+                            "kind": "http",
+                            "url": "http://127.0.0.1:5173/",
+                            "expected_status": 200,
+                            "identity": {
+                                "kind": "text_contains",
+                                "text": "Northstar 管理后台",
+                            },
+                        },
                         "depends_on": ["backend"],
                         "evidence": [
                             {"path": "frontend/package.json", "detail": "Vite dev script"}
@@ -137,6 +158,10 @@ async def test_mcp_saves_complete_multi_service_config(repository: Path) -> None
     assert _result(body)["isError"] is False
     assert [service.service_id for service in store.services] == ["backend", "frontend"]
     assert store.services[1].depends_on == ["backend"]
+    assert store.services[0].readiness_probe is not None
+    assert store.services[0].readiness_probe.url.endswith("/api/health/ready")
+    assert store.services[1].readiness_probe is not None
+    assert store.services[1].readiness_probe.identity.kind == "text_contains"
     result = mcp.finalized_result("task-1")
     assert result is not None
     services = result["services"]
@@ -178,6 +203,25 @@ async def test_mcp_rejects_missing_evidence_without_overwriting_config(repositor
 
 
 @pytest.mark.asyncio
+async def test_mcp_rejects_missing_readiness_without_overwriting_config(repository: Path) -> None:
+    store = StartupStore()
+    mcp = ProjectStartupMcpService(ProjectStartupConfigService(store))
+    session = mcp.open_session(project=_project(repository), task_id="task-1")
+    payload = _payload()
+    arguments = _arguments(payload)
+    services = arguments["services"]
+    assert isinstance(services, list)
+    backend = services[0]
+    assert isinstance(backend, dict)
+    backend.pop("readiness_probe")
+
+    _, body = await mcp.handle(token=session.token, payload=payload)
+
+    assert _result(body)["isError"] is True
+    assert store.services == []
+
+
+@pytest.mark.asyncio
 async def test_mcp_rejects_dependency_cycle(repository: Path) -> None:
     store = StartupStore()
     mcp = ProjectStartupMcpService(ProjectStartupConfigService(store))
@@ -203,6 +247,78 @@ async def test_mcp_rejects_unknown_token(repository: Path) -> None:
     status, _ = await mcp.handle(token="wrong", payload=_payload())
 
     assert status == 401
+
+
+@pytest.mark.asyncio
+async def test_async_store_migrates_legacy_startup_service_as_invalid(repository: Path) -> None:
+    import json
+    import sqlite3
+
+    from app.adapters.async_sqlite_store import AsyncSQLiteStore
+
+    db_path = repository / "legacy-console.db"
+    store = AsyncSQLiteStore(str(db_path))
+    migrated: AsyncSQLiteStore | None = None
+    try:
+        project = _project(repository)
+        await store.save_project(project)
+        await store._ensure_db()
+        await store.close()
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("ALTER TABLE project_startup_services RENAME TO old_startup_services")
+            conn.execute(
+                """
+                CREATE TABLE project_startup_services (
+                    project_id TEXT NOT NULL,
+                    service_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    working_directory TEXT NOT NULL,
+                    setup_command TEXT NOT NULL DEFAULT '',
+                    run_command TEXT NOT NULL,
+                    access_url TEXT,
+                    depends_on_json TEXT NOT NULL DEFAULT '[]',
+                    evidence_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT,
+                    updated_at TEXT,
+                    PRIMARY KEY (project_id, service_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO project_startup_services (
+                    project_id, service_id, name, working_directory, setup_command,
+                    run_command, access_url, depends_on_json, evidence_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    project.id,
+                    "backend",
+                    "Backend",
+                    "backend",
+                    "",
+                    "mvn spring-boot:run",
+                    "http://127.0.0.1:8080",
+                    json.dumps([]),
+                    json.dumps(["backend/pom.xml"]),
+                ),
+            )
+            conn.execute("DROP TABLE old_startup_services")
+            conn.execute("UPDATE schema_version SET version = 12 WHERE id = 1")
+
+        migrated = AsyncSQLiteStore(str(db_path))
+        services = await migrated.list_project_startup_services(project.id)
+        assert services[0].readiness_probe is None
+        connection = await migrated._get_conn()
+        version = await (
+            await connection.execute("SELECT version FROM schema_version WHERE id = 1")
+        ).fetchone()
+        assert version is not None
+        assert version[0] == 15
+    finally:
+        await store.close()
+        if migrated is not None:
+            await migrated.close()
 
 
 @pytest.mark.asyncio
@@ -247,6 +363,58 @@ async def test_async_store_round_trips_startup_services(repository: Path) -> Non
         assert all(isinstance(item, dict) for item in loaded_services)
         assert [item["service_id"] for item in loaded_services] == ["backend", "frontend"]
         assert loaded_services[1]["depends_on"] == ["backend"]
+        assert loaded_services[0]["evidence"] == [
+            {"path": "backend/pom.xml", "detail": "Spring Boot Maven project"}
+        ]
+        assert loaded_services[0]["readiness_probe"] == {
+            "kind": "http",
+            "url": "http://127.0.0.1:8080/api/health/ready",
+            "expected_status": 200,
+            "identity": {
+                "kind": "json_subset",
+                "expected": {"service": "admin-demo-backend", "status": "ready"},
+            },
+        }
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_async_store_treats_malformed_persisted_readiness_as_invalid(
+    repository: Path,
+) -> None:
+    from app.adapters.async_sqlite_store import AsyncSQLiteStore
+
+    store = AsyncSQLiteStore(str(repository / "malformed-readiness.db"))
+    project = _project(repository)
+    try:
+        await store.save_project(project)
+        connection = await store._get_conn()
+        await connection.execute(
+            """
+            INSERT INTO project_startup_services (
+                project_id, service_id, name, working_directory, setup_command,
+                run_command, access_url, readiness_probe_json, evidence_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                project.id,
+                "backend",
+                "Backend",
+                "backend",
+                "",
+                "mvn spring-boot:run",
+                "http://127.0.0.1:8080",
+                '{"kind":"http","url":"http://example.com","expected_status":200}',
+                '[{"path":"backend/pom.xml","detail":"Spring project"}]',
+            ),
+        )
+        await connection.commit()
+
+        services = await store.list_project_startup_services(project.id)
+
+        assert services[0].readiness_probe is None
+        assert services[0].evidence[0].detail == "Spring project"
     finally:
         await store.close()
 

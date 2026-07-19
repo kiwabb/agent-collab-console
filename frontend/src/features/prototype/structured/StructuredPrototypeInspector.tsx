@@ -13,6 +13,10 @@ import {
   resolveStructuredPrototypeFreeformGrids,
 } from "./structuredPrototypeFreeformGrids";
 import {
+  canonicalStructuredPrototypeFreeformValue,
+  STRUCTURED_PROTOTYPE_MAX_FREEFORM_COORDINATE,
+} from "./structuredPrototypeFreeformGeometry";
+import {
   STRUCTURED_PROTOTYPE_LENGTH_UNITS,
   defaultStructuredPrototypeLength,
   structuredPrototypeMaxLengthValue,
@@ -30,9 +34,17 @@ import type {
   StructuredPrototypeResponsiveOverride,
   StructuredPrototypeGridColumnOverride,
   StructuredPrototypeFreeformGrid,
+  StructuredPrototypeFreeformPosition,
   StructuredPrototypeTableColumn,
   StructuredPrototypeTableRow,
 } from "./types";
+
+export interface StructuredPrototypePlacementFrame {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 export interface StructuredPrototypeInspectorRuntimeTable {
   scenarioId: string;
@@ -47,8 +59,10 @@ interface Props {
   selectedCount: number;
   disabled: boolean;
   canDelete: boolean;
+  placementModeAvailable: boolean;
   isRuntimeBoundTable: boolean;
   runtimeTable: StructuredPrototypeInspectorRuntimeTable | null;
+  onCapturePlacementFrame: () => StructuredPrototypePlacementFrame | null;
   onApply: (batch: StructuredPrototypeCommandBatch) => Promise<boolean>;
   onDelete: () => void;
 }
@@ -66,6 +80,7 @@ export interface StructuredPrototypeInspectorDraft {
   grow: number;
   shrink: number;
   alignSelf: StructuredPrototypeLayoutItem["alignSelf"];
+  position: StructuredPrototypeFreeformPosition | null;
   containerLayout: StructuredPrototypeInspectorContainerLayout;
   freeformGrids: StructuredPrototypeFreeformGrid[];
   responsive: StructuredPrototypeResponsiveOverride[];
@@ -312,6 +327,9 @@ export function buildStructuredPrototypeInspectorBatch(
   if (draft.grow !== node.layoutItem.grow) layoutUpdate.grow = draft.grow;
   if (draft.shrink !== node.layoutItem.shrink) layoutUpdate.shrink = draft.shrink;
   if (draft.alignSelf !== node.layoutItem.alignSelf) layoutUpdate.alignSelf = draft.alignSelf;
+  if (!sameStructuredValue(draft.position, node.layoutItem.position ?? null)) {
+    layoutUpdate.position = draft.position;
+  }
   if (Object.keys(layoutUpdate).length > 0) {
     commands.push({
       kind: "setNodeLayout",
@@ -402,8 +420,10 @@ function EditableInspector({
   selectedCount,
   disabled,
   canDelete,
+  placementModeAvailable,
   isRuntimeBoundTable,
   runtimeTable,
+  onCapturePlacementFrame,
   onApply,
   onDelete,
 }: Props & { node: StructuredPrototypeNode }) {
@@ -421,6 +441,9 @@ function EditableInspector({
   const [grow, setGrow] = useState(node.layoutItem.grow);
   const [shrink, setShrink] = useState(node.layoutItem.shrink);
   const [alignSelf, setAlignSelf] = useState(node.layoutItem.alignSelf);
+  const [position, setPosition] = useState<StructuredPrototypeFreeformPosition | null>(
+    node.layoutItem.position ?? null,
+  );
   const [containerLayout, setContainerLayout] = useState(() => containerLayoutForNode(node));
   const [freeformGrids, setFreeformGrids] = useState(() =>
     node.type === "Freeform"
@@ -535,6 +558,7 @@ function EditableInspector({
       grow,
       shrink,
       alignSelf,
+      position,
       containerLayout,
       freeformGrids,
       responsive,
@@ -859,6 +883,93 @@ function EditableInspector({
         <div className="text-xs font-bold text-foreground">
           {t("prototype.structured.inspector.layout")}
         </div>
+        {placementModeAvailable && (
+          <div className="grid gap-2 border-b border-border-subtle pb-3">
+            <div className="text-[11px] font-bold text-text-secondary">
+              {t("prototype.structured.inspector.placement")}
+            </div>
+            <div
+              className="grid grid-cols-2 rounded-md border border-border-muted bg-surface-input p-1"
+              role="group"
+              aria-label={t("prototype.structured.inspector.placement")}
+            >
+              {(["auto", "absolute"] as const).map((mode) => {
+                const active = mode === (position === null ? "auto" : "absolute");
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={
+                      active
+                        ? "min-h-8 cursor-pointer rounded-sm bg-surface-raised px-2 text-xs font-semibold text-foreground shadow-sm"
+                        : "min-h-8 cursor-pointer rounded-sm px-2 text-xs font-semibold text-text-muted hover:text-foreground"
+                    }
+                    onClick={() => {
+                      if (mode === "auto") {
+                        setPosition(null);
+                        return;
+                      }
+                      const frame = onCapturePlacementFrame();
+                      if (frame === null) return;
+                      setPosition({
+                        x: canonicalStructuredPrototypeFreeformValue(frame.x),
+                        y: canonicalStructuredPrototypeFreeformValue(frame.y),
+                      });
+                      setWidth({
+                        unit: "px",
+                        value: canonicalStructuredPrototypeFreeformValue(frame.width),
+                      });
+                      setHeight({
+                        unit: "px",
+                        value: canonicalStructuredPrototypeFreeformValue(frame.height),
+                      });
+                    }}
+                    disabled={disabled || active}
+                    aria-pressed={active}
+                  >
+                    {t(`prototype.structured.inspector.placement.${mode}`)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {position !== null && (
+          <div className="grid grid-cols-2 gap-2">
+            {(["x", "y"] as const).map((axis) => (
+              <label key={axis} className="grid gap-1 text-xs font-semibold text-text-secondary">
+                {t(`prototype.structured.inspector.position.${axis}`)}
+                <input
+                  className="min-h-10 rounded-md border border-border-muted bg-surface-input px-3 text-sm font-normal text-foreground"
+                  type="number"
+                  min={0}
+                  max={STRUCTURED_PROTOTYPE_MAX_FREEFORM_COORDINATE}
+                  step={0.25}
+                  value={position[axis]}
+                  onChange={(event) => {
+                    const value = Number(event.target.value);
+                    if (
+                      !Number.isFinite(value) ||
+                      value < 0 ||
+                      value > STRUCTURED_PROTOTYPE_MAX_FREEFORM_COORDINATE
+                    ) {
+                      return;
+                    }
+                    setPosition((current) =>
+                      current === null
+                        ? null
+                        : {
+                            ...current,
+                            [axis]: canonicalStructuredPrototypeFreeformValue(value),
+                          },
+                    );
+                  }}
+                  disabled={disabled}
+                />
+              </label>
+            ))}
+          </div>
+        )}
         {containerLayout !== null && (
           <div className="grid gap-3 border-b border-border-subtle pb-3">
             <div className="text-[11px] font-bold text-text-secondary">

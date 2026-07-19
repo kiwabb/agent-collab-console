@@ -34,6 +34,7 @@ function inspectorDraftFor(
     grow: node.layoutItem.grow,
     shrink: node.layoutItem.shrink,
     alignSelf: node.layoutItem.alignSelf,
+    position: node.layoutItem.position ?? null,
     containerLayout:
       node.type === "Stack"
         ? {
@@ -221,6 +222,62 @@ test("inspector emits width and height layout edits", () => {
       height: { unit: "rem", value: "12" },
     },
   });
+});
+
+test("inspector converts a flow child to absolute placement in one layout command", () => {
+  const document = createProcurementPrototypeDocument();
+  const root = document.pages[0]?.root;
+  assert.equal(root?.type, "Stack");
+  if (root?.type !== "Stack") throw new Error("fixture list root is not a Stack");
+  const text = root.children[0];
+  assert.equal(text?.type, "Text");
+  if (text?.type !== "Text") throw new Error("fixture heading is missing");
+
+  const absoluteBatch = buildStructuredPrototypeInspectorBatch(
+    text,
+    inspectorDraftFor(text, {
+      content: text.content,
+      width: { unit: "px", value: "320" },
+      height: { unit: "px", value: "48" },
+      position: { x: "24", y: "16" },
+    }),
+  );
+
+  assert.deepEqual(absoluteBatch?.commands, [
+    {
+      kind: "setNodeLayout",
+      node: { kind: "existing", nodeId: text.id },
+      update: {
+        width: { unit: "px", value: "320" },
+        height: { unit: "px", value: "48" },
+        position: { x: "24", y: "16" },
+      },
+    },
+  ]);
+
+  const positionedText = {
+    ...text,
+    layoutItem: {
+      ...text.layoutItem,
+      width: { unit: "px", value: "320" } as const,
+      height: { unit: "px", value: "48" } as const,
+      position: { x: "24", y: "16" },
+    },
+  };
+  const autoBatch = buildStructuredPrototypeInspectorBatch(
+    positionedText,
+    inspectorDraftFor(positionedText, {
+      content: positionedText.content,
+      position: null,
+    }),
+  );
+  assert.deepEqual(autoBatch?.commands, [
+    {
+      kind: "setNodeLayout",
+      node: { kind: "existing", nodeId: text.id },
+      update: { position: null },
+    },
+  ]);
 });
 
 test("inspector combines constraints, flex sizing, and alignment in one layout command", () => {

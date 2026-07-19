@@ -15,6 +15,13 @@ import org.springframework.test.web.servlet.MockMvc;
 class AdminControllerTest {
     @Autowired private MockMvc mockMvc;
 
+    @Test void readinessReturnsStableApplicationIdentity() throws Exception {
+        mockMvc.perform(get("/api/health/ready"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.service").value("admin-demo-backend"))
+                .andExpect(jsonPath("$.status").value("ready"));
+    }
+
     @Test void dashboardReturnsMetrics() throws Exception {
         mockMvc.perform(get("/api/dashboard")).andExpect(status().isOk()).andExpect(jsonPath("$.totalUsers").value(2846));
     }

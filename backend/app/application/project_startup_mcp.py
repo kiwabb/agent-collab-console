@@ -20,6 +20,45 @@ from app.application.project_startup_service import (
 )
 from app.domain.models import Project
 
+_IDENTITY_SCHEMA: dict[str, object] = {
+    "oneOf": [
+        {
+            "type": "object",
+            "required": ["kind", "expected"],
+            "properties": {
+                "kind": {"const": "json_subset"},
+                "expected": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "maxProperties": 50,
+                },
+            },
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "required": ["kind", "text"],
+            "properties": {
+                "kind": {"const": "text_contains"},
+                "text": {"type": "string", "minLength": 1, "maxLength": 1000},
+            },
+            "additionalProperties": False,
+        },
+    ]
+}
+
+_READINESS_PROBE_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "required": ["kind", "url", "expected_status", "identity"],
+    "properties": {
+        "kind": {"const": "http"},
+        "url": {"type": "string"},
+        "expected_status": {"type": "integer", "minimum": 100, "maximum": 599},
+        "identity": _IDENTITY_SCHEMA,
+    },
+    "additionalProperties": False,
+}
+
 _SERVICE_PROPERTIES: dict[str, object] = {
     "service_id": {"type": "string"},
     "name": {"type": "string"},
@@ -27,6 +66,7 @@ _SERVICE_PROPERTIES: dict[str, object] = {
     "setup_command": {"type": "string"},
     "run_command": {"type": "string"},
     "access_url": {"type": ["string", "null"]},
+    "readiness_probe": _READINESS_PROBE_SCHEMA,
     "depends_on": {"type": "array", "items": {"type": "string"}},
     "evidence": {
         "type": "array",
@@ -49,7 +89,7 @@ PROJECT_STARTUP_MCP_DESCRIPTOR = McpServerDescriptor(
     owner="operations",
     scope="task",
     transport="http",
-    version="1.0",
+    version="2.0",
     tools=(
         McpToolDescriptor(
             id="save_startup_config",
@@ -74,6 +114,7 @@ PROJECT_STARTUP_MCP_DESCRIPTOR = McpServerDescriptor(
                                 "setup_command",
                                 "run_command",
                                 "access_url",
+                                "readiness_probe",
                                 "depends_on",
                                 "evidence",
                             ],

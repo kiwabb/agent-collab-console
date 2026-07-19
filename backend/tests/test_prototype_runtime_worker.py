@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 from pathlib import Path
 
 import pytest
 
+from app.adapters import prototype_runtime_worker as runtime_worker_module
 from app.adapters.prototype_runtime_worker import (
     PrototypeRuntimeWorker,
     PrototypeRuntimeWorkerError,
@@ -56,6 +58,23 @@ def _runtime_asset_paths() -> tuple[Path, Path]:
     )
 
 
+class _HungProcess:
+    def __init__(self) -> None:
+        self.returncode: int | None = None
+        self.killed = False
+
+    async def communicate(self, request_bytes: bytes) -> tuple[bytes, bytes]:
+        await asyncio.Future()
+        return b"", b""
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+    async def wait(self) -> int:
+        return self.returncode or 0
+
+
 @pytest.mark.asyncio
 async def test_node_worker_initializes_applies_and_replays_with_verified_identity() -> None:
     worker = PrototypeRuntimeWorker()
@@ -95,6 +114,36 @@ async def test_node_worker_initializes_applies_and_replays_with_verified_identit
     assert replayed.transitions == (transitioned,)
     assert replayed.final.state_hash == transitioned.state_hash
     assert replayed.final.view_model_hash == transitioned.view_model_hash
+
+
+@pytest.mark.asyncio
+async def test_worker_uses_configured_deadline_and_kills_timed_out_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _HungProcess()
+    observed_timeout: float | None = None
+
+    async def create_process(*args: object, **kwargs: object) -> _HungProcess:
+        return process
+
+    async def time_out(awaitable: object, *, timeout: float) -> tuple[bytes, bytes]:
+        nonlocal observed_timeout
+        observed_timeout = timeout
+        close = getattr(awaitable, "close", None)
+        if close is not None:
+            close()
+        raise TimeoutError
+
+    monkeypatch.setattr(runtime_worker_module.asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(runtime_worker_module.asyncio, "wait_for", time_out)
+    worker = PrototypeRuntimeWorker(timeout_s=30.0)
+
+    with pytest.raises(PrototypeRuntimeWorkerError) as error:
+        await worker.describe("describe-timeout")
+
+    assert error.value.code == "runtime_worker_timeout"
+    assert observed_timeout == 30.0
+    assert process.killed is True
 
 
 @pytest.mark.asyncio

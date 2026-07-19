@@ -20,6 +20,7 @@ from pydantic import (
 
 from app.adapters.prototype_object_store import canonical_json_bytes
 from app.domain.structured_prototype import (
+    PROTOTYPE_FORWARD_COMMAND_BATCH_MAX_BYTES,
     PrototypeCommandHistory,
     PrototypeCommandHistoryCheckpoint,
     PrototypeCommandHistoryEntry,
@@ -79,6 +80,24 @@ type EntityId = Annotated[
 ]
 type TechnicalKey = Annotated[str, Field(pattern=TECHNICAL_KEY_RE.pattern)]
 type Sha256 = Annotated[str, Field(pattern=SHA256_RE.pattern)]
+
+
+def _non_blank_command_text(value: str) -> str:
+    if not value.strip():
+        raise ValueError("command text must contain a non-whitespace character")
+    return value
+
+
+type CommandNodeName = Annotated[
+    str,
+    Field(min_length=1, max_length=80),
+    AfterValidator(_non_blank_command_text),
+]
+type CommandPageTitle = Annotated[
+    str,
+    Field(min_length=1, max_length=80),
+    AfterValidator(_non_blank_command_text),
+]
 
 
 def _canonical_signed_decimal(value: str) -> str:
@@ -1036,8 +1055,8 @@ class PrototypeDocumentV1(StrictPrototypeModel):
         for item in self.navigation.items:
             if item.target_page_id not in page_ids:
                 raise ValueError(f"navigation item {item.id} references an unknown page")
-        if set(self.runtime.page_ids) != page_ids or len(self.runtime.page_ids) != len(page_ids):
-            raise ValueError("runtime page IDs must match document pages exactly")
+        if self.runtime.page_ids != [page.id for page in self.pages]:
+            raise ValueError("runtime page IDs must match document page order exactly")
         _unique((form.id for form in self.runtime.forms), "runtime form ID")
         forms_by_id = {form.id: form for form in self.runtime.forms}
         _unique((rule.id for rule in self.runtime.rules), "runtime rule ID")
@@ -1160,10 +1179,6 @@ def _validate_layout_tree(root: UINodeV1) -> None:
         for child in children:
             if parent_is_freeform and child.layout_item.position is None:
                 raise ValueError(f"freeform child node {child.id} requires a freeform position")
-            if not parent_is_freeform and child.layout_item.position is not None:
-                raise ValueError(
-                    f"non-freeform child node {child.id} cannot have a freeform position"
-                )
             validate_children(child)
 
     validate_children(root)
@@ -1869,15 +1884,35 @@ class MoveNodeCommandV1(StrictPrototypeModel):
     target_parent: NodeRefV1
     target_slot: None
     target_index: Annotated[int, Field(ge=0)]
-    target_position: FreeformPositionV1 | None = Field(
-        default=None,
-        exclude_if=lambda value: value is None,
-    )
+    target_position: FreeformPositionV1 | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_explicit_target_position(
+        self,
+        handler: SerializerFunctionWrapHandler,
+    ) -> dict[str, object]:
+        serialized = cast(dict[str, object], handler(self))
+        if "target_position" not in self.model_fields_set:
+            serialized.pop("target_position", None)
+            serialized.pop("targetPosition", None)
+        return serialized
 
 
 class RemoveNodeCommandV1(StrictPrototypeModel):
     kind: Literal["removeNode"]
     node_id: EntityId
+
+
+class UpdateNodeNameCommandV1(StrictPrototypeModel):
+    kind: Literal["updateNodeName"]
+    node_id: EntityId
+    name: CommandNodeName
+
+
+class RestoreNodeNameCommandV1(StrictPrototypeModel):
+    kind: Literal["restoreNodeName"]
+    node_id: EntityId
+    name: Annotated[str, Field(min_length=1, max_length=80)]
 
 
 class TextContentUpdateV1(StrictPrototypeModel):
@@ -2000,6 +2035,32 @@ class ReorderPageCommandV1(StrictPrototypeModel):
     target_index: Annotated[int, Field(ge=0)]
 
 
+class AddPageCommandV1(StrictPrototypeModel):
+    kind: Literal["addPage"]
+    after_page_id: EntityId
+    new_page_key: TechnicalKey
+    title: CommandPageTitle
+    include_in_navigation: bool
+
+
+class DuplicatePageCommandV1(StrictPrototypeModel):
+    kind: Literal["duplicatePage"]
+    page_id: EntityId
+    new_page_key: TechnicalKey
+    title: CommandPageTitle
+
+
+class RenamePageCommandV1(StrictPrototypeModel):
+    kind: Literal["renamePage"]
+    page_id: EntityId
+    title: CommandPageTitle
+
+
+class DeletePageCommandV1(StrictPrototypeModel):
+    kind: Literal["deletePage"]
+    page_id: EntityId
+
+
 class ReorderNavigationItemCommandV1(StrictPrototypeModel):
     kind: Literal["reorderNavigationItem"]
     item_id: EntityId
@@ -2049,9 +2110,14 @@ type DomainCommandV1 = Annotated[
     InsertNodeCommandV1
     | MoveNodeCommandV1
     | RemoveNodeCommandV1
+    | UpdateNodeNameCommandV1
     | SetNodePropertyCommandV1
     | SetNodeLayoutCommandV1
     | ReorderPageCommandV1
+    | AddPageCommandV1
+    | DuplicatePageCommandV1
+    | RenamePageCommandV1
+    | DeletePageCommandV1
     | ReorderNavigationItemCommandV1
     | SetRuntimeEntityFieldCommandV1
     | SetRuntimeFlowNodePositionCommandV1
@@ -2355,7 +2421,7 @@ class DomainCommandBatchV1(StrictPrototypeModel):
                 )
             if command.target_parent.node_id != self.evidence.freeform_id:
                 raise ValueError(
-                    "freeform move evidence Freeform ID must match every move target parent"
+                    "freeform move evidence container ID must match every move target parent"
                 )
             moved_node_ids.append(command.node.node_id)
             target_positions.append(command.target_position)
@@ -2403,6 +2469,118 @@ class IndexedPrototypeFlowV1(StrictPrototypeModel):
     flow: PrototypeFlowV1
 
 
+class IndexedNavigationItemV1(StrictPrototypeModel):
+    index: Annotated[int, Field(ge=0)]
+    item: NavigationItemV1
+
+
+class IndexedRuntimeViewBindingV1(StrictPrototypeModel):
+    index: Annotated[int, Field(ge=0)]
+    binding: RuntimeViewBindingV1
+
+
+class IndexedRuntimeRuleV1(StrictPrototypeModel):
+    index: Annotated[int, Field(ge=0)]
+    rule: RuntimeRuleV1
+
+
+class NavigationLabelSnapshotV1(StrictPrototypeModel):
+    item_id: EntityId
+    label: Annotated[str, Field(min_length=1, max_length=80)]
+
+
+class PageTitleProjectionSnapshotV1(StrictPrototypeModel):
+    title: Annotated[str, Field(min_length=1, max_length=80)]
+    navigation_labels: Annotated[list[NavigationLabelSnapshotV1], Field(max_length=20)]
+
+    @model_validator(mode="after")
+    def validate_navigation_labels(self) -> PageTitleProjectionSnapshotV1:
+        _unique(
+            (entry.item_id for entry in self.navigation_labels),
+            "page title snapshot navigation item ID",
+        )
+        return self
+
+
+class RestorePageTitleProjectionCommandV1(StrictPrototypeModel):
+    kind: Literal["restorePageTitleProjection"]
+    page_id: EntityId
+    snapshot: PageTitleProjectionSnapshotV1
+
+
+class PageProjectionSnapshotV1(StrictPrototypeModel):
+    page_index: Annotated[int | None, Field(ge=0)]
+    runtime_page_index: Annotated[int | None, Field(ge=0)]
+    page: PrototypePageV1 | None
+    navigation_items: Annotated[list[IndexedNavigationItemV1], Field(max_length=20)]
+    view_bindings: Annotated[list[IndexedRuntimeViewBindingV1], Field(max_length=200)]
+    rules: Annotated[list[IndexedRuntimeRuleV1], Field(max_length=100)]
+    flows: Annotated[list[IndexedPrototypeFlowV1], Field(max_length=100)]
+    flow_layout_positions: Annotated[
+        list[RuntimeFlowNodePositionV1],
+        Field(max_length=FLOW_LAYOUT_NODE_LIMIT),
+    ]
+
+    @model_validator(mode="after")
+    def validate_snapshot(self) -> PageProjectionSnapshotV1:
+        collections = (
+            self.navigation_items,
+            self.view_bindings,
+            self.rules,
+            self.flows,
+            self.flow_layout_positions,
+        )
+        if self.page is None:
+            if (
+                self.page_index is not None
+                or self.runtime_page_index is not None
+                or any(collections)
+            ):
+                raise ValueError("an absent page snapshot cannot contain projections")
+            return self
+        if self.page_index is None or self.runtime_page_index is None:
+            raise ValueError("a page snapshot requires document and runtime indexes")
+        for entries, label in (
+            (self.navigation_items, "navigation item"),
+            (self.view_bindings, "view binding"),
+            (self.rules, "runtime rule"),
+            (self.flows, "flow"),
+        ):
+            indexes = [entry.index for entry in entries]
+            _unique((str(index) for index in indexes), f"page snapshot {label} index")
+            if indexes != sorted(indexes):
+                raise ValueError(f"page snapshot {label} indexes must be ascending")
+        page_node_ids = _node_id_set(self.page.root)
+        if any(entry.item.target_page_id != self.page.id for entry in self.navigation_items):
+            raise ValueError("page snapshot contains navigation for another page")
+        if any(entry.binding.node_id not in page_node_ids for entry in self.view_bindings):
+            raise ValueError("page snapshot contains a view binding owned by another page")
+        rule_ids = {entry.rule.id for entry in self.rules}
+        if any(entry.rule.trigger.node_id not in page_node_ids for entry in self.rules):
+            raise ValueError("page snapshot contains a runtime rule owned by another page")
+        if any(entry.flow.rule_id not in rule_ids for entry in self.flows):
+            raise ValueError("page snapshot contains a flow owned by another page")
+        layout_ids = [position.node_id for position in self.flow_layout_positions]
+        _unique(layout_ids, "page snapshot flow layout node ID")
+        if any(node_id not in rule_ids | {self.page.id} for node_id in layout_ids):
+            raise ValueError("page snapshot contains a flow layout node owned by another page")
+        if layout_ids != sorted(layout_ids):
+            raise ValueError("page snapshot flow layout nodes must use canonical nodeId order")
+        return self
+
+
+class RestorePageProjectionCommandV1(StrictPrototypeModel):
+    kind: Literal["restorePageProjection"]
+    page_id: EntityId
+    snapshot: PageProjectionSnapshotV1
+
+    @model_validator(mode="after")
+    def validate_snapshot_identity(self) -> RestorePageProjectionCommandV1:
+        if self.snapshot.page is not None and self.snapshot.page.id != self.page_id:
+            raise ValueError("page snapshot identity does not match its restore command")
+        return self
+
+
 class BehaviorRuleProjectionSnapshotV1(StrictPrototypeModel):
     rule_index: Annotated[int | None, Field(ge=0)]
     rule: RuntimeRuleV1 | None
@@ -2446,6 +2624,7 @@ class RestoreBehaviorRuleProjectionCommandV1(StrictPrototypeModel):
 type InverseCommandV1 = Annotated[
     MoveNodeCommandV1
     | RemoveNodeCommandV1
+    | RestoreNodeNameCommandV1
     | SetNodePropertyCommandV1
     | SetNodeLayoutCommandV1
     | ReorderPageCommandV1
@@ -2454,7 +2633,9 @@ type InverseCommandV1 = Annotated[
     | RestoreNodeCommandV1
     | RestoreRuntimeFlowNodePositionCommandV1
     | RemoveRuntimeFlowNodePositionCommandV1
-    | RestoreBehaviorRuleProjectionCommandV1,
+    | RestoreBehaviorRuleProjectionCommandV1
+    | RestorePageTitleProjectionCommandV1
+    | RestorePageProjectionCommandV1,
     Field(discriminator="kind"),
 ]
 
@@ -2576,37 +2757,45 @@ def validate_command_batch_evidence_context(
             "freeform move evidence baseDocumentHash does not match the base draft head"
         )
 
-    freeform: UINodeV1 | None = None
+    container: UINodeV1 | None = None
     for page in document.pages:
-        freeform = _find_node(page.root, evidence.freeform_id)
-        if freeform is not None:
+        container = _find_node(page.root, evidence.freeform_id)
+        if container is not None:
             break
-    if not isinstance(freeform, FreeformNodeV1):
+    if not isinstance(container, (StackNodeV1, GridNodeV1, FormNodeV1, FreeformNodeV1)):
         raise _command_evidence_mismatch(
-            "freeform move evidence freeformId does not identify a base Freeform"
+            "freeform move evidence freeformId does not identify a positioned container"
         )
 
     captured_grid_wire = [grid.model_dump(mode="json", by_alias=True) for grid in evidence.grids]
-    base_grid_wire = [grid.model_dump(mode="json", by_alias=True) for grid in freeform.grids]
+    base_grids = container.grids if isinstance(container, FreeformNodeV1) else []
+    base_grid_wire = [grid.model_dump(mode="json", by_alias=True) for grid in base_grids]
+    if not isinstance(container, FreeformNodeV1) and evidence.grid_snapping_enabled:
+        raise _command_evidence_mismatch(
+            "freeform move evidence cannot enable grid snapping for an ordinary container"
+        )
     if captured_grid_wire != base_grid_wire:
         raise _command_evidence_mismatch(
-            "freeform move evidence grids do not exactly match the base Freeform grid order"
+            "freeform move evidence grids do not exactly match the base container grid order"
         )
     if freeform_grid_list_hash(evidence.grids) != evidence.grid_list_hash:
         raise _command_evidence_mismatch(
             "freeform move evidence gridListHash does not match its canonical grid array"
         )
 
-    children_by_id = {child.id: (index, child) for index, child in enumerate(freeform.children)}
+    children_by_id = {child.id: (index, child) for index, child in enumerate(container.children)}
     selected_positions: list[FreeformPositionV1] = []
     for node_id in evidence.selected_node_ids:
         selected_child = children_by_id.get(node_id)
         if selected_child is None:
             raise _command_evidence_mismatch(
-                "freeform move evidence selected node is not a direct child of its Freeform"
+                "freeform move evidence selected node is not a direct child of its container"
             )
         selected_position = selected_child[1].layout_item.position
-        assert selected_position is not None
+        if selected_position is None:
+            raise _command_evidence_mismatch(
+                "freeform move evidence selected node is not positioned"
+            )
         selected_positions.append(selected_position)
     if not _freeform_move_evidence_decimals_match(
         Decimal(evidence.selection_bounds.x),
@@ -2622,7 +2811,7 @@ def validate_command_batch_evidence_context(
         direct_child = children_by_id.get(sibling.node_id)
         if direct_child is None:
             raise _command_evidence_mismatch(
-                "freeform move evidence sibling is not a direct child of its Freeform"
+                "freeform move evidence sibling is not a direct child of its container"
             )
         position = direct_child[1].layout_item.position
         if position is None or position.x != sibling.x or position.y != sibling.y:
@@ -2892,6 +3081,11 @@ def execute_command_batch(
     draft_id: str,
     client_request_id: str,
 ) -> CommandExecutionResultV1:
+    if len(canonical_model_json(batch).encode("utf-8")) > PROTOTYPE_FORWARD_COMMAND_BATCH_MAX_BYTES:
+        raise StructuredPrototypeContractError(
+            "command_batch_too_large",
+            "prototype forward command payload exceeds 256 KiB",
+        )
     base_hash = document_hash(document)
     current = document
     allocated: dict[str, str] = {}
@@ -2924,15 +3118,6 @@ def execute_command_batch(
         command_contract_version=COMMAND_CONTRACT_VERSION,
         commands=inverse,
     )
-    if (
-        len(canonical_model_json(batch).encode("utf-8"))
-        + len(canonical_model_json(serialized_inverse).encode("utf-8"))
-        > 262_144
-    ):
-        raise StructuredPrototypeContractError(
-            "command_batch_too_large",
-            "prototype command and inverse payloads exceed 256 KiB",
-        )
     _require_inverse_round_trip(document, current, serialized_inverse)
     return CommandExecutionResultV1(
         document=current,
@@ -2971,15 +3156,6 @@ def execute_inverse_command_batch(
         command_contract_version=COMMAND_CONTRACT_VERSION,
         commands=inverse,
     )
-    if (
-        len(canonical_model_json(batch).encode("utf-8"))
-        + len(canonical_model_json(serialized_inverse).encode("utf-8"))
-        > 262_144
-    ):
-        raise StructuredPrototypeContractError(
-            "command_batch_too_large",
-            "prototype command and inverse payloads exceed 256 KiB",
-        )
     _require_inverse_round_trip(document, current, serialized_inverse)
     return CommandExecutionResultV1(
         document=current,
@@ -3057,6 +3233,7 @@ def _execute_command(
             node,
             target_parent,
             command.target_position,
+            target_position_is_set="target_position" in command.model_fields_set,
         )
         without_node, _, _, _ = _detach_node_without_document_validation(document, node_id)
         updated = _insert_node(
@@ -3088,6 +3265,18 @@ def _execute_command(
                 kind="restoreNode", parent_id=parent_id, index=index, node=removed
             ),
             _node_id_set(removed) | {parent_id},
+        )
+    if isinstance(command, UpdateNodeNameCommandV1):
+        node = _require_node(document, command.node_id)
+        updated = _replace_node(document, node.model_copy(update={"name": command.name}))
+        return (
+            updated,
+            RestoreNodeNameCommandV1(
+                kind="restoreNodeName",
+                node_id=command.node_id,
+                name=node.name,
+            ),
+            {command.node_id},
         )
     if isinstance(command, SetNodePropertyCommandV1):
         node_id = _resolve_node_ref(command.node, allocated)
@@ -3226,6 +3415,77 @@ def _execute_command(
             ),
             _behavior_rule_snapshot_entity_ids(previous_snapshot),
         )
+    if isinstance(command, AddPageCommandV1):
+        updated, page_id = _add_blank_page(
+            document,
+            command,
+            draft_id=draft_id,
+            client_request_id=client_request_id,
+            allocated=allocated,
+        )
+        affected = _page_projection_entity_ids(_capture_page_projection(updated, page_id))
+        affected.add(command.after_page_id)
+        return (
+            updated,
+            RestorePageProjectionCommandV1(
+                kind="restorePageProjection",
+                page_id=page_id,
+                snapshot=_absent_page_projection_snapshot(),
+            ),
+            affected,
+        )
+    if isinstance(command, DuplicatePageCommandV1):
+        updated, page_id = _duplicate_page(
+            document,
+            command,
+            draft_id=draft_id,
+            client_request_id=client_request_id,
+            allocated=allocated,
+        )
+        affected = _page_projection_entity_ids(_capture_page_projection(updated, page_id))
+        affected.add(command.page_id)
+        return (
+            updated,
+            RestorePageProjectionCommandV1(
+                kind="restorePageProjection",
+                page_id=page_id,
+                snapshot=_absent_page_projection_snapshot(),
+            ),
+            affected,
+        )
+    if isinstance(command, RenamePageCommandV1):
+        previous_title_snapshot = _capture_page_title_projection(document, command.page_id)
+        updated, affected = _rename_page(
+            document,
+            page_id=command.page_id,
+            title=command.title,
+        )
+        return (
+            updated,
+            RestorePageTitleProjectionCommandV1(
+                kind="restorePageTitleProjection",
+                page_id=command.page_id,
+                snapshot=previous_title_snapshot,
+            ),
+            affected,
+        )
+    if isinstance(command, DeletePageCommandV1):
+        _require_page_deletable(document, command.page_id)
+        snapshot = _capture_page_projection(document, command.page_id)
+        updated = _restore_page_projection(
+            document,
+            command.page_id,
+            _absent_page_projection_snapshot(),
+        )
+        return (
+            updated,
+            RestorePageProjectionCommandV1(
+                kind="restorePageProjection",
+                page_id=command.page_id,
+                snapshot=snapshot,
+            ),
+            _page_projection_entity_ids(snapshot),
+        )
     if isinstance(command, ReorderPageCommandV1):
         pages = list(document.pages)
         page_source_index = next(
@@ -3241,7 +3501,11 @@ def _execute_command(
                 "command_index_invalid", "prototype page target index is out of range"
             )
         pages.insert(command.target_index, page)
-        updated = document.model_copy(update={"pages": pages})
+        runtime_page_ids = list(document.runtime.page_ids)
+        runtime_page_id = runtime_page_ids.pop(page_source_index)
+        runtime_page_ids.insert(command.target_index, runtime_page_id)
+        runtime = document.runtime.model_copy(update={"page_ids": runtime_page_ids})
+        updated = document.model_copy(update={"pages": pages, "runtime": runtime})
         return (
             updated,
             ReorderPageCommandV1(
@@ -3284,6 +3548,18 @@ def _execute_inverse_command(
     document: PrototypeDocumentV1,
     command: InverseCommandV1,
 ) -> tuple[PrototypeDocumentV1, InverseCommandV1, set[str]]:
+    if isinstance(command, RestoreNodeNameCommandV1):
+        node = _require_node(document, command.node_id)
+        updated = _replace_node(document, node.model_copy(update={"name": command.name}))
+        return (
+            updated,
+            RestoreNodeNameCommandV1(
+                kind="restoreNodeName",
+                node_id=command.node_id,
+                name=node.name,
+            ),
+            {command.node_id},
+        )
     if isinstance(command, RestoreNodeCommandV1):
         updated = _insert_node(document, command.parent_id, command.index, command.node)
         return (
@@ -3351,6 +3627,43 @@ def _execute_inverse_command(
             ),
             affected,
         )
+    if isinstance(command, RestorePageProjectionCommandV1):
+        previous_page_snapshot = _capture_page_projection(
+            document,
+            command.page_id,
+            allow_absent=True,
+        )
+        updated = _restore_page_projection(document, command.page_id, command.snapshot)
+        affected = _page_projection_entity_ids(
+            previous_page_snapshot,
+            page_id=command.page_id,
+        )
+        affected.update(_page_projection_entity_ids(command.snapshot, page_id=command.page_id))
+        return (
+            updated,
+            RestorePageProjectionCommandV1(
+                kind="restorePageProjection",
+                page_id=command.page_id,
+                snapshot=previous_page_snapshot,
+            ),
+            affected,
+        )
+    if isinstance(command, RestorePageTitleProjectionCommandV1):
+        previous_title_snapshot = _capture_page_title_projection(document, command.page_id)
+        updated, affected = _restore_page_title_projection(
+            document,
+            command.page_id,
+            command.snapshot,
+        )
+        return (
+            updated,
+            RestorePageTitleProjectionCommandV1(
+                kind="restorePageTitleProjection",
+                page_id=command.page_id,
+                snapshot=previous_title_snapshot,
+            ),
+            affected,
+        )
     return _execute_command(
         document,
         command,
@@ -3368,6 +3681,9 @@ def _apply_inverse_command(
         return _insert_node(document, command.parent_id, command.index, command.node)
     if isinstance(command, RemoveNodeCommandV1):
         return _remove_node(document, command.node_id)[0]
+    if isinstance(command, RestoreNodeNameCommandV1):
+        node = _require_node(document, command.node_id)
+        return _replace_node(document, node.model_copy(update={"name": command.name}))
     if isinstance(command, MoveNodeCommandV1):
         node_id = _existing_ref_id(command.node)
         parent_id = _existing_ref_id(command.target_parent)
@@ -3377,6 +3693,7 @@ def _apply_inverse_command(
             node,
             target_parent,
             command.target_position,
+            target_position_is_set="target_position" in command.model_fields_set,
         )
         without_node, _, _, _ = _detach_node_without_document_validation(document, node_id)
         return _insert_node(without_node, parent_id, command.target_index, positioned_node)
@@ -3402,6 +3719,14 @@ def _apply_inverse_command(
         return _remove_runtime_flow_node_position(document, command.flow_node_id)[0]
     if isinstance(command, RestoreBehaviorRuleProjectionCommandV1):
         return _restore_behavior_rule_projection(document, command.rule_id, command.snapshot)
+    if isinstance(command, RestorePageProjectionCommandV1):
+        return _restore_page_projection(document, command.page_id, command.snapshot)
+    if isinstance(command, RestorePageTitleProjectionCommandV1):
+        return _restore_page_title_projection(
+            document,
+            command.page_id,
+            command.snapshot,
+        )[0]
     if isinstance(command, ReorderPageCommandV1):
         pages = list(document.pages)
         source_index = next(
@@ -3412,8 +3737,16 @@ def _apply_inverse_command(
                 "command_target_missing", "prototype page does not exist"
             )
         page = pages.pop(source_index)
+        if command.target_index > len(pages):
+            raise StructuredPrototypeContractError(
+                "command_index_invalid", "prototype page target index is out of range"
+            )
         pages.insert(command.target_index, page)
-        return document.model_copy(update={"pages": pages})
+        runtime_page_ids = list(document.runtime.page_ids)
+        runtime_page_id = runtime_page_ids.pop(source_index)
+        runtime_page_ids.insert(command.target_index, runtime_page_id)
+        runtime = document.runtime.model_copy(update={"page_ids": runtime_page_ids})
+        return document.model_copy(update={"pages": pages, "runtime": runtime})
     if isinstance(command, ReorderNavigationItemCommandV1):
         items = list(document.navigation.items)
         source_index = next(
@@ -3502,6 +3835,808 @@ def _allocate_new_node(
     if isinstance(node, NewButtonNodeV1):
         return ButtonNodeV1.model_validate(payload, strict=True)
     return TableNodeV1.model_validate(payload, strict=True)
+
+
+def _register_allocated_entity(
+    allocated: dict[str, str],
+    allocation_key: str,
+    entity_id: str,
+) -> str:
+    if allocation_key in allocated:
+        raise StructuredPrototypeContractError(
+            "command_new_key_duplicate",
+            "prototype page allocation key is duplicated in the batch",
+        )
+    allocated[allocation_key] = entity_id
+    return entity_id
+
+
+def _allocate_page_id(
+    *,
+    draft_id: str,
+    client_request_id: str,
+    new_page_key: str,
+    allocated: dict[str, str],
+) -> str:
+    page_id = str(
+        uuid5(
+            PROTOTYPE_ENTITY_NAMESPACE,
+            f"{draft_id}:{client_request_id}:page:{new_page_key}",
+        )
+    )
+    return _register_allocated_entity(allocated, new_page_key, page_id)
+
+
+def _allocate_page_owned_id(
+    page_id: str,
+    *,
+    allocation_key: str,
+    identity: str,
+    allocated: dict[str, str],
+) -> str:
+    entity_id = str(uuid5(UUID(page_id), identity))
+    return _register_allocated_entity(allocated, allocation_key, entity_id)
+
+
+def _technical_key_base(value: str, *, fallback: str = "page") -> str:
+    lowered = value.strip().lower()
+    normalized = re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
+    if not normalized or not normalized[0].isalpha():
+        normalized = f"{fallback}-{normalized}" if normalized else fallback
+    normalized = normalized[:64].rstrip("-")
+    return normalized or fallback
+
+
+def _unique_technical_key(base: str, existing: set[str]) -> str:
+    normalized = _technical_key_base(base)
+    if normalized not in existing:
+        return normalized
+    suffix_no = 2
+    while True:
+        suffix = f"-{suffix_no}"
+        candidate = f"{normalized[: 64 - len(suffix)].rstrip('-')}{suffix}"
+        if candidate not in existing:
+            return candidate
+        suffix_no += 1
+
+
+def _unique_route(base: str, existing: set[str]) -> str:
+    normalized = base if base.startswith("/") else f"/{base}"
+    if normalized == "/":
+        normalized = "/page"
+    normalized = normalized[:240].rstrip("/") or "/page"
+    if normalized not in existing:
+        return normalized
+    suffix_no = 2
+    while True:
+        suffix = f"-{suffix_no}"
+        candidate = f"{normalized[: 240 - len(suffix)]}{suffix}"
+        if candidate not in existing:
+            return candidate
+        suffix_no += 1
+
+
+def _duplicate_route_base(route: str) -> str:
+    return "/copy" if route == "/" else f"{route}-copy"
+
+
+def _blank_freeform_root(
+    *,
+    page_id: str,
+    new_page_key: str,
+    title: str,
+    viewport: ViewportSettingsV1,
+    allocated: dict[str, str],
+) -> FreeformNodeV1:
+    root_id = _allocate_page_owned_id(
+        page_id,
+        allocation_key=f"{new_page_key}:root",
+        identity="root",
+        allocated=allocated,
+    )
+    return FreeformNodeV1(
+        id=root_id,
+        type="Freeform",
+        name=title,
+        visibility="visible",
+        layout_item=LayoutItemV1(
+            width=LengthV1(unit="px", value=str(viewport.width)),
+            min_width=None,
+            max_width=None,
+            height=LengthV1(unit="px", value=str(viewport.height)),
+            min_height=None,
+            max_height=None,
+            grow=0,
+            shrink=0,
+            align_self="stretch",
+            position=None,
+        ),
+        responsive=[],
+        children=[],
+        grids=[],
+    )
+
+
+def _add_blank_page(
+    document: PrototypeDocumentV1,
+    command: AddPageCommandV1,
+    *,
+    draft_id: str,
+    client_request_id: str,
+    allocated: dict[str, str],
+) -> tuple[PrototypeDocumentV1, str]:
+    pages = list(document.pages)
+    source_index = next(
+        (index for index, page in enumerate(pages) if page.id == command.after_page_id),
+        None,
+    )
+    if source_index is None:
+        raise StructuredPrototypeContractError(
+            "command_target_missing", "prototype page insertion anchor does not exist"
+        )
+    page_id = _allocate_page_id(
+        draft_id=draft_id,
+        client_request_id=client_request_id,
+        new_page_key=command.new_page_key,
+        allocated=allocated,
+    )
+    page_key = _unique_technical_key(
+        command.title,
+        {page.key for page in document.pages},
+    )
+    route = _unique_route(
+        f"/{page_key}",
+        {page.route for page in document.pages},
+    )
+    viewport = pages[source_index].viewport
+    page = PrototypePageV1(
+        id=page_id,
+        key=page_key,
+        title=command.title,
+        route=route,
+        viewport=viewport,
+        root=_blank_freeform_root(
+            page_id=page_id,
+            new_page_key=command.new_page_key,
+            title=command.title,
+            viewport=viewport,
+            allocated=allocated,
+        ),
+    )
+    insertion_index = source_index + 1
+    pages.insert(insertion_index, page)
+    runtime_page_ids = list(document.runtime.page_ids)
+    runtime_page_ids.insert(insertion_index, page_id)
+    navigation_items = list(document.navigation.items)
+    if command.include_in_navigation:
+        navigation_id = _allocate_page_owned_id(
+            page_id,
+            allocation_key=f"{command.new_page_key}:navigation",
+            identity="navigation",
+            allocated=allocated,
+        )
+        navigation_key = _unique_technical_key(
+            page_key,
+            {item.key for item in navigation_items},
+        )
+        anchor_indexes = [
+            index
+            for index, item in enumerate(navigation_items)
+            if item.target_page_id == command.after_page_id
+        ]
+        navigation_index = anchor_indexes[-1] + 1 if anchor_indexes else len(navigation_items)
+        navigation_items.insert(
+            navigation_index,
+            NavigationItemV1(
+                id=navigation_id,
+                key=navigation_key,
+                label=command.title,
+                target_page_id=page_id,
+            ),
+        )
+    runtime = document.runtime.model_copy(update={"page_ids": runtime_page_ids})
+    navigation = document.navigation.model_copy(update={"items": navigation_items})
+    updated = document.model_copy(
+        update={"pages": pages, "runtime": runtime, "navigation": navigation}
+    )
+    return _validate_command_batch_document(updated), page_id
+
+
+def _duplicate_page_node(
+    node: UINodeV1,
+    *,
+    page_id: str,
+    new_page_key: str,
+    allocated: dict[str, str],
+    node_id_map: dict[str, str],
+) -> UINodeV1:
+    new_node_id = _allocate_page_owned_id(
+        page_id,
+        allocation_key=f"{new_page_key}:node:{node.id}",
+        identity=f"node:{node.id}",
+        allocated=allocated,
+    )
+    node_id_map[node.id] = new_node_id
+    updates: dict[str, object] = {"id": new_node_id}
+    children = _node_children(node)
+    if children is not None:
+        updates["children"] = [
+            _duplicate_page_node(
+                child,
+                page_id=page_id,
+                new_page_key=new_page_key,
+                allocated=allocated,
+                node_id_map=node_id_map,
+            )
+            for child in children
+        ]
+    if isinstance(node, FreeformNodeV1):
+        updates["grids"] = [
+            grid.model_copy(
+                update={
+                    "id": _allocate_page_owned_id(
+                        page_id,
+                        allocation_key=f"{new_page_key}:grid:{grid.id}",
+                        identity=f"grid:{grid.id}",
+                        allocated=allocated,
+                    )
+                }
+            )
+            for grid in node.grids
+        ]
+    if isinstance(node, TableNodeV1):
+        updates["rows"] = [
+            row.model_copy(
+                update={
+                    "id": _allocate_page_owned_id(
+                        page_id,
+                        allocation_key=f"{new_page_key}:row:{row.id}",
+                        identity=f"row:{row.id}",
+                        allocated=allocated,
+                    )
+                }
+            )
+            for row in node.rows
+        ]
+    return node.model_copy(update=updates)
+
+
+def _remap_duplicate_page_effect(
+    effect: RuntimeEffectV1,
+    *,
+    source_page_id: str,
+    duplicate_page_id: str,
+) -> RuntimeEffectV1:
+    if isinstance(effect, NavigateEffectV1) and effect.target_page_id == source_page_id:
+        return effect.model_copy(update={"target_page_id": duplicate_page_id})
+    return effect
+
+
+def _duplicate_page(
+    document: PrototypeDocumentV1,
+    command: DuplicatePageCommandV1,
+    *,
+    draft_id: str,
+    client_request_id: str,
+    allocated: dict[str, str],
+) -> tuple[PrototypeDocumentV1, str]:
+    source_index = next(
+        (index for index, page in enumerate(document.pages) if page.id == command.page_id),
+        None,
+    )
+    if source_index is None:
+        raise StructuredPrototypeContractError(
+            "command_target_missing", "prototype page to duplicate does not exist"
+        )
+    source_page = document.pages[source_index]
+    page_id = _allocate_page_id(
+        draft_id=draft_id,
+        client_request_id=client_request_id,
+        new_page_key=command.new_page_key,
+        allocated=allocated,
+    )
+    node_id_map: dict[str, str] = {}
+    duplicated_root = _duplicate_page_node(
+        source_page.root,
+        page_id=page_id,
+        new_page_key=command.new_page_key,
+        allocated=allocated,
+        node_id_map=node_id_map,
+    )
+    page_key = _unique_technical_key(
+        f"{source_page.key}-copy",
+        {page.key for page in document.pages},
+    )
+    route = _unique_route(
+        _duplicate_route_base(source_page.route),
+        {page.route for page in document.pages},
+    )
+    duplicated_page = source_page.model_copy(
+        update={
+            "id": page_id,
+            "key": page_key,
+            "title": command.title,
+            "route": route,
+            "root": duplicated_root,
+        }
+    )
+    pages = list(document.pages)
+    insertion_index = source_index + 1
+    pages.insert(insertion_index, duplicated_page)
+
+    navigation_keys = {item.key for item in document.navigation.items}
+    navigation_items: list[NavigationItemV1] = []
+    for item in document.navigation.items:
+        navigation_items.append(item)
+        if item.target_page_id != command.page_id:
+            continue
+        navigation_id = _allocate_page_owned_id(
+            page_id,
+            allocation_key=f"{command.new_page_key}:navigation:{item.id}",
+            identity=f"navigation:{item.id}",
+            allocated=allocated,
+        )
+        navigation_key = _unique_technical_key(f"{item.key}-copy", navigation_keys)
+        navigation_keys.add(navigation_key)
+        navigation_items.append(
+            item.model_copy(
+                update={
+                    "id": navigation_id,
+                    "key": navigation_key,
+                    "label": command.title,
+                    "target_page_id": page_id,
+                }
+            )
+        )
+
+    view_bindings: list[RuntimeViewBindingV1] = []
+    for binding in document.runtime.view_bindings:
+        view_bindings.append(binding)
+        duplicate_node_id = node_id_map.get(binding.node_id)
+        if duplicate_node_id is None:
+            continue
+        binding_id = _allocate_page_owned_id(
+            page_id,
+            allocation_key=f"{command.new_page_key}:binding:{binding.id}",
+            identity=f"binding:{binding.id}",
+            allocated=allocated,
+        )
+        view_bindings.append(
+            binding.model_copy(update={"id": binding_id, "node_id": duplicate_node_id})
+        )
+
+    rule_id_map: dict[str, str] = {}
+    duplicated_rules_by_source: dict[str, RuntimeRuleV1] = {}
+    rule_keys = {rule.key for rule in document.runtime.rules}
+    rules: list[RuntimeRuleV1] = []
+    for rule in document.runtime.rules:
+        rules.append(rule)
+        duplicate_trigger_node_id = node_id_map.get(rule.trigger.node_id)
+        if duplicate_trigger_node_id is None:
+            continue
+        rule_id = _allocate_page_owned_id(
+            page_id,
+            allocation_key=f"{command.new_page_key}:rule:{rule.id}",
+            identity=f"rule:{rule.id}",
+            allocated=allocated,
+        )
+        rule_key = _unique_technical_key(f"{rule.key}-copy", rule_keys)
+        rule_keys.add(rule_key)
+        duplicated_rule = rule.model_copy(
+            update={
+                "id": rule_id,
+                "key": rule_key,
+                "trigger": rule.trigger.model_copy(update={"node_id": duplicate_trigger_node_id}),
+                "effects": [
+                    _remap_duplicate_page_effect(
+                        effect,
+                        source_page_id=command.page_id,
+                        duplicate_page_id=page_id,
+                    )
+                    for effect in rule.effects
+                ],
+                "guard_false_effects": [
+                    _remap_duplicate_page_effect(
+                        effect,
+                        source_page_id=command.page_id,
+                        duplicate_page_id=page_id,
+                    )
+                    for effect in rule.guard_false_effects
+                ],
+            }
+        )
+        rule_id_map[rule.id] = rule_id
+        duplicated_rules_by_source[rule.id] = duplicated_rule
+        rules.append(duplicated_rule)
+
+    flows: list[PrototypeFlowV1] = []
+    for flow in document.flows:
+        flows.append(flow)
+        flow_duplicate_rule = duplicated_rules_by_source.get(flow.rule_id)
+        if flow_duplicate_rule is None or flow.to_page_id is None:
+            continue
+        target_page_id = page_id if flow.to_page_id == command.page_id else flow.to_page_id
+        duplicated_flow = _new_behavior_rule_flow(flow_duplicate_rule, target_page_id)
+        _register_allocated_entity(
+            allocated,
+            f"{command.new_page_key}:flow:{flow.id}",
+            duplicated_flow.id,
+        )
+        flows.append(duplicated_flow)
+
+    layout_nodes = list(document.runtime.flow_layout.nodes) if document.runtime.flow_layout else []
+    duplicated_layout_nodes: list[RuntimeFlowNodePositionV1] = []
+    for position in layout_nodes:
+        duplicate_node_id = (
+            page_id if position.node_id == command.page_id else rule_id_map.get(position.node_id)
+        )
+        if duplicate_node_id is not None:
+            duplicated_layout_nodes.append(
+                position.model_copy(update={"node_id": duplicate_node_id})
+            )
+    layout_nodes.extend(duplicated_layout_nodes)
+    flow_layout = (
+        RuntimeFlowLayoutV1(nodes=sorted(layout_nodes, key=lambda item: item.node_id))
+        if layout_nodes
+        else None
+    )
+
+    runtime_page_ids = list(document.runtime.page_ids)
+    runtime_page_ids.insert(insertion_index, page_id)
+    runtime = document.runtime.model_copy(
+        update={
+            "page_ids": runtime_page_ids,
+            "view_bindings": view_bindings,
+            "rules": rules,
+            "flow_layout": flow_layout,
+        }
+    )
+    navigation = document.navigation.model_copy(update={"items": navigation_items})
+    updated = document.model_copy(
+        update={
+            "pages": pages,
+            "navigation": navigation,
+            "flows": flows,
+            "runtime": runtime,
+        }
+    )
+    return _validate_command_batch_document(updated), page_id
+
+
+def _absent_page_projection_snapshot() -> PageProjectionSnapshotV1:
+    return PageProjectionSnapshotV1(
+        page_index=None,
+        runtime_page_index=None,
+        page=None,
+        navigation_items=[],
+        view_bindings=[],
+        rules=[],
+        flows=[],
+        flow_layout_positions=[],
+    )
+
+
+def _capture_page_projection(
+    document: PrototypeDocumentV1,
+    page_id: str,
+    *,
+    allow_absent: bool = False,
+) -> PageProjectionSnapshotV1:
+    page_index = next(
+        (index for index, page in enumerate(document.pages) if page.id == page_id),
+        None,
+    )
+    if page_index is None:
+        if allow_absent:
+            return _absent_page_projection_snapshot()
+        raise StructuredPrototypeContractError(
+            "command_target_missing", "prototype page does not exist"
+        )
+    runtime_page_index = next(
+        (
+            index
+            for index, runtime_page_id in enumerate(document.runtime.page_ids)
+            if runtime_page_id == page_id
+        ),
+        None,
+    )
+    if runtime_page_index is None:
+        raise StructuredPrototypeContractError(
+            "command_result_invalid", "prototype runtime page projection is missing"
+        )
+    page = document.pages[page_index]
+    page_node_ids = _node_id_set(page.root)
+    navigation_items = [
+        IndexedNavigationItemV1(index=index, item=item)
+        for index, item in enumerate(document.navigation.items)
+        if item.target_page_id == page_id
+    ]
+    view_bindings = [
+        IndexedRuntimeViewBindingV1(index=index, binding=binding)
+        for index, binding in enumerate(document.runtime.view_bindings)
+        if binding.node_id in page_node_ids
+    ]
+    rules = [
+        IndexedRuntimeRuleV1(index=index, rule=rule)
+        for index, rule in enumerate(document.runtime.rules)
+        if rule.trigger.node_id in page_node_ids
+    ]
+    rule_ids = {entry.rule.id for entry in rules}
+    flows = [
+        IndexedPrototypeFlowV1(index=index, flow=flow)
+        for index, flow in enumerate(document.flows)
+        if flow.rule_id in rule_ids
+    ]
+    flow_layout_positions = [
+        position
+        for position in (document.runtime.flow_layout.nodes if document.runtime.flow_layout else [])
+        if position.node_id == page_id or position.node_id in rule_ids
+    ]
+    return PageProjectionSnapshotV1(
+        page_index=page_index,
+        runtime_page_index=runtime_page_index,
+        page=page,
+        navigation_items=navigation_items,
+        view_bindings=view_bindings,
+        rules=rules,
+        flows=flows,
+        flow_layout_positions=flow_layout_positions,
+    )
+
+
+def _insert_indexed_projection(
+    values: list[object],
+    entries: Iterable[tuple[int, object]],
+    *,
+    label: str,
+) -> None:
+    for index, value in entries:
+        if index > len(values):
+            raise StructuredPrototypeContractError(
+                "inverse_command_invalid",
+                f"page {label} restore index is out of range",
+            )
+        values.insert(index, value)
+
+
+def _restore_page_projection(
+    document: PrototypeDocumentV1,
+    page_id: str,
+    snapshot: PageProjectionSnapshotV1,
+) -> PrototypeDocumentV1:
+    current_page = next((page for page in document.pages if page.id == page_id), None)
+    if current_page is None and snapshot.page is None:
+        raise StructuredPrototypeContractError(
+            "inverse_command_invalid", "page restore has no current or snapshot projection"
+        )
+    current_node_ids = _node_id_set(current_page.root) if current_page is not None else set()
+    current_rule_ids = {
+        rule.id for rule in document.runtime.rules if rule.trigger.node_id in current_node_ids
+    }
+    pages: list[object] = [page for page in document.pages if page.id != page_id]
+    runtime_page_ids: list[object] = [
+        runtime_page_id
+        for runtime_page_id in document.runtime.page_ids
+        if runtime_page_id != page_id
+    ]
+    navigation_items: list[object] = [
+        item for item in document.navigation.items if item.target_page_id != page_id
+    ]
+    view_bindings: list[object] = [
+        binding
+        for binding in document.runtime.view_bindings
+        if binding.node_id not in current_node_ids
+    ]
+    rules: list[object] = [
+        rule for rule in document.runtime.rules if rule.id not in current_rule_ids
+    ]
+    flows: list[object] = [flow for flow in document.flows if flow.rule_id not in current_rule_ids]
+    layout_nodes = [
+        position
+        for position in (document.runtime.flow_layout.nodes if document.runtime.flow_layout else [])
+        if position.node_id != page_id and position.node_id not in current_rule_ids
+    ]
+
+    if snapshot.page is not None:
+        assert snapshot.page_index is not None
+        assert snapshot.runtime_page_index is not None
+        _insert_indexed_projection(
+            pages,
+            [(snapshot.page_index, snapshot.page)],
+            label="document page",
+        )
+        _insert_indexed_projection(
+            runtime_page_ids,
+            [(snapshot.runtime_page_index, page_id)],
+            label="runtime page",
+        )
+        _insert_indexed_projection(
+            navigation_items,
+            [(entry.index, entry.item) for entry in snapshot.navigation_items],
+            label="navigation item",
+        )
+        _insert_indexed_projection(
+            view_bindings,
+            [(entry.index, entry.binding) for entry in snapshot.view_bindings],
+            label="view binding",
+        )
+        _insert_indexed_projection(
+            rules,
+            [(entry.index, entry.rule) for entry in snapshot.rules],
+            label="runtime rule",
+        )
+        _insert_indexed_projection(
+            flows,
+            [(entry.index, entry.flow) for entry in snapshot.flows],
+            label="flow",
+        )
+        layout_nodes.extend(snapshot.flow_layout_positions)
+
+    typed_pages = cast(list[PrototypePageV1], pages)
+    typed_runtime_page_ids = cast(list[str], runtime_page_ids)
+    typed_navigation_items = cast(list[NavigationItemV1], navigation_items)
+    typed_view_bindings = cast(list[RuntimeViewBindingV1], view_bindings)
+    typed_rules = cast(list[RuntimeRuleV1], rules)
+    typed_flows = cast(list[PrototypeFlowV1], flows)
+    flow_layout = (
+        RuntimeFlowLayoutV1(nodes=sorted(layout_nodes, key=lambda item: item.node_id))
+        if layout_nodes
+        else None
+    )
+    navigation = document.navigation.model_copy(update={"items": typed_navigation_items})
+    runtime = document.runtime.model_copy(
+        update={
+            "page_ids": typed_runtime_page_ids,
+            "view_bindings": typed_view_bindings,
+            "rules": typed_rules,
+            "flow_layout": flow_layout,
+        }
+    )
+    updated = document.model_copy(
+        update={
+            "pages": typed_pages,
+            "navigation": navigation,
+            "flows": typed_flows,
+            "runtime": runtime,
+        }
+    )
+    return _validate_command_batch_document(updated)
+
+
+def _require_page_deletable(document: PrototypeDocumentV1, page_id: str) -> None:
+    if len(document.pages) == 1:
+        raise StructuredPrototypeContractError(
+            "command_last_page_delete", "prototype final page cannot be deleted"
+        )
+    page = next((candidate for candidate in document.pages if candidate.id == page_id), None)
+    if page is None:
+        raise StructuredPrototypeContractError(
+            "command_target_missing", "prototype page does not exist"
+        )
+    page_node_ids = _node_id_set(page.root)
+    for rule in document.runtime.rules:
+        if rule.trigger.node_id not in page_node_ids and page_id in _rule_navigate_targets(rule):
+            raise StructuredPrototypeContractError(
+                "command_page_inbound_navigation",
+                f"prototype page is targeted by external runtime rule {rule.key}",
+            )
+    for scenario in document.runtime.scenarios:
+        if scenario.start_page_id == page_id:
+            raise StructuredPrototypeContractError(
+                "command_page_scenario_start",
+                f"prototype page is the start page for runtime scenario {scenario.key}",
+            )
+
+
+def _rename_page(
+    document: PrototypeDocumentV1,
+    *,
+    page_id: str,
+    title: str,
+) -> tuple[PrototypeDocumentV1, set[str]]:
+    pages = list(document.pages)
+    page_index = next(
+        (index for index, page in enumerate(pages) if page.id == page_id),
+        None,
+    )
+    if page_index is None:
+        raise StructuredPrototypeContractError(
+            "command_target_missing", "prototype page does not exist"
+        )
+    pages[page_index] = pages[page_index].model_copy(update={"title": title})
+    navigation_items = [
+        item.model_copy(update={"label": title}) if item.target_page_id == page_id else item
+        for item in document.navigation.items
+    ]
+    affected = {page_id}
+    affected.update(item.id for item in document.navigation.items if item.target_page_id == page_id)
+    navigation = document.navigation.model_copy(update={"items": navigation_items})
+    updated = document.model_copy(update={"pages": pages, "navigation": navigation})
+    return _validate_command_batch_document(updated), affected
+
+
+def _capture_page_title_projection(
+    document: PrototypeDocumentV1,
+    page_id: str,
+) -> PageTitleProjectionSnapshotV1:
+    page = next((candidate for candidate in document.pages if candidate.id == page_id), None)
+    if page is None:
+        raise StructuredPrototypeContractError(
+            "command_target_missing", "prototype page does not exist"
+        )
+    return PageTitleProjectionSnapshotV1(
+        title=page.title,
+        navigation_labels=[
+            NavigationLabelSnapshotV1(item_id=item.id, label=item.label)
+            for item in document.navigation.items
+            if item.target_page_id == page_id
+        ],
+    )
+
+
+def _restore_page_title_projection(
+    document: PrototypeDocumentV1,
+    page_id: str,
+    snapshot: PageTitleProjectionSnapshotV1,
+) -> tuple[PrototypeDocumentV1, set[str]]:
+    pages = list(document.pages)
+    page_index = next(
+        (index for index, page in enumerate(pages) if page.id == page_id),
+        None,
+    )
+    if page_index is None:
+        raise StructuredPrototypeContractError(
+            "command_target_missing", "prototype page does not exist"
+        )
+    pages[page_index] = pages[page_index].model_copy(update={"title": snapshot.title})
+    labels_by_item_id = {entry.item_id: entry.label for entry in snapshot.navigation_labels}
+    current_item_ids = {
+        item.id for item in document.navigation.items if item.target_page_id == page_id
+    }
+    if current_item_ids != set(labels_by_item_id):
+        raise StructuredPrototypeContractError(
+            "inverse_command_invalid",
+            "page title snapshot navigation projection does not match the document",
+        )
+    navigation_items = [
+        item.model_copy(update={"label": labels_by_item_id[item.id]})
+        if item.id in labels_by_item_id
+        else item
+        for item in document.navigation.items
+    ]
+    navigation = document.navigation.model_copy(update={"items": navigation_items})
+    updated = document.model_copy(update={"pages": pages, "navigation": navigation})
+    return _validate_command_batch_document(updated), {page_id, *labels_by_item_id}
+
+
+def _page_projection_entity_ids(
+    snapshot: PageProjectionSnapshotV1,
+    *,
+    page_id: str | None = None,
+) -> set[str]:
+    affected = {page_id} if page_id is not None else set()
+    if snapshot.page is None:
+        return affected
+    affected.add(snapshot.page.id)
+    affected.update(_page_owned_entity_ids(snapshot.page.root))
+    affected.update(entry.item.id for entry in snapshot.navigation_items)
+    affected.update(entry.binding.id for entry in snapshot.view_bindings)
+    affected.update(entry.rule.id for entry in snapshot.rules)
+    affected.update(entry.flow.id for entry in snapshot.flows)
+    return affected
+
+
+def _page_owned_entity_ids(node: UINodeV1) -> set[str]:
+    result = {node.id}
+    if isinstance(node, FreeformNodeV1):
+        result.update(grid.id for grid in node.grids)
+    if isinstance(node, TableNodeV1):
+        result.update(row.id for row in node.rows)
+    children = _node_children(node)
+    if children is not None:
+        for child in children:
+            result.update(_page_owned_entity_ids(child))
+    return result
 
 
 def _node_id_set(node: UINodeV1) -> set[str]:
@@ -3751,23 +4886,20 @@ def _position_node_for_parent(
     node: UINodeV1,
     target_parent: UINodeV1,
     target_position: FreeformPositionV1 | None,
+    *,
+    target_position_is_set: bool,
 ) -> UINodeV1:
     if _node_children(target_parent) is None:
         raise StructuredPrototypeContractError(
             "command_target_invalid", "prototype target node is not a container"
         )
-    if isinstance(target_parent, FreeformNodeV1):
-        if target_position is None:
-            raise StructuredPrototypeContractError(
-                "command_target_invalid",
-                "prototype move into a freeform container requires a target position",
-            )
-    elif target_position is not None:
+    resolved_position = target_position if target_position_is_set else node.layout_item.position
+    if isinstance(target_parent, FreeformNodeV1) and resolved_position is None:
         raise StructuredPrototypeContractError(
             "command_target_invalid",
-            "prototype move into a flow container cannot use a target position",
+            "prototype move into a freeform container requires a target position",
         )
-    layout_item = node.layout_item.model_copy(update={"position": target_position})
+    layout_item = node.layout_item.model_copy(update={"position": resolved_position})
     return node.model_copy(update={"layout_item": layout_item})
 
 

@@ -343,17 +343,25 @@ setLatestTask(task);
 
 - `ProjectRunStatus.running` means the console owns a live child process. Only
   this field grants a Stop action.
-- `ProjectRunStatus.service.state` is explicit probe evidence:
+- `ProjectRunStatus.service.state` is transport/address evidence:
   `reachable`, `unreachable`, `not_configured`, `invalid_url`, or `unknown`.
-  Never infer reachability from process creation.
-- `running=true` plus `service.state=reachable` is managed and ready;
-  `running=true` plus `unreachable` is managed but still starting;
-  `running=false` plus `reachable` is an external/otherwise unowned service.
-- An external reachable service exposes Open but never Stop, and blocks the
-  normal Start action.
-- A long-running process or reachable service completes the **Run** step. The
-  step indicator uses `complete`; reserve a spinner for an unresolved start
-  action, not a steady-state server.
+  Never infer reachability from process creation, and never promote a generic
+  HTTP response into expected-application identity.
+- `ProjectRunStatus.readiness.state` is application evidence:
+  `ready`, `unreachable`, `occupied_unknown`, `identified_unready`, or
+  `invalid_config`. Only `ready` completes the **Run** step or exposes Open for
+  an externally started application.
+- `running=true` plus `readiness=ready` is managed and ready;
+  `running=true` plus any other readiness state is starting or unhealthy;
+  `running=false` plus `readiness=ready` is the correct externally started
+  application; `running=false` plus transport `reachable` but non-ready is an
+  occupied unknown responder.
+- An external ready application exposes Open but never Stop. An occupied unknown
+  responder blocks Start but exposes neither Open nor Stop as if it were the
+  configured application.
+- `invalid_config` is actionable: disable per-service and batch Start, show that
+  startup analysis must be regenerated, and keep the Analyze Again action
+  available.
 - On page load, fetch both status and logs so a previous terminal result remains visible after reload.
 - While `running` is true, poll incremental logs every 2 seconds, append from
   the last sequence number, and patch process `running` / `exit_code` from the
@@ -1312,8 +1320,17 @@ const resolveProjection = (event: PointerEvent) =>
 - Mount the clone in a client-sized host, scale its content-sized inner host from the top-left, and
   remove the cloned element on cancel, successful drop, snapshot replacement, or unmount.
 - The live source becomes transparent while retaining layout space. Selection/drop controls remain
-  in the editor controls layer so the source location is still legible without competing with the
-  mirror.
+  in the editor controls layer for ordinary selection, but the selected node's control chrome is
+  visibility-hidden for an active canvas-node drag (the activator DOM stays mounted for the sensor).
+  Drop indicators remain in the business-node layer and the captured mirror is the only dragged
+  business presentation.
+- Selection resize controls use transparent 32-client-pixel hit areas with compact 8px visual
+  markers. Selection movement has no visible Grip surface: the move activator exposes four
+  invisible 10-client-pixel hit bands on the selection rectangle edges. The selection interior
+  stays pointer-transparent so a selected container does not block nested-child selection.
+  Freeform hierarchy reparenting remains a distinct compact `Layers3` activator.
+- Holding Space disables selection movement and resize before Preview handles pointer-down, so
+  viewport panning cannot start a node transform from an edge hit band.
 - Palette dragging uses the same materialized transient node that hover projection inserts. Render
   the real leaf/container presentation recursively with document theme variables and the frozen
   preview scale; never replace it with a component type/name card or cap child/table content.
@@ -1335,6 +1352,8 @@ const resolveProjection = (event: PointerEvent) =>
   failure message. Existing nodes never fall back to an independently reconstructed React overlay.
 - Hover reparent/remount changes the live source bounds -> keep the captured mirror geometry stable
   for the gesture.
+- Active palette, page-rail, and layer-tree drags -> do not hide canvas selection chrome; only a
+  canvas node drag whose node is selected may hide it.
 - Escape, pointer cancellation, invalid drop, or successful commit -> clear both the node snapshot
   and palette transient node; no cloned identity or focusable surface remains.
 - Palette Form without a selected runtime form definition -> preserve the existing fail-closed
@@ -1346,11 +1365,16 @@ const resolveProjection = (event: PointerEvent) =>
   and theme while the source is transparent.
 - Good: a four-row Table mirror contains all four rows while hover projection moves the source to a
   narrower parent.
+- Good: Fit selection has no visible move icon, keeps four 10px edge hit bands and 32px transparent
+  resize hit areas, renders only 8px resize markers, and hides the selected node's visual control
+  chrome while its business mirror is active.
 - Base: page sorting still shows its compact title and route overlay.
 - Bad: reconstruct a fixed-width card headed `Button / name`; its geometry and content are not the
   object being moved.
 - Bad: render `children.slice(0, 6)` or `rows.slice(0, 3)` in the overlay; the preview silently lies
   about the dragged object.
+- Bad: render a visible Grip on the selected source, or keep its outline and resize buttons visible
+  during node DnD; they follow the transparent source and visually compete with the mirror.
 
 ### 6. Tests Required
 
@@ -1360,6 +1384,11 @@ const resolveProjection = (event: PointerEvent) =>
 - Source contracts prove synchronous capture, `opacity-0`, clone sanitization, prototype custom
   properties, exact mount scale, cleanup, palette materialization, full recursion, and the absence
   of generic card/truncation code.
+- Selection-state tests prove only a selected canvas-node drag or active Freeform move hides visual
+  control chrome. Source contracts prove all four 10px edge bands, no `GripVertical`, independent
+  `Layers3` reparenting, Space-owned panning, mounted activator DOM, and snap guides outside the
+  hidden tools wrappers. Browser acceptance measures the edge and resize geometry and proves Escape
+  restores visible, correctly measured controls.
 - Browser acceptance compares source/mirror client bounds and theme at Fit, 75%, 100%, and 200%;
   verifies full Table content during hover reparenting; checks palette Button appearance; and proves
   Escape removes the overlay and restores source opacity.
@@ -1397,4 +1426,114 @@ setActiveNodeDragMirror(snapshot);
     <StructuredPrototypeDragMirrorView snapshot={activeNodeDragMirror} />
   ) : null}
 </DragOverlay>
+```
+
+---
+
+## Scenario: Structured Prototype Page and Layer Navigator State
+
+### 1. Scope / Trigger
+
+- Trigger: changing the Studio page rail, recursive layer tree, tree keyboard
+  behavior, expansion state, page CRUD, layer rename/visibility, or tree drag.
+- Document mutations are durable commands; focus, expansion, inline-edit, and
+  drop-indicator state are editor presentation and must not change the document
+  hash.
+
+### 2. Signatures
+
+- Rows:
+  `deriveStructuredPrototypeLayerRows(root) -> StructuredPrototypeLayerRowModel[]`.
+- Expansion:
+  `resolveStructuredPrototypeLayerExpandedNodeIds(rows, expanded, selectedNodeId, collapsed)`.
+- Keyboard:
+  `resolveStructuredPrototypeLayerTreeKeyboardAction(visibleRows, expanded, nodeId, key)`.
+- Durable page actions: `addPageBatch`, `duplicatePageBatch`,
+  `renamePageBatch`, `deletePageBatch`, and `reorderPageBatch`.
+- Durable layer actions: `updateNodeNameBatch`, visibility
+  `setNodeProperty`, and `moveNodeBatch`.
+
+### 3. Contracts
+
+- Derive a complete preorder hierarchy, including hidden nodes. Only rows whose
+  ancestors are effectively expanded are rendered.
+- Keep `expandedNodeIds`, `collapsedNodeIds`, focus, and inline rename state
+  local and keyed by page root. None belongs in the structured document.
+- Canvas selection automatically expands every ancestor needed to reveal the
+  selected node. An explicit user collapse overrides that reveal for the
+  current selection; changing selection invalidates the old collapse override
+  and reveals the new path.
+- Implement a real ARIA tree with one roving `tabIndex=0` treeitem. Arrow Up/Down
+  move through visible rows; Home/End move to bounds; Right expands or enters a
+  child; Left collapses or focuses the parent; Enter/Space selects; F2 renames;
+  V toggles visibility.
+- Child action buttons use `tabIndex=-1`; every operation remains available by
+  pointer without adding five Tab stops per row.
+- before/inside/after tree drops resolve through one typed projection. Invalid
+  self, descendant, stale, and cross-parent Freeform drops leave the document
+  unchanged and produce a visible error in desktop and mobile navigators.
+- Every accepted page/layer mutation calls the shared Studio command controller
+  once. Local state may select the created page or reveal a node only after the
+  authoritative result identifies it.
+
+### 4. Validation & Error Matrix
+
+- Selected node is absent from the active root -> fall back focus to the root;
+  do not invent a row.
+- Explicitly collapsed ancestor with unchanged selection -> keep descendants
+  hidden and focus on a visible row.
+- Selection changes to another nested node -> discard the previous selection's
+  collapse override and reveal the new ancestor path.
+- Empty layer/page name -> inline visible error; no command.
+- Invalid or unchanged drop -> visible refusal or no-op as classified; no
+  document sequence advance.
+- Accepted command returns no expected created/deleted identity -> visible
+  failure; do not guess from a localized title.
+
+### 5. Good/Base/Bad Cases
+
+- Good: canvas selection of a fourth-level hidden node expands its ancestors,
+  selects one treeitem, and keeps the node available for visibility changes.
+- Good: a user collapses that ancestor, then selects another node; the new
+  selection is revealed instead of inheriting stale suppression.
+- Base: a one-level page root exposes one roving treeitem and no fake children.
+- Bad: persist expanded IDs into the document and advance the command hash when
+  the user clicks a chevron.
+- Bad: put `tabIndex=0` on every row button or treat the tree as an unordered
+  list with no Left/Right hierarchy semantics.
+
+### 6. Tests Required
+
+- Pure model tests cover complete preorder rows, hidden nodes, selection-driven
+  expansion, explicit collapse override, selection change, and every keyboard
+  key at first/middle/last rows.
+- Drop tests cover before/inside/after, same-parent index adjustment, self,
+  descendant, stale metadata, and cross-parent Freeform refusal.
+- Source/component tests prove one roving treeitem, ARIA levels/selection,
+  durable callbacks, local expansion, and mobile visible errors.
+- Browser acceptance covers canvas/tree selection sync, F2 rename, V visibility,
+  Undo/Redo, reload persistence, page CRUD/reorder, valid drops, and a refused
+  descendant drop at desktop and mobile widths.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```tsx
+{rows.map((row) => <button tabIndex={0}>{row.node.name}</button>)}
+```
+
+Correct:
+
+```tsx
+<div role="tree">
+  {visibleRows.map((row) => (
+    <div
+      role="treeitem"
+      aria-level={row.depth + 1}
+      tabIndex={row.node.id === focusedNodeId ? 0 : -1}
+      onKeyDown={(event) => dispatchTreeKeyboardAction(row, event)}
+    />
+  ))}
+</div>
 ```

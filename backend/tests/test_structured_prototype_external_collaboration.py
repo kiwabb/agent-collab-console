@@ -212,10 +212,15 @@ async def test_external_proposal_uses_the_studio_preview_and_apply_pipeline(
         )
         assert context.revision.document_hash == draft.head_document_hash
         assert {
+            "addPage",
+            "deletePage",
+            "duplicatePage",
+            "renamePage",
             "reorderNavigationItem",
             "addBehaviorRule",
             "replaceBehaviorRule",
             "removeBehaviorRule",
+            "updateNodeName",
         } <= set(context.supported_command_kinds)
         assert context.context["selectedNodes"]
         command_schema = context.context["commandBatchSchema"]
@@ -228,6 +233,11 @@ async def test_external_proposal_uses_the_studio_preview_and_apply_pipeline(
         assert "AddBehaviorRuleCommandV1" in command_schema["$defs"]
         assert "ReplaceBehaviorRuleCommandV1" in command_schema["$defs"]
         assert "RemoveBehaviorRuleCommandV1" in command_schema["$defs"]
+        assert "AddPageCommandV1" in command_schema["$defs"]
+        assert "DuplicatePageCommandV1" in command_schema["$defs"]
+        assert "RenamePageCommandV1" in command_schema["$defs"]
+        assert "DeletePageCommandV1" in command_schema["$defs"]
+        assert "UpdateNodeNameCommandV1" in command_schema["$defs"]
         document_slice = await collaboration.get_document_slice(
             pairing,
             GetDocumentSliceV1.model_validate(

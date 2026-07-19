@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   resolveStructuredPrototypeFreeformGroupSelection,
   resolveStructuredPrototypeFreeformSelection,
+  resolveStructuredPrototypePositionedGroupSelection,
+  resolveStructuredPrototypePositionedSelection,
 } from "../src/features/prototype/structured/structuredPrototypeGroupSelection";
 import type {
   StructuredPrototypeFreeformNode,
@@ -76,6 +78,37 @@ function stack(children: StructuredPrototypeNode[]): StructuredPrototypeNode {
   };
 }
 
+function grid(children: StructuredPrototypeNode[]): StructuredPrototypeNode {
+  return {
+    id: "root-grid",
+    type: "Grid",
+    name: "Grid",
+    visibility: "visible",
+    layoutItem: AUTO_LAYOUT,
+    responsive: [],
+    columns: 2,
+    gap: 12,
+    padding: { top: 0, right: 0, bottom: 0, left: 0 },
+    columnOverrides: [],
+    children,
+  };
+}
+
+function form(children: StructuredPrototypeNode[]): StructuredPrototypeNode {
+  return {
+    id: "root-form",
+    type: "Form",
+    name: "Form",
+    visibility: "visible",
+    layoutItem: AUTO_LAYOUT,
+    responsive: [],
+    formDefinitionId: "form-definition",
+    gap: 12,
+    padding: { top: 0, right: 0, bottom: 0, left: 0 },
+    children,
+  };
+}
+
 test("a freeform group resolves direct siblings in selection order", () => {
   const root = stack([freeform("canvas", [textNode("one", 20, 40), textNode("two", 120, 90)])]);
   const selection = resolveStructuredPrototypeFreeformGroupSelection(root, ["two", "one"]);
@@ -97,6 +130,38 @@ test("a freeform positioned selection resolves one direct child for keyboard nud
     selection?.items.map(({ node, x, y }) => ({ nodeId: node.id, x, y })),
     [{ nodeId: "one", x: 20, y: 40 }],
   );
+});
+
+test("positioned selections resolve same-parent Stack, Grid, and Form children", () => {
+  const roots = [
+    stack([textNode("one", 20, 40), textNode("two", 120, 90)]),
+    grid([textNode("one", 20, 40), textNode("two", 120, 90)]),
+    form([textNode("one", 20, 40), textNode("two", 120, 90)]),
+  ];
+
+  for (const root of roots) {
+    const selection = resolveStructuredPrototypePositionedGroupSelection(root, ["two", "one"]);
+    assert.equal(selection?.parent.id, root.id);
+    assert.deepEqual(
+      selection?.items.map(({ node, x, y }) => ({ nodeId: node.id, x, y })),
+      [
+        { nodeId: "two", x: 120, y: 90 },
+        { nodeId: "one", x: 20, y: 40 },
+      ],
+    );
+    assert.equal(resolveStructuredPrototypeFreeformGroupSelection(root, ["two", "one"]), null);
+  }
+});
+
+test("positioned selection rejects flow children and different parents", () => {
+  const mixed = stack([textNode("positioned", 20, 40), textNode("flow")]);
+  assert.equal(
+    resolveStructuredPrototypePositionedGroupSelection(mixed, ["positioned", "flow"]),
+    null,
+  );
+
+  const root = stack([stack([textNode("one", 20, 40)]), grid([textNode("two", 120, 90)])]);
+  assert.equal(resolveStructuredPrototypePositionedSelection(root, ["one", "two"]), null);
 });
 
 test("a group rejects single selections, ordinary layout children, and duplicate ids", () => {

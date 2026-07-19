@@ -781,6 +781,22 @@ return publication
 
 ### 3. Contracts
 
+- Every newly saved startup service includes a required `readiness_probe` with
+  `kind="http"`, a loopback-only URL, exact expected status, and one strict
+  identity predicate: bounded `json_subset` or literal `text_contains`.
+- Persist `readiness_probe` as JSON per service. Migrated legacy rows use
+  `NULL`; loading them is allowed only so the API/UI can report
+  `startup_config_invalid` and direct the user to re-analyze. They are not
+  runnable.
+- Address reachability, application readiness, and console-owned process
+  liveness remain separate status dimensions. Any HTTP response proves address
+  occupation; only a matcher pass at the expected status proves ready.
+- Readiness responses are bounded to 64 KiB, redirects and environment proxies
+  stay disabled, malformed/oversized/mismatched bodies fail closed, and all
+  targets pass the existing loopback URL canonicalizer.
+- An occupied address blocks automatic start with
+  `service_address_occupied`, never with copy that claims the expected service
+  is already running.
 - Claude receives the repository root and output/safety contract, then uses its
   own Glob/Grep/Read tools. Do not serialize a fixed evidence-file whitelist or
   source excerpts into the prompt.
@@ -879,4 +895,100 @@ if graph_status == "done":
         logging.getLogger(__name__).warning("self_improvement extraction failed: %s", exc)
 issue.status = "completed"
 await store.save_codex_issue(issue)
+```
+
+---
+
+## Scenario: Structured Prototype Navigator Command and Inverse Boundaries
+
+### 1. Scope / Trigger
+
+- Trigger: changing structured-prototype page CRUD, node rename, command-size
+  validation, generated inverse commands, Undo/Redo, or journal replay.
+- A small user request can legitimately produce a large inverse snapshot. The
+  request boundary and the server-owned recovery payload are different trust
+  boundaries and must not share one byte limit.
+
+### 2. Signatures
+
+- Execution:
+  `execute_command_batch(document, batch, draft_id, client_request_id) -> CommandExecutionResultV1`.
+- Forward limit: `PROTOTYPE_FORWARD_COMMAND_BATCH_MAX_BYTES = 256 * 1024`.
+- Page commands: `addPage`, `duplicatePage`, `renamePage`, and `deletePage`.
+- User rename: `updateNodeName { nodeId, name: CommandNodeName }`.
+- Generated inverse rename:
+  `restoreNodeName { nodeId, name: string[1..80] }`.
+- Journal payloads remain
+  `(commands_json, inverse_commands_json, operation_kind, target_batch_id)`.
+
+### 3. Contracts
+
+- Apply the 256 KiB limit only to the canonical serialized
+  `DomainCommandBatchV1` submitted as a forward operation. Enforce it during
+  execution, forward journal append, and forward replay validation.
+- Never apply the forward-request limit to server-generated
+  `InverseCommandBatchV1`, or to the inverse payload stored as the commands of
+  an Undo/Redo entry. A page deletion may need to snapshot the complete page,
+  nodes, rows, rules, navigation, and bindings.
+- Every inverse command must reconstruct the exact accepted preimage, not only
+  values that a new user command is allowed to create.
+- `updateNodeName` requires a non-whitespace name. `restoreNodeName` accepts the
+  complete persisted schema range, including a historical whitespace-only
+  value, so repairing that value remains reversible.
+- Generated page and node IDs stay deterministic under retry and replay, and
+  `runtime.pageIds` stays exactly aligned with ordered `pages[].id` after every
+  page command and inverse.
+
+### 4. Validation & Error Matrix
+
+- Canonical user forward batch exceeds 256 KiB ->
+  `command_batch_too_large`; no document or journal mutation.
+- Stored forward entry exceeds 256 KiB -> fail closed as corrupt history.
+- Canonical generated inverse exceeds 256 KiB -> accept and persist; size alone
+  is not corruption.
+- `updateNodeName` is empty or whitespace-only -> contract rejection.
+- `restoreNodeName` contains a historical whitespace-only schema value ->
+  accept for exact Undo/Redo.
+- Inverse payload is non-canonical, structurally invalid, or references a
+  missing target -> typed inverse/replay corruption error.
+
+### 5. Good/Base/Bad Cases
+
+- Good: deleting a large page stores a large `restorePageProjection` inverse,
+  then Undo restores the byte-equivalent page graph.
+- Good: renaming a legacy blank-looking node creates `restoreNodeName` and Undo
+  restores the original persisted value exactly.
+- Base: a small rename has small forward and inverse payloads.
+- Bad: reject page deletion because its generated inverse is larger than the
+  incoming request.
+- Bad: reuse `CommandNodeName` for `restoreNodeName`, making a valid repair
+  impossible to undo.
+
+### 6. Tests Required
+
+- Contract: forward batches immediately below/above 256 KiB accept/refuse at
+  the user boundary.
+- Contract/store/service: a small delete with an inverse larger than 256 KiB
+  appends, replays, Undoes, and Redoes without weakening canonical validation.
+- Contract: `updateNodeName` rejects whitespace while `restoreNodeName` accepts
+  every value allowed by the persisted node schema.
+- Page CRUD: deterministic ID remapping, reference cleanup/refusal,
+  `runtime.pageIds`, command hash, replay, Undo, and Redo remain aligned.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+for payload in (commands_json, inverse_commands_json):
+    if len(payload.encode("utf-8")) > MAX_BYTES:
+        raise CommandBatchTooLarge()
+```
+
+Correct:
+
+```python
+if operation_kind == "forward" and len(commands_json.encode("utf-8")) > MAX_BYTES:
+    raise CommandBatchTooLarge()
+parse_inverse_command_batch_json(inverse_commands_json)  # canonical and typed, not request-sized
 ```

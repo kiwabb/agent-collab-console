@@ -51,6 +51,7 @@ def build_execution_process_view(
         "logs": [
             {
                 "id": log.id,
+                "session_id": log.session_id,
                 "stream": log.stream,
                 "content": log.content,
                 "task_id": log.task_id,

@@ -36,11 +36,14 @@ from app.application.structured_prototype_contracts import (
     COMMAND_HISTORY_CHECKPOINT_SCHEMA_VERSION,
     DOCUMENT_SCHEMA_VERSION,
     AddBehaviorRuleCommandV1,
+    AddPageCommandV1,
     AllPredicateV1,
     ComparePredicateV1,
     CreateEntityEffectV1,
+    DeletePageCommandV1,
     DomainCommandBatchV1,
     DomainCommandV1,
+    DuplicatePageCommandV1,
     EntityFieldExpressionV1,
     EntityRefRuntimeValueV1,
     EventEntityRefExpressionV1,
@@ -61,6 +64,7 @@ from app.application.structured_prototype_contracts import (
     PrototypePageV1,
     RemoveBehaviorRuleCommandV1,
     RemoveNodeCommandV1,
+    RenamePageCommandV1,
     ReplaceBehaviorRuleCommandV1,
     RoleIsPredicateV1,
     RuntimeEffectV1,
@@ -86,6 +90,7 @@ from app.application.structured_prototype_contracts import (
     TextViewBindingV1,
     UINodeV1,
     UpdateEntityEffectV1,
+    UpdateNodeNameCommandV1,
     ValidateFormEffectV1,
     VariableExpressionV1,
     VisibilityViewBindingV1,
@@ -2395,6 +2400,23 @@ class StructuredPrototypeAiService:
             | _runtime_scope_ids(_runtime_scope_slice(document, allowed_node_ids))
         )
         for command in batch.commands:
+            if isinstance(command, AddPageCommandV1):
+                if selection.scope != "page" or command.after_page_id != page.id:
+                    raise StructuredPrototypeAiServiceError(
+                        "scope_violation",
+                        "prototype AI page add exceeds the selected scope",
+                    )
+                continue
+            if isinstance(
+                command,
+                (DuplicatePageCommandV1, RenamePageCommandV1, DeletePageCommandV1),
+            ):
+                if selection.scope != "page" or command.page_id != page.id:
+                    raise StructuredPrototypeAiServiceError(
+                        "scope_violation",
+                        "prototype AI page command exceeds the selected scope",
+                    )
+                continue
             if command.kind == "reorderPage":
                 if selection.scope != "page" or command.page_id != page.id:
                     raise StructuredPrototypeAiServiceError(
@@ -3112,6 +3134,15 @@ def _command_existing_ids(command: DomainCommandV1) -> set[str]:
         return {command.rule_id}
     if isinstance(command, RemoveNodeCommandV1):
         return {command.node_id}
+    if isinstance(command, UpdateNodeNameCommandV1):
+        return {command.node_id}
+    if isinstance(command, AddPageCommandV1):
+        return {command.after_page_id}
+    if isinstance(
+        command,
+        (DuplicatePageCommandV1, RenamePageCommandV1, DeletePageCommandV1),
+    ):
+        return {command.page_id}
     if isinstance(command, InsertNodeCommandV1):
         return {command.parent.node_id} if isinstance(command.parent, ExistingNodeRefV1) else set()
     if isinstance(command, MoveNodeCommandV1):

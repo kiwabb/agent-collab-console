@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import shutil
+import time
 from contextlib import suppress
 from pathlib import Path
 from typing import Literal, TypeVar
@@ -23,6 +25,8 @@ _MAX_MANIFEST_BYTES = 128 * 1024
 _MAX_STDOUT_BYTES = 8 * 1024 * 1024
 _MAX_STDERR_BYTES = 64 * 1024
 _DEFAULT_TIMEOUT_S = 5.0
+
+logger = logging.getLogger(__name__)
 
 
 class PrototypeRuntimeWorkerError(RuntimeError):
@@ -480,6 +484,7 @@ class PrototypeRuntimeWorker:
         response_model: type[ResponseModel],
     ) -> ResponseModel:
         self._verify_bundle()
+        started_at = time.monotonic()
         request_id_value = request["requestId"]
         if not isinstance(request_id_value, str) or not request_id_value:
             raise ValueError("prototype runtime worker request id must not be empty")
@@ -513,10 +518,28 @@ class PrototypeRuntimeWorker:
                 with suppress(ProcessLookupError):
                     process.kill()
                 await process.wait()
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            logger.error(
+                "prototype runtime worker timed out: action=%s request_id=%s "
+                "timeout_s=%.3f elapsed_ms=%d",
+                action,
+                request_id_value,
+                self.timeout_s,
+                elapsed_ms,
+            )
             raise PrototypeRuntimeWorkerError(
                 "runtime_worker_timeout",
                 "prototype runtime worker exceeded its execution deadline",
             ) from exc
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        logger.info(
+            "prototype runtime worker process exited: action=%s request_id=%s "
+            "timeout_s=%.3f elapsed_ms=%d",
+            action,
+            request_id_value,
+            self.timeout_s,
+            elapsed_ms,
+        )
         if len(stdout) > _MAX_STDOUT_BYTES or len(stderr) > _MAX_STDERR_BYTES:
             raise PrototypeRuntimeWorkerError(
                 "runtime_worker_output_too_large",

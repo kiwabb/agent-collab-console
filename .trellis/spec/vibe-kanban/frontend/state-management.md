@@ -468,3 +468,113 @@ Correct:
 
 const brief = structuredPrototypeGenerationBrief(optionalGuidance);
 ```
+
+---
+
+## Scenario: Structured Prototype Page and Layer Navigator State
+
+### 1. Scope / Trigger
+
+- Trigger: changing the Studio page rail, recursive layer tree, tree keyboard
+  behavior, expansion state, page CRUD, layer rename/visibility, or tree drag.
+- Document mutations are durable commands; focus, expansion, inline-edit, and
+  drop-indicator state are editor presentation and must not change the document
+  hash.
+
+### 2. Signatures
+
+- Rows:
+  `deriveStructuredPrototypeLayerRows(root) -> StructuredPrototypeLayerRowModel[]`.
+- Expansion:
+  `resolveStructuredPrototypeLayerExpandedNodeIds(rows, expanded, selectedNodeId, collapsed)`.
+- Keyboard:
+  `resolveStructuredPrototypeLayerTreeKeyboardAction(visibleRows, expanded, nodeId, key)`.
+- Durable page actions: `addPageBatch`, `duplicatePageBatch`,
+  `renamePageBatch`, `deletePageBatch`, and `reorderPageBatch`.
+- Durable layer actions: `updateNodeNameBatch`, visibility
+  `setNodeProperty`, and `moveNodeBatch`.
+
+### 3. Contracts
+
+- Derive a complete preorder hierarchy, including hidden nodes. Only rows whose
+  ancestors are effectively expanded are rendered.
+- Keep `expandedNodeIds`, `collapsedNodeIds`, focus, and inline rename state
+  local and keyed by page root. None belongs in the structured document.
+- Canvas selection automatically expands every ancestor needed to reveal the
+  selected node. An explicit user collapse overrides that reveal for the
+  current selection; changing selection invalidates the old collapse override
+  and reveals the new path.
+- Implement a real ARIA tree with one roving `tabIndex=0` treeitem. Arrow Up/Down
+  move through visible rows; Home/End move to bounds; Right expands or enters a
+  child; Left collapses or focuses the parent; Enter/Space selects; F2 renames;
+  V toggles visibility.
+- Child action buttons use `tabIndex=-1`; every operation remains available by
+  pointer without adding five Tab stops per row.
+- before/inside/after tree drops resolve through one typed projection. Invalid
+  self, descendant, stale, and cross-parent Freeform drops leave the document
+  unchanged and produce a visible error in desktop and mobile navigators.
+- Every accepted page/layer mutation calls the shared Studio command controller
+  once. Local state may select the created page or reveal a node only after the
+  authoritative result identifies it.
+
+### 4. Validation & Error Matrix
+
+- Selected node is absent from the active root -> fall back focus to the root;
+  do not invent a row.
+- Explicitly collapsed ancestor with unchanged selection -> keep descendants
+  hidden and focus on a visible row.
+- Selection changes to another nested node -> discard the previous selection's
+  collapse override and reveal the new ancestor path.
+- Empty layer/page name -> inline visible error; no command.
+- Invalid or unchanged drop -> visible refusal or no-op as classified; no
+  document sequence advance.
+- Accepted command returns no expected created/deleted identity -> visible
+  failure; do not guess from a localized title.
+
+### 5. Good/Base/Bad Cases
+
+- Good: canvas selection of a fourth-level hidden node expands its ancestors,
+  selects one treeitem, and keeps the node available for visibility changes.
+- Good: a user collapses that ancestor, then selects another node; the new
+  selection is revealed instead of inheriting stale suppression.
+- Base: a one-level page root exposes one roving treeitem and no fake children.
+- Bad: persist expanded IDs into the document and advance the command hash when
+  the user clicks a chevron.
+- Bad: put `tabIndex=0` on every row button or treat the tree as an unordered
+  list with no Left/Right hierarchy semantics.
+
+### 6. Tests Required
+
+- Pure model tests cover complete preorder rows, hidden nodes, selection-driven
+  expansion, explicit collapse override, selection change, and every keyboard
+  key at first/middle/last rows.
+- Drop tests cover before/inside/after, same-parent index adjustment, self,
+  descendant, stale metadata, and cross-parent Freeform refusal.
+- Source/component tests prove one roving treeitem, ARIA levels/selection,
+  durable callbacks, local expansion, and mobile visible errors.
+- Browser acceptance covers canvas/tree selection sync, F2 rename, V visibility,
+  Undo/Redo, reload persistence, page CRUD/reorder, valid drops, and a refused
+  descendant drop at desktop and mobile widths.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```tsx
+{rows.map((row) => <button tabIndex={0}>{row.node.name}</button>)}
+```
+
+Correct:
+
+```tsx
+<div role="tree">
+  {visibleRows.map((row) => (
+    <div
+      role="treeitem"
+      aria-level={row.depth + 1}
+      tabIndex={row.node.id === focusedNodeId ? 0 : -1}
+      onKeyDown={(event) => dispatchTreeKeyboardAction(row, event)}
+    />
+  ))}
+</div>
+```

@@ -9,6 +9,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api")
 public class AdminController {
+    @GetMapping("/health/ready")
+    public ReadinessResponse readiness() {
+        return new ReadinessResponse("admin-demo-backend", "ready");
+    }
+
     @GetMapping("/dashboard")
     public DashboardResponse dashboard() {
         return new DashboardResponse(
@@ -43,6 +48,7 @@ public class AdminController {
                 new OrderResponse("NS-20260710-1029", "北辰教育", "企业协作专业版", new BigDecimal("12999"), "paid", "2026-07-10 11:35"));
     }
 
+    public record ReadinessResponse(String service, String status) {}
     public record DashboardResponse(int totalUsers, int activeOrders, BigDecimal monthlyRevenue, BigDecimal conversionRate, List<Activity> recentActivities) {}
     public record Activity(long id, String description, String occurredAt, String type) {}
     public record UserResponse(long id, String name, String email, String role, String status, String joinedAt) {}

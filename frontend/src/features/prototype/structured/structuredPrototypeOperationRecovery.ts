@@ -37,6 +37,23 @@ export class StructuredPrototypeOperationOutcomeError extends Error {
   }
 }
 
+export function resolveStructuredPrototypeRecoveredOperationFailure(
+  requestError: unknown,
+  recoveryError: unknown,
+): unknown {
+  if (
+    requestError instanceof StructuredPrototypeApiError &&
+    recoveryError instanceof StructuredPrototypeOperationOutcomeError &&
+    requestError.operationId !== null &&
+    requestError.operationId === recoveryError.outcome.operationId &&
+    requestError.correlationId === recoveryError.outcome.correlationId &&
+    requestError.code === recoveryError.outcome.errorCode
+  ) {
+    return requestError;
+  }
+  return recoveryError;
+}
+
 interface StructuredPrototypeOperationOutcomePollOptions {
   maxAttempts?: number;
   intervalMs?: number;

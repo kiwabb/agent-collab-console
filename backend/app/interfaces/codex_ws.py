@@ -59,6 +59,7 @@ def _json_frame(value: object) -> JsonFrame:
 WORKSPACE_QUEUE_MAXSIZE = timeouts.ws_workspace_queue_maxsize()
 LOG_QUEUE_MAXSIZE = timeouts.ws_log_queue_maxsize()
 MESSAGE_QUEUE_MAXSIZE = timeouts.ws_message_queue_maxsize()
+WORKSPACE_PROCESS_LOG_LIMIT = 1000
 
 _QUEUE_CLOSED = object()  # sentinel: tells the sender task to stop and close
 _PONG = object()  # sentinel: tells the sender task to send_text("pong")
@@ -280,13 +281,22 @@ class ExecutionProcessWorkspaceStreamManager:
         process_ids = {process.id for process in processes}
         self._refresh_approval_state_from_runtime(workspace_id, process_ids)
         runtime_rows = (
-            await self._maybe_await(codex_store.list_execution_process_runtime_rows(workspace_id))
+            await self._maybe_await(
+                codex_store.list_execution_process_runtime_rows(
+                    workspace_id,
+                    log_limit=WORKSPACE_PROCESS_LOG_LIMIT,
+                )
+            )
             if codex_store
             else []
         )
         execution_processes = {
             process.id: self._serialize_process(
-                process, task, messages, logs, self._approval_states.get(process.id)
+                process,
+                task,
+                messages,
+                logs[-WORKSPACE_PROCESS_LOG_LIMIT:],
+                self._approval_states.get(process.id),
             )
             for process, task, messages, logs in runtime_rows
         }
@@ -476,11 +486,42 @@ class ExecutionProcessWorkspaceStreamManager:
         log: JsonFrame,
         execution_process_id: str | None = None,
     ) -> None:
-        await self.publish_execution_process(
-            workspace_id,
-            execution_process_id=execution_process_id,
-            task_id=task_id,
+        if not self._subscribers.get(workspace_id):
+            return
+
+        process_id = await self._resolve_execution_process_id(task_id, execution_process_id)
+        if process_id is None:
+            return
+
+        state = self._states.get(workspace_id)
+        process_view = state["execution_processes"].get(process_id) if state is not None else None
+        if process_view is None:
+            await self._publish_execution_process_view(
+                workspace_id,
+                task_id=task_id,
+                execution_process_id=process_id,
+            )
+            return
+
+        logs = cast(list[JsonFrame], process_view["logs"])
+        patch: JsonPatch = []
+        if len(logs) >= WORKSPACE_PROCESS_LOG_LIMIT:
+            logs.pop(0)
+            patch.append(
+                {
+                    "op": "remove",
+                    "path": f"/execution_processes/{process_id}/logs/0",
+                }
+            )
+        logs.append(log)
+        patch.append(
+            {
+                "op": "add",
+                "path": f"/execution_processes/{process_id}/logs/-",
+                "value": log,
+            }
         )
+        await self.publish_patch(workspace_id, patch)
 
     async def update_approval(
         self,

@@ -15,13 +15,14 @@ test("Freeform positioned nodes expose independent move and hierarchy drag paths
 
   assert.match(sortableNode, /disabled: props\.dragDisabled \|\| !props\.editing/);
   assert.doesNotMatch(sortableNode, /disabled:.*layoutItem\.position/);
-  assert.match(controlsLayer, /data-prototype-freeform-move-handle="true"/);
+  assert.match(controlsLayer, /data-prototype-selection-move-surface="freeform"/);
   assert.match(controlsLayer, /data-prototype-freeform-layer-handle="true"/);
   assert.match(controlsLayer, /prototype\.structured\.canvas\.reparent/);
   assert.match(controlsLayer, /ref=\{sortableControls\.setActivatorNodeRef\}/);
+  assert.doesNotMatch(canvas, /GripVertical/);
 });
 
-test("Freeform selection controls remeasure every transform draft before paint", () => {
+test("Freeform selection controls skip hidden draft measurement and remeasure on restore", () => {
   const canvas = readCompactSource("features/prototype/structured/StructuredPrototypeCanvas.tsx");
   const controlsLayerStart = canvas.indexOf("function StructuredPrototypeSelectionControlsLayer");
   const canvasRootStart = canvas.indexOf("export function StructuredPrototypeCanvas");
@@ -30,13 +31,17 @@ test("Freeform selection controls remeasure every transform draft before paint",
 
   assert.match(
     controlsLayer,
-    /useLayoutEffect\(\(\) => \{measure\(\);\}, \[freeformMoveDraft, measure, resizeDraft\]\)/,
+    /useLayoutEffect\(\(\) => \{if \(!selectionChromeHidden\) measure\(\);\}, \[freeformMoveDraft, measure, resizeDraft, selectionChromeHidden\]\)/,
   );
+  assert.match(controlsLayer, /const selectionChromeHidden = selectionChromeState !== "visible"/);
 });
 
-test("Freeform controls expose a shared group move handle and all eight resize directions", () => {
+test("Freeform controls move from the group selection edges and expose all resize directions", () => {
   const canvas = readCompactSource("features/prototype/structured/StructuredPrototypeCanvas.tsx");
-  assert.match(canvas, /data-prototype-freeform-group-move-handle="true"/);
+  assert.match(canvas, /data-prototype-selection-move-surface="group-freeform"/);
+  assert.match(canvas, /SELECTION_MOVE_EDGE_HIT_SIZE = 10/);
+  assert.match(canvas, /GROUP_RESIZE_HANDLES/);
+  assert.match(canvas, /data-prototype-resize-direction=\{handle\.direction\}/);
   for (const direction of [
     "north",
     "northeast",
@@ -47,11 +52,11 @@ test("Freeform controls expose a shared group move handle and all eight resize d
     "west",
     "northwest",
   ]) {
-    assert.match(canvas, new RegExp(`data-prototype-resize-direction="${direction}"`));
+    assert.match(canvas, new RegExp(`direction: "${direction}"`));
   }
 });
 
-test("Freeform selection controls expose bounded arrow-key nudging", () => {
+test("positioned selection controls expose bounded arrow-key nudging", () => {
   const canvas = readCompactSource("features/prototype/structured/StructuredPrototypeCanvas.tsx");
   const studio = readCompactSource(
     "features/prototype/structured/StructuredPrototypeStudioPage.tsx",
@@ -63,8 +68,11 @@ test("Freeform selection controls expose bounded arrow-key nudging", () => {
     assert.match(canvas, new RegExp(`case "${key}"`));
   }
   assert.match(canvas, /resolveStructuredPrototypeSelectionNudge/);
-  assert.match(studio, /summary: `Nudge \$\{items\.length\} freeform component/);
-  assert.match(studio, /setFreeformGroupLayoutBatch\(changedItems, "position", options\.summary\)/);
+  assert.match(studio, /summary: `Nudge \$\{items\.length\} positioned component/);
+  assert.match(
+    studio,
+    /setPositionedGroupLayoutBatch\(changedItems, "position", options\.summary\)/,
+  );
 });
 
 test("Freeform transform lifecycle clears stale errors and preserves failed commits", () => {
@@ -155,7 +163,7 @@ test("Freeform move snapping freezes one gesture frame and projects preview and 
   assert.match(canvas, /const deltaY = rawFreeformMoveDraft\.y - groupY/);
   assert.match(
     canvas,
-    /groupItems: freeformGroupSelection\.items\.map\(\(item\) => \(\{nodeId: item\.node\.id, x: item\.x \+ deltaX, y: item\.y \+ deltaY,?\}\)\)/,
+    /groupItems: positionedGroupSelection\.items\.map\(\(item\) => \(\{nodeId: item\.node\.id, x: item\.x \+ deltaX, y: item\.y \+ deltaY,?\}\)\)/,
   );
 });
 
@@ -181,7 +189,7 @@ test("Freeform move guides exist only for active previews and clear on every ter
   assert.match(moveHook, /endGesture\("unmount"\);\s*endCommit\("unmount"\)/);
 });
 
-test("Freeform move snapping freezes visible direct siblings and renders guides in controls chrome", () => {
+test("positioned move snapping freezes direct siblings and limits layout grids to Freeform", () => {
   const canvas = readCompactSource("features/prototype/structured/StructuredPrototypeCanvas.tsx");
   const controlsLayerStart = canvas.indexOf("function StructuredPrototypeSelectionControlsLayer");
   const canvasRootStart = canvas.indexOf("export function StructuredPrototypeCanvas");
@@ -189,7 +197,7 @@ test("Freeform move snapping freezes visible direct siblings and renders guides 
   const controlsLayer = canvas.slice(controlsLayerStart, canvasRootStart);
   const canvasRoot = canvas.slice(canvasRootStart);
 
-  assert.match(canvasRoot, /const resolveFreeformSnapContext = useCallback/);
+  assert.match(canvasRoot, /const resolvePositionedSnapContext = useCallback/);
   assert.match(canvasRoot, /const directSiblings = parent\.children\.flatMap/);
   assert.match(canvasRoot, /selectedNodeIdSet\.has\(child\.id\)/);
   assert.match(canvasRoot, /child\.visibility === "hidden"/);
@@ -200,7 +208,18 @@ test("Freeform move snapping freezes visible direct siblings and renders guides 
     canvasRoot,
     /registration\.ancestorNodeIds\[registration\.ancestorNodeIds\.length - 1\] !== parent\.id/,
   );
-  assert.match(canvasRoot, /resolveStructuredPrototypeFreeformSelection\(page\.root, \[nodeId\]\)/);
+  assert.match(
+    canvasRoot,
+    /resolveStructuredPrototypePositionedSelection\(page\.root, \[nodeId\]\)/,
+  );
+  assert.match(
+    canvasRoot,
+    /grids: parent\.type === "Freeform" \? resolveStructuredPrototypeFreeformGrids\(parent\) : \[\]/,
+  );
+  assert.match(
+    canvasRoot,
+    /gridSnappingEnabled: parent\.type === "Freeform" && props\.gridSnappingEnabled/,
+  );
   assert.match(canvasRoot, /guideOverlayFrame: \{/);
 
   assert.match(controlsLayer, /projectStructuredPrototypeFreeformSnapGuides/);
@@ -300,7 +319,7 @@ test("Freeform resize snapping freezes one start frame and shares exact event-lo
   const pointerMove = canvas.slice(pointerMoveStart, pointerUpStart);
   const pointerUp = canvas.slice(pointerUpStart, pointerCancelStart);
   const contextIndex = pointerDown.indexOf(
-    "resolveFreeformSnapContext(snapParent, snapSelectedNodeIds, snapContainer)",
+    "resolvePositionedSnapContext(snapParent, snapSelectedNodeIds, snapContainer)",
   );
   const sessionIndex = pointerDown.indexOf("const sessionId = resizeGestureChangeRef.current");
   const selectIndex = pointerDown.indexOf('onSelect(nodeId, "primary")');
@@ -430,6 +449,13 @@ test("editable prototype zoom does not interpolate geometry under pointer gestur
     preview,
     /editing \? "transition-none" : "transition-\[transform,width\] motion-reduce:transition-none"/,
   );
+  assert.match(preview, /dragDisabled=\{dragDisabled \|\| spacePressed\}/);
+  assert.match(preview, /resizeDisabled=\{resizeDisabled \|\| spacePressed\}/);
+  assert.match(preview, /marqueeDisabled=\{interactionBlocked \|\| spacePressed\}/);
+  assert.match(
+    preview,
+    /const shouldPan = event\.button === 1 \|\| spacePressed \|\| \(event\.button === 0 && startedOnPreviewBackdrop\)/,
+  );
 });
 
 test("mobile Studio keeps the canvas mounted and drives each side region through one Sheet", () => {
@@ -444,7 +470,7 @@ test("mobile Studio keeps the canvas mounted and drives each side region through
   assert.match(studio, /const \[mobileDrawer, setMobileDrawer\] = useState<MobileDrawer>\(null\)/);
   assert.doesNotMatch(studio, /mobilePanel|mobileDrawer === "canvas"/);
   const canvasMarker = 'data-prototype-canvas-region="persistent"';
-  const canvasMarkerStart = studio.indexOf(canvasMarker);
+  const canvasMarkerStart = studio.lastIndexOf(canvasMarker);
   const canvasRegionStart = studio.lastIndexOf("<section", canvasMarkerStart);
   const canvasRegionEnd = studio.indexOf("</section>", canvasMarkerStart);
   assert.ok(

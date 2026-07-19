@@ -77,6 +77,35 @@ frontend/
 - Composes providers, fetches data the route MUST have before render,
   and applies route-level metadata. No JSX for sub-components.
 
+### Route ownership
+
+Each hierarchy level has one App Router owner. Do not recreate project,
+workspace, or issue navigation as an in-memory view state under `/`:
+
+| Route | Feature owner | Responsibility |
+| --- | --- | --- |
+| `/` | `InboxDashboard` | Cross-project summary and global entry point |
+| `/projects/[id]` | `ProjectWorkspacesPage` | Project controls and workspace CRUD/list |
+| `/workspaces/[wsId]` | `WorkspaceConsole` | One workspace's issue/task queue |
+| `/issues/[id]` | `IssueDetailPage` | One issue's workflow and execution detail |
+
+Legacy `/?project=<id>` links redirect at the route boundary to
+`/projects/<id>`; they must not mount a second workspace list. Project-scoped
+routes pass the path ID to `WorkbenchShell` as `projectId`, which pins the
+global header/sidebar selection to the URL instead of stale local storage.
+
+```tsx
+// Wrong: duplicates canonical pages behind component-local navigation state.
+<LegacyWorkbench view={view} workspaces={workspaces} issues={issues} />
+
+// Correct: the route owns identity and injects it into the shared shell.
+<WorkbenchShell projectId={id}>
+  <ProjectWorkspacesPage projectId={id} />
+</WorkbenchShell>
+```
+
+Keep this contract covered by `frontend/tests/rootRouteRouting.test.ts`.
+
 ### `features/<area>/`
 
 - The feature owns its **page component** (if any), its

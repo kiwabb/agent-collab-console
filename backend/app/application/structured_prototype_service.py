@@ -52,6 +52,7 @@ from app.application.structured_prototype_contracts import (
     validate_command_batch_evidence_context,
 )
 from app.domain.structured_prototype import (
+    PROTOTYPE_FORWARD_COMMAND_BATCH_MAX_BYTES,
     REPLAY_MANIFEST_SCHEMA_VERSION,
     PrototypeCheckpointRecord,
     PrototypeCommandAppendResult,
@@ -4741,13 +4742,13 @@ class StructuredPrototypeService:
                 "prototype inverse command payload is not canonical",
             )
         if (
-            len(stored_batch.commands_json.encode("utf-8"))
-            + len(stored_batch.inverse_commands_json.encode("utf-8"))
-            > 262_144
+            stored_batch.operation_kind == "forward"
+            and len(stored_batch.commands_json.encode("utf-8"))
+            > PROTOTYPE_FORWARD_COMMAND_BATCH_MAX_BYTES
         ):
             raise StructuredPrototypeContractError(
                 "command_batch_too_large",
-                "prototype command and inverse payloads exceed 256 KiB",
+                "prototype forward command payload exceeds 256 KiB",
             )
         parsed_commands: DomainCommandBatchV1 | InverseCommandBatchV1
         if stored_batch.operation_kind == "forward":

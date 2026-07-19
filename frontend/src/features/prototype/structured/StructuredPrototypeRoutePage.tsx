@@ -43,6 +43,7 @@ export function StructuredPrototypeRoutePage({ projectId }: Props) {
 
   return (
     <WorkbenchShell
+      projectId={projectId}
       breadcrumbs={[
         { label: t("project.nav.workspaces"), href: `/projects/${projectId}` },
         { label: t("project.nav.prototypes"), href: `/projects/${projectId}/prototypes` },

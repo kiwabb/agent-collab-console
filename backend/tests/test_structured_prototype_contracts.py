@@ -97,6 +97,29 @@ def _freeform_document_payload() -> dict[str, object]:
     return payload
 
 
+def _ordinary_positioned_document() -> PrototypeDocumentV1:
+    payload = procurement_document_payload()
+    pages = payload["pages"]
+    assert isinstance(pages, list)
+    page = pages[0]
+    assert isinstance(page, dict)
+    root = page["root"]
+    assert isinstance(root, dict)
+    children = root["children"]
+    assert isinstance(children, list)
+    title = children[0]
+    assert isinstance(title, dict)
+    layout_item = title["layoutItem"]
+    assert isinstance(layout_item, dict)
+    layout_item["position"] = {"x": "12", "y": "24"}
+    return PrototypeDocumentV1.model_validate(
+        payload,
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+
+
 def _freeform_root(payload: dict[str, object]) -> dict[str, object]:
     pages = payload["pages"]
     assert isinstance(pages, list)
@@ -359,6 +382,66 @@ def _freeform_move_context_payload(
             "requestedDelta": {"x": "8", "y": "4"},
             "rawPosition": {"x": "40", "y": "52"},
             "finalPosition": {"x": "40", "y": "52"},
+            "correction": {"x": "0", "y": "0"},
+            "bypassSnapping": True,
+            "axisWinners": {"x": "raw", "y": "raw"},
+            "candidates": [],
+            "terminalReason": "pointerup",
+        },
+    }
+
+
+def _ordinary_positioned_move_context_payload() -> tuple[
+    PrototypeDocumentV1,
+    dict[str, object],
+]:
+    document = _ordinary_positioned_document()
+    root = document.pages[0].root
+    assert isinstance(root, StackNodeV1)
+    selected = root.children[0]
+    position = selected.layout_item.position
+    assert position is not None
+    empty_grids: list[prototype_contracts.FreeformGridV1] = []
+    return document, {
+        "commandContractVersion": 1,
+        "summary": "Move positioned child in ordinary container",
+        "commands": [
+            {
+                "kind": "moveNode",
+                "node": {"kind": "existing", "nodeId": selected.id},
+                "targetParent": {"kind": "existing", "nodeId": root.id},
+                "targetSlot": None,
+                "targetIndex": 0,
+                "targetPosition": {"x": "20", "y": "28"},
+            }
+        ],
+        "evidence": {
+            "evidenceVersion": 2,
+            "kind": "freeformMove",
+            "snapSolverVersion": "structured-prototype-freeform-snap/v1",
+            "snapSolverSourceHash": _hash("f"),
+            "documentId": document.id,
+            "draftId": fixture_id("ordinary-move-context-draft"),
+            "freeformId": root.id,
+            "baseHeadSequenceNo": 7,
+            "baseDocumentHash": document_hash(document),
+            "selectedNodeIds": [selected.id],
+            "grids": [],
+            "gridListHash": freeform_grid_list_hash(empty_grids),
+            "gridSnappingEnabled": False,
+            "previewScale": "1",
+            "clientThreshold": "6",
+            "selectionBounds": {
+                "x": position.x,
+                "y": position.y,
+                "width": "300",
+                "height": "40",
+            },
+            "directSiblings": [],
+            "containerSize": {"width": "1200", "height": "800"},
+            "requestedDelta": {"x": "8", "y": "4"},
+            "rawPosition": {"x": "20", "y": "28"},
+            "finalPosition": {"x": "20", "y": "28"},
             "correction": {"x": "0", "y": "0"},
             "bypassSnapping": True,
             "axisWinners": {"x": "raw", "y": "raw"},
@@ -2220,7 +2303,7 @@ def test_inverse_execution_round_trips_and_restores_the_allocated_insert_id() ->
     assert inserted_id in redone.document.model_dump_json(by_alias=True)
 
 
-def test_inverse_execution_enforces_the_combined_256_kib_limit() -> None:
+def test_forward_execution_enforces_the_256_kib_request_limit() -> None:
     document = procurement_document()
     commands = [
         {
@@ -2230,15 +2313,24 @@ def test_inverse_execution_enforces_the_combined_256_kib_limit() -> None:
         }
         for index in range(40)
     ]
-    batch = InverseCommandBatchV1.model_validate(
-        {"commandContractVersion": 1, "commands": commands},
+    batch = DomainCommandBatchV1.model_validate(
+        {
+            "commandContractVersion": 1,
+            "summary": "Oversized forward command batch",
+            "commands": commands,
+        },
         strict=True,
         by_alias=True,
         by_name=False,
     )
 
     with pytest.raises(StructuredPrototypeContractError) as error:
-        execute_inverse_command_batch(document, batch)
+        execute_command_batch(
+            document,
+            batch,
+            draft_id=fixture_id("oversized-forward-draft"),
+            client_request_id=fixture_id("oversized-forward-request"),
+        )
 
     assert error.value.code == "command_batch_too_large"
 
@@ -2545,6 +2637,54 @@ def test_freeform_move_evidence_context_accepts_valid_rigid_moves(group: bool) -
     assert isinstance(moved_root, FreeformNodeV1)
     assert isinstance(base_root, FreeformNodeV1)
     assert [child.id for child in moved_root.children] == [child.id for child in base_root.children]
+
+
+def test_positioned_move_evidence_context_accepts_ordinary_container_and_replays() -> None:
+    document, payload = _ordinary_positioned_move_context_payload()
+    batch = _parse_batch(payload)
+
+    validate_command_batch_evidence_context(
+        document,
+        batch,
+        draft_id=fixture_id("ordinary-move-context-draft"),
+        base_head_sequence_no=7,
+        base_document_hash=document_hash(document),
+    )
+    result = execute_command_batch(
+        document,
+        batch,
+        draft_id=fixture_id("ordinary-move-context-draft"),
+        client_request_id=fixture_id("ordinary-move-context-request"),
+    )
+    moved = prototype_contracts._require_node(result.document, fixture_id("title-list"))
+    assert moved.layout_item.position is not None
+    assert moved.layout_item.position.model_dump(mode="json") == {"x": "20", "y": "28"}
+    undone = execute_inverse_command_batch(result.document, result.inverse_commands)
+    redone = execute_inverse_command_batch(undone.document, undone.inverse_commands)
+    assert undone.result_document_hash == document_hash(document)
+    assert redone.result_document_hash == result.result_document_hash
+
+
+@pytest.mark.parametrize("case", ["captured_grid", "grid_snapping_enabled"])
+def test_positioned_move_evidence_context_refuses_ordinary_container_grids(case: str) -> None:
+    document, payload = _ordinary_positioned_move_context_payload()
+    evidence = payload["evidence"]
+    assert isinstance(evidence, dict)
+    if case == "captured_grid":
+        evidence["grids"] = [_square_freeform_grid("ordinary-invalid-grid")]
+    else:
+        evidence["gridSnappingEnabled"] = True
+    batch = _parse_batch(payload)
+
+    with pytest.raises(StructuredPrototypeContractError) as error:
+        validate_command_batch_evidence_context(
+            document,
+            batch,
+            draft_id=fixture_id("ordinary-move-context-draft"),
+            base_head_sequence_no=7,
+            base_document_hash=document_hash(document),
+        )
+    assert error.value.code == "command_evidence_mismatch"
 
 
 @pytest.mark.parametrize(
@@ -3075,8 +3215,8 @@ def test_freeform_tree_contract_enforces_size_root_and_direct_child_positions() 
             by_name=False,
         )
 
-    flow_child_position = procurement_document_payload()
-    flow_pages = flow_child_position["pages"]
+    ordinary_child_position = procurement_document_payload()
+    flow_pages = ordinary_child_position["pages"]
     assert isinstance(flow_pages, list)
     flow_page = flow_pages[0]
     assert isinstance(flow_page, dict)
@@ -3089,13 +3229,19 @@ def test_freeform_tree_contract_enforces_size_root_and_direct_child_positions() 
     flow_layout = flow_child["layoutItem"]
     assert isinstance(flow_layout, dict)
     flow_layout["position"] = {"x": "1", "y": "2"}
-    with pytest.raises(ValidationError, match="cannot have a freeform position"):
-        PrototypeDocumentV1.model_validate(
-            flow_child_position,
-            strict=True,
-            by_alias=True,
-            by_name=False,
-        )
+    positioned_document = PrototypeDocumentV1.model_validate(
+        ordinary_child_position,
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+    positioned_root = positioned_document.pages[0].root
+    assert isinstance(positioned_root, StackNodeV1)
+    assert positioned_root.children[0].layout_item.position is not None
+    assert positioned_root.children[0].layout_item.position.model_dump(mode="json") == {
+        "x": "1",
+        "y": "2",
+    }
 
 
 def test_responsive_layout_override_refuses_freeform_position_even_when_null() -> None:
@@ -3148,6 +3294,7 @@ def test_move_node_across_freeform_boundary_updates_position_and_inverse() -> No
                     },
                     "targetSlot": None,
                     "targetIndex": 1,
+                    "targetPosition": None,
                 }
             ],
         }
@@ -3168,6 +3315,7 @@ def test_move_node_across_freeform_boundary_updates_position_and_inverse() -> No
     moved_title = detail_root.children[1]
     assert moved_title.id == fixture_id("title-list")
     assert moved_title.layout_item.position is None
+    assert '"targetPosition":null' in prototype_contracts.canonical_model_json(move_to_stack)
     inverse_payload = moved_to_stack.inverse_commands.model_dump(mode="json", by_alias=True)
     inverse_commands = inverse_payload["commands"]
     assert isinstance(inverse_commands, list)
@@ -3224,7 +3372,7 @@ def test_move_node_across_freeform_boundary_updates_position_and_inverse() -> No
     )
 
 
-def test_move_node_rejects_position_that_does_not_match_target_container() -> None:
+def test_move_node_requires_position_when_entering_freeform_from_flow() -> None:
     document = PrototypeDocumentV1.model_validate(
         _freeform_document_payload(),
         strict=True,
@@ -3260,10 +3408,10 @@ def test_move_node_rejects_position_that_does_not_match_target_container() -> No
             client_request_id=fixture_id("missing-freeform-position"),
         )
 
-    unexpected_position = _parse_batch(
+    ordinary_absolute_position = _parse_batch(
         {
             "commandContractVersion": 1,
-            "summary": "流式布局携带坐标",
+            "summary": "普通容器绝对定位",
             "commands": [
                 {
                     "kind": "moveNode",
@@ -3279,13 +3427,264 @@ def test_move_node_rejects_position_that_does_not_match_target_container() -> No
             ],
         }
     )
-    with pytest.raises(StructuredPrototypeContractError, match="cannot use a target position"):
+    positioned = execute_command_batch(
+        document,
+        ordinary_absolute_position,
+        draft_id=fixture_id("ordinary-absolute-move-draft"),
+        client_request_id=fixture_id("ordinary-absolute-position"),
+    )
+    detail_root = next(
+        page.root for page in positioned.document.pages if page.root.id == fixture_id("root-detail")
+    )
+    assert isinstance(detail_root, StackNodeV1)
+    assert detail_root.children[1].layout_item.position is not None
+    assert detail_root.children[1].layout_item.position.model_dump(mode="json") == {
+        "x": "0",
+        "y": "0",
+    }
+
+
+@pytest.mark.parametrize(
+    ("target_position_marker", "expected_position"),
+    [
+        ("omitted", {"x": "12", "y": "24"}),
+        ("null", None),
+        ("position", {"x": "80", "y": "96"}),
+    ],
+)
+def test_move_node_target_position_tristate_is_canonical_and_replayable(
+    target_position_marker: str,
+    expected_position: dict[str, str] | None,
+) -> None:
+    document = _ordinary_positioned_document()
+    command: dict[str, object] = {
+        "kind": "moveNode",
+        "node": {"kind": "existing", "nodeId": fixture_id("title-list")},
+        "targetParent": {
+            "kind": "existing",
+            "nodeId": fixture_id("root-detail"),
+        },
+        "targetSlot": None,
+        "targetIndex": 1,
+    }
+    if target_position_marker == "null":
+        command["targetPosition"] = None
+    elif target_position_marker == "position":
+        command["targetPosition"] = {"x": "80", "y": "96"}
+    batch = _parse_batch(
+        {
+            "commandContractVersion": 1,
+            "summary": f"Move with {target_position_marker} target position",
+            "commands": [command],
+        }
+    )
+
+    canonical = prototype_contracts.canonical_model_json(batch)
+    if target_position_marker == "omitted":
+        assert '"targetPosition"' not in canonical
+    elif target_position_marker == "null":
+        assert '"targetPosition":null' in canonical
+    else:
+        assert '"targetPosition":{"x":"80","y":"96"}' in canonical
+    replay_batch = parse_command_batch_json(canonical)
+    replay_command = replay_batch.commands[0]
+    assert ("target_position" in replay_command.model_fields_set) is (
+        target_position_marker != "omitted"
+    )
+
+    result = execute_command_batch(
+        document,
+        batch,
+        draft_id=fixture_id(f"move-tristate-{target_position_marker}-draft"),
+        client_request_id=fixture_id(f"move-tristate-{target_position_marker}-request"),
+    )
+    moved = prototype_contracts._require_node(result.document, fixture_id("title-list"))
+    actual_position = (
+        moved.layout_item.position.model_dump(mode="json")
+        if moved.layout_item.position is not None
+        else None
+    )
+    assert actual_position == expected_position
+
+    replayed = execute_command_batch(
+        document,
+        replay_batch,
+        draft_id=fixture_id(f"move-tristate-{target_position_marker}-draft"),
+        client_request_id=fixture_id(f"move-tristate-{target_position_marker}-request"),
+    )
+    assert replayed.result_document_hash == result.result_document_hash
+    undone = execute_inverse_command_batch(result.document, result.inverse_commands)
+    redone = execute_inverse_command_batch(undone.document, undone.inverse_commands)
+    assert undone.result_document_hash == document_hash(document)
+    assert redone.result_document_hash == result.result_document_hash
+
+
+def test_move_node_from_flow_to_absolute_serializes_null_inverse_for_exact_replay() -> None:
+    document = procurement_document()
+    batch = _parse_batch(
+        {
+            "commandContractVersion": 1,
+            "summary": "Move flow child into ordinary absolute placement",
+            "commands": [
+                {
+                    "kind": "moveNode",
+                    "node": {
+                        "kind": "existing",
+                        "nodeId": fixture_id("title-list"),
+                    },
+                    "targetParent": {
+                        "kind": "existing",
+                        "nodeId": fixture_id("root-detail"),
+                    },
+                    "targetSlot": None,
+                    "targetIndex": 1,
+                    "targetPosition": {"x": "120", "y": "144"},
+                }
+            ],
+        }
+    )
+    result = execute_command_batch(
+        document,
+        batch,
+        draft_id=fixture_id("flow-to-absolute-draft"),
+        client_request_id=fixture_id("flow-to-absolute-request"),
+    )
+    inverse_json = prototype_contracts.canonical_model_json(result.inverse_commands)
+    assert '"targetPosition":null' in inverse_json
+    parsed_inverse = prototype_contracts.parse_inverse_command_batch_json(inverse_json)
+    restored = execute_inverse_command_batch(result.document, parsed_inverse)
+    assert restored.result_document_hash == document_hash(document)
+    redone = execute_inverse_command_batch(restored.document, restored.inverse_commands)
+    assert redone.result_document_hash == result.result_document_hash
+
+
+def test_set_node_layout_supports_ordinary_absolute_and_flow_with_exact_replay() -> None:
+    document = procurement_document()
+    set_absolute = _parse_batch(
+        {
+            "commandContractVersion": 1,
+            "summary": "Set ordinary child absolute position",
+            "commands": [
+                {
+                    "kind": "setNodeLayout",
+                    "node": {
+                        "kind": "existing",
+                        "nodeId": fixture_id("title-list"),
+                    },
+                    "update": {"position": {"x": "40", "y": "56"}},
+                }
+            ],
+        }
+    )
+    result = execute_command_batch(
+        document,
+        set_absolute,
+        draft_id=fixture_id("ordinary-layout-absolute-draft"),
+        client_request_id=fixture_id("ordinary-layout-absolute-request"),
+    )
+    positioned = prototype_contracts._require_node(result.document, fixture_id("title-list"))
+    assert positioned.layout_item.position is not None
+    assert positioned.layout_item.position.model_dump(mode="json") == {"x": "40", "y": "56"}
+    inverse_json = prototype_contracts.canonical_model_json(result.inverse_commands)
+    assert '"position":null' in inverse_json
+
+    replay_batch = parse_command_batch_json(prototype_contracts.canonical_model_json(set_absolute))
+    replayed = execute_command_batch(
+        document,
+        replay_batch,
+        draft_id=fixture_id("ordinary-layout-absolute-draft"),
+        client_request_id=fixture_id("ordinary-layout-absolute-request"),
+    )
+    assert replayed.result_document_hash == result.result_document_hash
+    undone = execute_inverse_command_batch(result.document, result.inverse_commands)
+    redone = execute_inverse_command_batch(undone.document, undone.inverse_commands)
+    assert undone.result_document_hash == document_hash(document)
+    assert redone.result_document_hash == result.result_document_hash
+
+    clear_position = _parse_batch(
+        {
+            "commandContractVersion": 1,
+            "summary": "Return ordinary child to flow",
+            "commands": [
+                {
+                    "kind": "setNodeLayout",
+                    "node": {
+                        "kind": "existing",
+                        "nodeId": fixture_id("title-list"),
+                    },
+                    "update": {"position": None},
+                }
+            ],
+        }
+    )
+    cleared = execute_command_batch(
+        result.document,
+        clear_position,
+        draft_id=fixture_id("ordinary-layout-flow-draft"),
+        client_request_id=fixture_id("ordinary-layout-flow-request"),
+    )
+    flow_node = prototype_contracts._require_node(cleared.document, fixture_id("title-list"))
+    assert flow_node.layout_item.position is None
+    restored = execute_inverse_command_batch(cleared.document, cleared.inverse_commands)
+    assert restored.result_document_hash == result.result_document_hash
+
+
+def test_set_node_layout_refuses_root_position_and_freeform_flow_child() -> None:
+    root_position = _parse_batch(
+        {
+            "commandContractVersion": 1,
+            "summary": "Reject positioned root",
+            "commands": [
+                {
+                    "kind": "setNodeLayout",
+                    "node": {
+                        "kind": "existing",
+                        "nodeId": fixture_id("root-list"),
+                    },
+                    "update": {"position": {"x": "0", "y": "0"}},
+                }
+            ],
+        }
+    )
+    with pytest.raises(StructuredPrototypeContractError) as root_error:
         execute_command_batch(
-            document,
-            unexpected_position,
-            draft_id=fixture_id("invalid-freeform-move-draft"),
-            client_request_id=fixture_id("unexpected-freeform-position"),
+            procurement_document(),
+            root_position,
+            draft_id=fixture_id("invalid-root-layout-draft"),
+            client_request_id=fixture_id("invalid-root-layout-request"),
         )
+    assert root_error.value.code == "command_result_invalid"
+
+    freeform_document = PrototypeDocumentV1.model_validate(
+        _freeform_document_payload(),
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+    clear_freeform_child = _parse_batch(
+        {
+            "commandContractVersion": 1,
+            "summary": "Reject flow child in Freeform",
+            "commands": [
+                {
+                    "kind": "setNodeLayout",
+                    "node": {
+                        "kind": "existing",
+                        "nodeId": fixture_id("title-list"),
+                    },
+                    "update": {"position": None},
+                }
+            ],
+        }
+    )
+    with pytest.raises(StructuredPrototypeContractError) as freeform_error:
+        execute_command_batch(
+            freeform_document,
+            clear_freeform_child,
+            draft_id=fixture_id("invalid-freeform-layout-draft"),
+            client_request_id=fixture_id("invalid-freeform-layout-request"),
+        )
+    assert freeform_error.value.code == "command_result_invalid"
 
 
 def test_set_node_layout_updates_freeform_position_and_size_atomically_with_inverse() -> None:
@@ -4365,3 +4764,648 @@ def test_behavior_rule_batch_is_atomic_and_command_count_is_bounded() -> None:
                 "commands": commands,
             }
         )
+
+
+def _page_crud_reference_document() -> PrototypeDocumentV1:
+    payload, table = _dynamic_table_document_payload()
+    pages = payload["pages"]
+    assert isinstance(pages, list)
+    list_page = pages[0]
+    assert isinstance(list_page, dict)
+    root = list_page["root"]
+    assert isinstance(root, dict)
+    children = root["children"]
+    assert isinstance(children, list)
+    root_layout = root["layoutItem"]
+    assert isinstance(root_layout, dict)
+    root_layout["width"] = {"unit": "px", "value": "1200"}
+    root_layout["height"] = {"unit": "px", "value": "800"}
+    for field in ("direction", "gap", "align", "justify", "padding"):
+        root.pop(field)
+    root["type"] = "Freeform"
+    root["grids"] = [
+        {
+            "id": fixture_id("page-crud-grid"),
+            "version": 1,
+            "type": "square",
+            "visible": True,
+            "snapEnabled": True,
+            "origin": {"x": "0", "y": "0"},
+            "params": {
+                "size": "16",
+                "colorTokenKey": "primary",
+                "opacity": "0.25",
+            },
+        }
+    ]
+    for index, child in enumerate(children):
+        assert isinstance(child, dict)
+        layout = child["layoutItem"]
+        assert isinstance(layout, dict)
+        layout["position"] = {"x": str(24 + index * 360), "y": "32"}
+    table["rows"] = [
+        {
+            "id": fixture_id("page-crud-row"),
+            "cells": [
+                {"columnKey": "title", "value": "办公电脑采购"},
+                {"columnKey": "status", "value": "pending"},
+            ],
+        }
+    ]
+    button_id = fixture_id("page-crud-button")
+    button_layout = _layout()
+    button_layout["position"] = {"x": "24", "y": "180"}
+    children.append(
+        {
+            "id": button_id,
+            "type": "Button",
+            "name": "页面动作",
+            "visibility": "visible",
+            "layoutItem": button_layout,
+            "responsive": [],
+            "label": "打开详情",
+            "variant": "primary",
+            "size": "medium",
+            "disabled": False,
+            "iconName": None,
+        }
+    )
+
+    page_list_id = fixture_id("page-list")
+    page_detail_id = fixture_id("page-detail")
+    navigation = payload["navigation"]
+    assert isinstance(navigation, dict)
+    navigation_items = navigation["items"]
+    assert isinstance(navigation_items, list)
+    navigation_items.append(
+        {
+            "id": fixture_id("page-crud-nav-secondary"),
+            "key": "purchase-list-secondary",
+            "label": "采购列表快捷入口",
+            "targetPageId": page_list_id,
+        }
+    )
+
+    runtime = payload["runtime"]
+    assert isinstance(runtime, dict)
+    rule_id = fixture_id("page-crud-rule")
+    runtime["rules"] = [
+        {
+            "id": rule_id,
+            "key": "page-crud-rule",
+            "enabled": True,
+            "trigger": {"kind": "nodeEvent", "nodeId": button_id, "event": "click"},
+            "guard": {"kind": "roleIs", "roleId": fixture_id("role-applicant")},
+            "effects": [
+                {"kind": "navigate", "targetPageId": page_list_id},
+                {"kind": "navigate", "targetPageId": page_detail_id},
+            ],
+            "guardFalseEffects": [
+                {"kind": "navigate", "targetPageId": page_list_id},
+            ],
+        }
+    ]
+    runtime["flowLayout"] = {
+        "nodes": sorted(
+            [
+                {"nodeId": page_list_id, "x": 120, "y": 80},
+                {"nodeId": rule_id, "x": 420, "y": 180},
+            ],
+            key=lambda item: str(item["nodeId"]),
+        )
+    }
+    payload["flows"] = [
+        {
+            "id": fixture_id("page-crud-flow-self"),
+            "key": "page-crud-flow-self",
+            "ruleId": rule_id,
+            "fromNodeId": button_id,
+            "toPageId": page_list_id,
+        },
+        {
+            "id": fixture_id("page-crud-flow-detail"),
+            "key": "page-crud-flow-detail",
+            "ruleId": rule_id,
+            "fromNodeId": button_id,
+            "toPageId": page_detail_id,
+        },
+    ]
+    return PrototypeDocumentV1.model_validate(
+        payload,
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+
+
+def _page_command(command: dict[str, object], summary: str) -> DomainCommandBatchV1:
+    return _parse_batch(
+        {
+            "commandContractVersion": 1,
+            "summary": summary,
+            "commands": [command],
+        }
+    )
+
+
+def test_page_add_is_deterministic_freeform_navigable_and_exactly_reversible() -> None:
+    document = procurement_document()
+    command = _page_command(
+        {
+            "kind": "addPage",
+            "afterPageId": fixture_id("page-list"),
+            "newPageKey": "page-add-list",
+            "title": "Blank workspace",
+            "includeInNavigation": True,
+        },
+        "Add a blank page",
+    )
+    kwargs = {
+        "draft_id": fixture_id("page-add-draft"),
+        "client_request_id": fixture_id("page-add-request"),
+    }
+    first = execute_command_batch(document, command, **kwargs)
+    second = execute_command_batch(document, command, **kwargs)
+    assert first.document == second.document
+    assert first.allocated_entity_ids == second.allocated_entity_ids
+    allocated = dict(first.allocated_entity_ids)
+    page_id = allocated["page-add-list"]
+    assert allocated["page-add-list:root"]
+    page = next(page for page in first.document.pages if page.id == page_id)
+    assert isinstance(page.root, FreeformNodeV1)
+    assert page.root.children == []
+    assert page.viewport == document.pages[0].viewport
+    assert page.root.layout_item.width.value == str(page.viewport.width)
+    assert page.root.layout_item.height.value == str(page.viewport.height)
+    assert first.document.pages[1].id == page_id
+    assert first.document.runtime.page_ids == [page.id for page in first.document.pages]
+    navigation_items = [
+        item for item in first.document.navigation.items if item.target_page_id == page_id
+    ]
+    assert len(navigation_items) == 1
+    assert navigation_items[0].label == "Blank workspace"
+    assert allocated["page-add-list:navigation"] == navigation_items[0].id
+    assert fixture_id("page-list") in first.affected_entity_ids
+    undone = execute_inverse_command_batch(first.document, first.inverse_commands)
+    redone = execute_inverse_command_batch(undone.document, undone.inverse_commands)
+    assert document_hash(undone.document) == document_hash(document)
+    assert document_hash(redone.document) == document_hash(first.document)
+
+
+def test_page_add_generates_unique_keys_routes_and_optional_navigation() -> None:
+    document = procurement_document()
+    batch = _parse_batch(
+        {
+            "commandContractVersion": 1,
+            "summary": "Add two deterministic pages",
+            "commands": [
+                {
+                    "kind": "addPage",
+                    "afterPageId": fixture_id("page-list"),
+                    "newPageKey": "page-add-first",
+                    "title": "采购列表",
+                    "includeInNavigation": False,
+                },
+                {
+                    "kind": "addPage",
+                    "afterPageId": fixture_id("page-list"),
+                    "newPageKey": "page-add-second",
+                    "title": "采购列表",
+                    "includeInNavigation": False,
+                },
+            ],
+        }
+    )
+    result = execute_command_batch(
+        document,
+        batch,
+        draft_id=fixture_id("page-add-unique-draft"),
+        client_request_id=fixture_id("page-add-unique-request"),
+    )
+    allocated = dict(result.allocated_entity_ids)
+    added_page_ids = {allocated["page-add-first"], allocated["page-add-second"]}
+    added_pages = [page for page in result.document.pages if page.id in added_page_ids]
+    assert {page.key for page in added_pages} == {"page", "page-2"}
+    assert {page.route for page in added_pages} == {"/page", "/page-2"}
+    assert all(
+        item.target_page_id not in added_page_ids for item in result.document.navigation.items
+    )
+
+
+def test_page_duplicate_remaps_owned_graph_and_round_trips_exactly() -> None:
+    document = _page_crud_reference_document()
+    command = _page_command(
+        {
+            "kind": "duplicatePage",
+            "pageId": fixture_id("page-list"),
+            "newPageKey": "page-duplicate-list",
+            "title": "采购申请列表副本",
+        },
+        "Duplicate the list page",
+    )
+    kwargs = {
+        "draft_id": fixture_id("page-duplicate-draft"),
+        "client_request_id": fixture_id("page-duplicate-request"),
+    }
+    first = execute_command_batch(document, command, **kwargs)
+    second = execute_command_batch(document, command, **kwargs)
+    assert first.document == second.document
+    assert first.allocated_entity_ids == second.allocated_entity_ids
+    allocated = dict(first.allocated_entity_ids)
+    duplicate_page_id = allocated["page-duplicate-list"]
+    duplicate_page = next(page for page in first.document.pages if page.id == duplicate_page_id)
+    assert first.document.pages[1].id == duplicate_page_id
+    assert first.document.runtime.page_ids == [page.id for page in first.document.pages]
+    source_node_ids = prototype_contracts._node_id_set(document.pages[0].root)
+    duplicate_node_ids = prototype_contracts._node_id_set(duplicate_page.root)
+    assert source_node_ids.isdisjoint(duplicate_node_ids)
+    duplicate_root = duplicate_page.root
+    assert isinstance(duplicate_root, FreeformNodeV1)
+    source_root = document.pages[0].root
+    assert isinstance(source_root, FreeformNodeV1)
+    assert (
+        duplicate_root.grids[0].id
+        == allocated[f"page-duplicate-list:grid:{source_root.grids[0].id}"]
+    )
+    source_table = next(node for node in source_root.children if node.type == "Table")
+    duplicate_table = next(node for node in duplicate_root.children if node.type == "Table")
+    assert source_table.type == "Table"
+    assert duplicate_table.type == "Table"
+    assert (
+        duplicate_table.rows[0].id
+        == allocated[f"page-duplicate-list:row:{source_table.rows[0].id}"]
+    )
+
+    duplicate_navigation = [
+        item for item in first.document.navigation.items if item.target_page_id == duplicate_page_id
+    ]
+    assert len(duplicate_navigation) == 2
+    assert all(item.label == "采购申请列表副本" for item in duplicate_navigation)
+    source_binding = document.runtime.view_bindings[0]
+    duplicate_binding_id = allocated[f"page-duplicate-list:binding:{source_binding.id}"]
+    duplicate_binding = next(
+        binding
+        for binding in first.document.runtime.view_bindings
+        if binding.id == duplicate_binding_id
+    )
+    assert duplicate_binding.node_id == duplicate_table.id
+
+    source_rule = document.runtime.rules[0]
+    duplicate_rule_id = allocated[f"page-duplicate-list:rule:{source_rule.id}"]
+    duplicate_rule = next(
+        rule for rule in first.document.runtime.rules if rule.id == duplicate_rule_id
+    )
+    assert (
+        duplicate_rule.trigger.node_id
+        == allocated[f"page-duplicate-list:node:{source_rule.trigger.node_id}"]
+    )
+    assert [
+        effect.target_page_id for effect in duplicate_rule.effects if effect.kind == "navigate"
+    ] == [duplicate_page_id, fixture_id("page-detail")]
+    assert [
+        effect.target_page_id
+        for effect in duplicate_rule.guard_false_effects
+        if effect.kind == "navigate"
+    ] == [duplicate_page_id]
+    duplicate_flows = [flow for flow in first.document.flows if flow.rule_id == duplicate_rule_id]
+    assert [flow.to_page_id for flow in duplicate_flows] == [
+        duplicate_page_id,
+        fixture_id("page-detail"),
+    ]
+    assert [flow.id for flow in duplicate_flows] == [
+        str(uuid5(UUID(duplicate_rule_id), duplicate_page_id)),
+        str(uuid5(UUID(duplicate_rule_id), fixture_id("page-detail"))),
+    ]
+    assert first.document.runtime.flow_layout is not None
+    positions = {
+        position.node_id: (position.x, position.y)
+        for position in first.document.runtime.flow_layout.nodes
+    }
+    assert positions[duplicate_page_id] == positions[fixture_id("page-list")]
+    assert positions[duplicate_rule_id] == positions[source_rule.id]
+    assert first.document.runtime.forms == document.runtime.forms
+    assert first.document.runtime.entity_schemas == document.runtime.entity_schemas
+    assert first.document.runtime.scenarios == document.runtime.scenarios
+    assert fixture_id("page-list") in first.affected_entity_ids
+    undone = execute_inverse_command_batch(first.document, first.inverse_commands)
+    redone = execute_inverse_command_batch(undone.document, undone.inverse_commands)
+    assert document_hash(undone.document) == document_hash(document)
+    assert document_hash(redone.document) == document_hash(first.document)
+
+
+def test_page_rename_syncs_navigation_preserves_route_and_restores_original_labels() -> None:
+    document = _page_crud_reference_document()
+    source_page = document.pages[0]
+    original_labels = [
+        item.label for item in document.navigation.items if item.target_page_id == source_page.id
+    ]
+    result = execute_command_batch(
+        document,
+        _page_command(
+            {"kind": "renamePage", "pageId": source_page.id, "title": "采购中心"},
+            "Rename page",
+        ),
+        draft_id=fixture_id("page-rename-draft"),
+        client_request_id=fixture_id("page-rename-request"),
+    )
+    renamed = next(page for page in result.document.pages if page.id == source_page.id)
+    assert renamed.title == "采购中心"
+    assert renamed.route == source_page.route
+    assert renamed.key == source_page.key
+    assert {
+        item.label
+        for item in result.document.navigation.items
+        if item.target_page_id == source_page.id
+    } == {"采购中心"}
+    restored = apply_inverse_commands(result.document, result.inverse_commands)
+    assert [
+        item.label for item in restored.navigation.items if item.target_page_id == source_page.id
+    ] == original_labels
+    assert document_hash(restored) == document_hash(document)
+
+
+def test_page_delete_cascades_owned_projections_and_round_trips_exactly() -> None:
+    document = _page_crud_reference_document()
+    page_id = fixture_id("page-list")
+    source_page = document.pages[0]
+    source_node_ids = prototype_contracts._node_id_set(source_page.root)
+    source_rule_ids = {
+        rule.id for rule in document.runtime.rules if rule.trigger.node_id in source_node_ids
+    }
+    result = execute_command_batch(
+        document,
+        _page_command({"kind": "deletePage", "pageId": page_id}, "Delete page"),
+        draft_id=fixture_id("page-delete-draft"),
+        client_request_id=fixture_id("page-delete-request"),
+    )
+    assert page_id not in {page.id for page in result.document.pages}
+    assert page_id not in result.document.runtime.page_ids
+    assert all(item.target_page_id != page_id for item in result.document.navigation.items)
+    assert all(
+        binding.node_id not in source_node_ids for binding in result.document.runtime.view_bindings
+    )
+    assert all(rule.id not in source_rule_ids for rule in result.document.runtime.rules)
+    assert all(flow.rule_id not in source_rule_ids for flow in result.document.flows)
+    assert result.document.runtime.flow_layout is None
+    assert result.document.runtime.forms == document.runtime.forms
+    assert result.document.runtime.entity_schemas == document.runtime.entity_schemas
+    assert result.document.runtime.scenarios == document.runtime.scenarios
+    undone = execute_inverse_command_batch(result.document, result.inverse_commands)
+    redone = execute_inverse_command_batch(undone.document, undone.inverse_commands)
+    assert document_hash(undone.document) == document_hash(document)
+    assert document_hash(redone.document) == document_hash(result.document)
+
+
+def test_page_delete_supports_inverse_snapshots_larger_than_forward_request_limit() -> None:
+    payload = _page_crud_reference_document().model_dump(mode="json", by_alias=True)
+    pages = payload["pages"]
+    assert isinstance(pages, list)
+    page = pages[0]
+    assert isinstance(page, dict)
+    root = page["root"]
+    assert isinstance(root, dict)
+    children = root["children"]
+    assert isinstance(children, list)
+    for index in range(35):
+        layout = _layout()
+        layout["position"] = {"x": "24", "y": str(240 + index)}
+        content_prefix = f"{index}:"
+        children.append(
+            {
+                "id": fixture_id(f"large-page-text-{index}"),
+                "type": "Text",
+                "name": f"Large text {index}",
+                "visibility": "visible",
+                "layoutItem": layout,
+                "responsive": [],
+                "content": content_prefix + "x" * (8_000 - len(content_prefix)),
+                "semantic": "body",
+                "tone": "default",
+            }
+        )
+    document = PrototypeDocumentV1.model_validate(
+        payload,
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+
+    result = execute_command_batch(
+        document,
+        _page_command(
+            {"kind": "deletePage", "pageId": fixture_id("page-list")},
+            "Delete large page",
+        ),
+        draft_id=fixture_id("large-page-delete-draft"),
+        client_request_id=fixture_id("large-page-delete-request"),
+    )
+    assert (
+        len(prototype_contracts.canonical_model_json(result.inverse_commands).encode("utf-8"))
+        > prototype_contracts.PROTOTYPE_FORWARD_COMMAND_BATCH_MAX_BYTES
+    )
+    undone = execute_inverse_command_batch(result.document, result.inverse_commands)
+    redone = execute_inverse_command_batch(undone.document, undone.inverse_commands)
+    assert document_hash(undone.document) == document_hash(document)
+    assert document_hash(redone.document) == document_hash(result.document)
+
+
+@pytest.mark.parametrize("navigate_list", ["effects", "guardFalseEffects"])
+def test_page_delete_names_external_inbound_navigation_rule(navigate_list: str) -> None:
+    payload = procurement_document_payload()
+    runtime = payload["runtime"]
+    assert isinstance(runtime, dict)
+    effects: list[dict[str, object]] = [{"kind": "notify", "level": "info", "message": "保留页面"}]
+    guard_false_effects: list[dict[str, object]] = []
+    target_effect: dict[str, object] = {
+        "kind": "navigate",
+        "targetPageId": fixture_id("page-detail"),
+    }
+    if navigate_list == "effects":
+        effects = [target_effect]
+    else:
+        guard_false_effects = [target_effect]
+    rule_id = fixture_id(f"external-page-rule-{navigate_list}")
+    runtime["rules"] = [
+        {
+            "id": rule_id,
+            "key": f"external-{navigate_list.lower()}",
+            "enabled": True,
+            "trigger": {
+                "kind": "nodeEvent",
+                "nodeId": fixture_id("button-submit"),
+                "event": "click",
+            },
+            "guard": None,
+            "effects": effects,
+            "guardFalseEffects": guard_false_effects,
+        }
+    ]
+    payload["flows"] = [
+        {
+            "id": fixture_id(f"external-page-flow-{navigate_list}"),
+            "key": f"external-flow-{navigate_list.lower()}",
+            "ruleId": rule_id,
+            "fromNodeId": fixture_id("button-submit"),
+            "toPageId": fixture_id("page-detail"),
+        }
+    ]
+    document = PrototypeDocumentV1.model_validate(
+        payload,
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+    with pytest.raises(StructuredPrototypeContractError) as error:
+        execute_command_batch(
+            document,
+            _page_command(
+                {"kind": "deletePage", "pageId": fixture_id("page-detail")},
+                "Delete referenced page",
+            ),
+            draft_id=fixture_id("page-delete-inbound-draft"),
+            client_request_id=fixture_id(f"page-delete-inbound-{navigate_list}"),
+        )
+    assert error.value.code == "command_page_inbound_navigation"
+    assert f"external-{navigate_list.lower()}" in str(error.value)
+
+
+def test_page_delete_refuses_scenario_start_and_final_page_with_names() -> None:
+    document = procurement_document()
+    with pytest.raises(StructuredPrototypeContractError) as scenario_error:
+        execute_command_batch(
+            document,
+            _page_command(
+                {"kind": "deletePage", "pageId": fixture_id("page-create")},
+                "Delete scenario page",
+            ),
+            draft_id=fixture_id("page-delete-scenario-draft"),
+            client_request_id=fixture_id("page-delete-scenario-request"),
+        )
+    assert scenario_error.value.code == "command_page_scenario_start"
+    assert "purchase-happy-path" in str(scenario_error.value)
+
+    payload = procurement_document_payload()
+    pages = payload["pages"]
+    assert isinstance(pages, list)
+    payload["pages"] = [pages[0]]
+    navigation = payload["navigation"]
+    assert isinstance(navigation, dict)
+    navigation_items = navigation["items"]
+    assert isinstance(navigation_items, list)
+    navigation["items"] = [navigation_items[0]]
+    runtime = payload["runtime"]
+    assert isinstance(runtime, dict)
+    runtime["pageIds"] = [fixture_id("page-list")]
+    scenarios = runtime["scenarios"]
+    assert isinstance(scenarios, list)
+    scenario = scenarios[0]
+    assert isinstance(scenario, dict)
+    scenario["startPageId"] = fixture_id("page-list")
+    single_page = PrototypeDocumentV1.model_validate(
+        payload,
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+    with pytest.raises(StructuredPrototypeContractError) as final_error:
+        execute_command_batch(
+            single_page,
+            _page_command(
+                {"kind": "deletePage", "pageId": fixture_id("page-list")},
+                "Delete final page",
+            ),
+            draft_id=fixture_id("page-delete-final-draft"),
+            client_request_id=fixture_id("page-delete-final-request"),
+        )
+    assert final_error.value.code == "command_last_page_delete"
+
+
+def test_node_name_update_is_nonblank_and_exactly_reversible() -> None:
+    document = procurement_document()
+    node_id = fixture_id("title-list")
+    result = execute_command_batch(
+        document,
+        _page_command(
+            {"kind": "updateNodeName", "nodeId": node_id, "name": "列表主标题"},
+            "Rename node",
+        ),
+        draft_id=fixture_id("node-name-draft"),
+        client_request_id=fixture_id("node-name-request"),
+    )
+    assert prototype_contracts._require_node(result.document, node_id).name == "列表主标题"
+    assert document_hash(apply_inverse_commands(result.document, result.inverse_commands)) == (
+        document_hash(document)
+    )
+    with pytest.raises(ValidationError):
+        _page_command(
+            {"kind": "updateNodeName", "nodeId": node_id, "name": "   "},
+            "Reject blank node name",
+        )
+
+
+def test_node_name_update_can_repair_and_restore_a_legacy_whitespace_name() -> None:
+    payload = procurement_document_payload()
+    pages = payload["pages"]
+    assert isinstance(pages, list)
+    page = pages[0]
+    assert isinstance(page, dict)
+    root = page["root"]
+    assert isinstance(root, dict)
+    children = root["children"]
+    assert isinstance(children, list)
+    node = children[0]
+    assert isinstance(node, dict)
+    node["name"] = "   "
+    document = PrototypeDocumentV1.model_validate(
+        payload,
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+    node_id = fixture_id("title-list")
+
+    result = execute_command_batch(
+        document,
+        _page_command(
+            {"kind": "updateNodeName", "nodeId": node_id, "name": "Repaired name"},
+            "Repair legacy node name",
+        ),
+        draft_id=fixture_id("legacy-node-name-draft"),
+        client_request_id=fixture_id("legacy-node-name-request"),
+    )
+    assert prototype_contracts._require_node(result.document, node_id).name == "Repaired name"
+    assert result.inverse_commands.commands[0].kind == "restoreNodeName"
+    undone = execute_inverse_command_batch(result.document, result.inverse_commands)
+    redone = execute_inverse_command_batch(undone.document, undone.inverse_commands)
+    assert prototype_contracts._require_node(undone.document, node_id).name == "   "
+    assert document_hash(undone.document) == document_hash(document)
+    assert document_hash(redone.document) == document_hash(result.document)
+
+
+def test_runtime_page_order_is_exact_and_reorder_updates_it() -> None:
+    payload = procurement_document_payload()
+    pages = payload["pages"]
+    assert isinstance(pages, list)
+    payload["pages"] = [pages[1], pages[0], pages[2]]
+    with pytest.raises(ValidationError, match="runtime page IDs must match document page order"):
+        PrototypeDocumentV1.model_validate(
+            payload,
+            strict=True,
+            by_alias=True,
+            by_name=False,
+        )
+    document = procurement_document()
+    result = execute_command_batch(
+        document,
+        _page_command(
+            {
+                "kind": "reorderPage",
+                "pageId": fixture_id("page-detail"),
+                "targetIndex": 0,
+            },
+            "Reorder page",
+        ),
+        draft_id=fixture_id("runtime-page-order-draft"),
+        client_request_id=fixture_id("runtime-page-order-request"),
+    )
+    assert result.document.runtime.page_ids == [page.id for page in result.document.pages]

@@ -2,6 +2,7 @@ import type { StructuredPrototypePaletteType } from "./structuredPrototypePalett
 
 export type StructuredPrototypeMoveSource =
   | { kind: "node"; nodeId: string }
+  | { kind: "layer"; nodeId: string }
   | { kind: "palette"; nodeType: StructuredPrototypePaletteType }
   | { kind: "page"; pageId: string };
 
@@ -125,7 +126,9 @@ export function advanceStructuredPrototypeInteraction(
     if (phase === "preview") {
       if (current.phase === "preview") return current;
       if (current.phase !== "armed") {
-        throw new Error(`${current.kind} interaction cannot advance from ${current.phase} to preview`);
+        throw new Error(
+          `${current.kind} interaction cannot advance from ${current.phase} to preview`,
+        );
       }
       return { ...current, phase };
     }

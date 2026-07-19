@@ -419,9 +419,10 @@ export type StructuredPrototypeCommand =
       targetParent: StructuredPrototypeNodeRef;
       targetSlot: null;
       targetIndex: number;
-      targetPosition?: StructuredPrototypeFreeformPosition;
+      targetPosition?: StructuredPrototypeFreeformPosition | null;
     }
   | { kind: "removeNode"; nodeId: string }
+  | { kind: "updateNodeName"; nodeId: string; name: string }
   | {
       kind: "setNodeProperty";
       node: StructuredPrototypeNodeRef;
@@ -433,6 +434,16 @@ export type StructuredPrototypeCommand =
       update: StructuredPrototypeLayoutUpdate;
     }
   | { kind: "reorderPage"; pageId: string; targetIndex: number }
+  | {
+      kind: "addPage";
+      afterPageId: string;
+      newPageKey: string;
+      title: string;
+      includeInNavigation: boolean;
+    }
+  | { kind: "duplicatePage"; pageId: string; newPageKey: string; title: string }
+  | { kind: "renamePage"; pageId: string; title: string }
+  | { kind: "deletePage"; pageId: string }
   | { kind: "reorderNavigationItem"; itemId: string; targetIndex: number }
   | {
       kind: "setRuntimeFlowNodePosition";

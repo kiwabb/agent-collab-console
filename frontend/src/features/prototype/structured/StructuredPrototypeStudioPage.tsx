@@ -44,19 +44,25 @@ import {
   structuredPrototypeShowsRoleControl,
 } from "./prototypeRendererCore";
 import {
+  addPageBatch,
   addBehaviorRuleBatch,
   createPaletteNode,
+  deletePageBatch,
+  duplicatePageBatch,
   insertPaletteNodeBatch,
-  moveFreeformSelectionBatch,
+  movePositionedSelectionBatch,
   moveNodeBatch,
   removeNodesBatch,
   reorderPageBatch,
   removeBehaviorRuleBatch,
+  renamePageBatch,
   resolvePaletteFormDefinition,
   replaceBehaviorRuleBatch,
-  setFreeformGroupLayoutBatch,
+  setPositionedGroupLayoutBatch,
   setRuntimeFlowNodePositionBatch,
+  structuredPrototypePageAllocationKey,
   STRUCTURED_PROTOTYPE_COMMAND_BATCH_LIMIT,
+  updateNodeNameBatch,
 } from "./structuredPrototypeCommands";
 import {
   findStructuredPrototypeNode,
@@ -88,10 +94,13 @@ import {
   type StructuredPrototypeContainerNode,
 } from "./structuredPrototypeNodes";
 import {
-  resolveStructuredPrototypeFreeformGroupSelection,
-  resolveStructuredPrototypeFreeformSelection,
+  resolveStructuredPrototypePositionedGroupSelection,
+  resolveStructuredPrototypePositionedSelection,
 } from "./structuredPrototypeGroupSelection";
-import { canonicalStructuredPrototypeFreeformValue } from "./structuredPrototypeFreeformGeometry";
+import {
+  canonicalStructuredPrototypeFreeformValue,
+  STRUCTURED_PROTOTYPE_MAX_FREEFORM_COORDINATE,
+} from "./structuredPrototypeFreeformGeometry";
 import { serializeStructuredPrototypeFreeformMoveEvidence } from "./structuredPrototypeFreeformMoveEvidence";
 import { replayStructuredPrototypeFreeformMove } from "./structuredPrototypeFreeformMoveReplay";
 import type { StructuredPrototypeGroupTransformItem } from "./structuredPrototypeGroupTransform";
@@ -115,9 +124,21 @@ import { StructuredPrototypeFlow } from "./StructuredPrototypeFlow";
 import { StructuredPrototypeGenerationPanel } from "./StructuredPrototypeGenerationPanel";
 import {
   StructuredPrototypeInspector,
+  type StructuredPrototypePlacementFrame,
   type StructuredPrototypeInspectorRuntimeTable,
 } from "./StructuredPrototypeInspector";
+import { StructuredPrototypeLayerTree } from "./StructuredPrototypeLayerTree";
+import {
+  deriveStructuredPrototypeLayerRows,
+  readStructuredPrototypeLayerDragData,
+  type StructuredPrototypeLayerDropAccepted,
+  type StructuredPrototypeLayerDropRefusalReason,
+} from "./structuredPrototypeLayerTreeModel";
 import { StructuredPrototypePageRail } from "./StructuredPrototypePageRail";
+import {
+  resolveStructuredPrototypeCreatedPageId,
+  resolveStructuredPrototypeNearestSurvivingPageId,
+} from "./structuredPrototypePageActions";
 import {
   StructuredPrototypePalette,
   type StructuredPrototypePaletteType,
@@ -220,6 +241,10 @@ const FIXED_OVERLAY_VIEWPORT_WIDTH = { tablet: 760, mobile: 390 } as const;
 const FREEFORM_INSERT_ORIGIN = 24;
 const FREEFORM_INSERT_STEP = 24;
 const FREEFORM_INSERT_COLUMNS = 8;
+
+function visibleMutationError(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message.trim().length > 0 ? error.message : fallback;
+}
 
 function defaultFreeformPosition(index: number): StructuredPrototypeFreeformPosition {
   const column = index % FREEFORM_INSERT_COLUMNS;
@@ -639,6 +664,19 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       ? findStructuredPrototypeNode(activePage.root, activeNodeSelection.primaryNodeId)
       : null;
   const activeSelectedNodeIds = activeNodeSelection.nodeIds;
+  const selectedNodeLocation =
+    document !== null && activePage !== null && selectedNode !== null
+      ? findStructuredPrototypeNodeLocation(document, activePage.id, selectedNode.id)
+      : null;
+  const selectedNodeParent =
+    activePage !== null && selectedNodeLocation !== null
+      ? findStructuredPrototypeNode(activePage.root, selectedNodeLocation.parentId)
+      : null;
+  const selectedNodePlacementModeAvailable =
+    activeSelectedNodeIds.length === 1 &&
+    selectedNodeParent !== null &&
+    isStructuredPrototypeContainerNode(selectedNodeParent) &&
+    selectedNodeParent.type !== "Freeform";
   const selectedNodeIsRuntimeBoundTable =
     document !== null &&
     selectedNode?.type === "Table" &&
@@ -885,17 +923,16 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       const sourceDocument = ownedProjection?.document ?? session.authoritativeDocument;
       const targetParent = findDocumentContainer(sourceDocument, session.pageId, target.parentId);
       if (targetParent === null) return null;
-      const currentLocation = findStructuredPrototypeNodeLocation(
-        sourceDocument,
+      const authoritativeLocation = findStructuredPrototypeNodeLocation(
+        session.authoritativeDocument,
         session.pageId,
         session.nodeId,
       );
+      const authoritativePosition = authoritativeLocation?.position ?? undefined;
       const targetPosition =
         targetParent.type === "Freeform"
-          ? currentLocation?.parentId === targetParent.id && currentLocation.position !== undefined
-            ? currentLocation.position
-            : defaultFreeformPosition(target.index)
-          : undefined;
+          ? (authoritativePosition ?? defaultFreeformPosition(target.index))
+          : (authoritativePosition ?? null);
       const projection = projectStructuredPrototypeNodeMoveToDropTarget(
         sourceDocument,
         session.pageId,
@@ -929,10 +966,12 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     );
     const targetPosition =
       targetParent.type === "Freeform"
-        ? currentLocation?.parentId === targetParent.id && currentLocation.position !== undefined
+        ? currentLocation?.parentId === targetParent.id &&
+          currentLocation.position !== undefined &&
+          currentLocation.position !== null
           ? currentLocation.position
           : defaultFreeformPosition(target.index)
-        : undefined;
+        : null;
     const projection =
       currentLocation === null
         ? projectStructuredPrototypeNodeInsert(
@@ -1008,6 +1047,15 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     setActiveNodeDragMirror(null);
     setActivePaletteDragNode(null);
     setInteractionError(null);
+    const layer = readStructuredPrototypeLayerDragData(event.active.data.current);
+    if (layer !== null) {
+      beginInteraction({
+        kind: "move",
+        source: { kind: "layer", nodeId: layer.nodeId },
+        baseDocumentHash: currentDraft.documentHash,
+      });
+      return;
+    }
     const palette = readStructuredPrototypePaletteDragData(event.active.data.current);
     if (palette) {
       const formDefinition = resolvePaletteFormDefinition(
@@ -1189,8 +1237,20 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
-    const session = activeMoveProjectionRef.current;
     const activeInteraction = interactionRef.current;
+    if (
+      activeInteraction.kind === "move" &&
+      activeInteraction.phase === "active" &&
+      activeInteraction.source.kind === "layer"
+    ) {
+      const dragged = readStructuredPrototypeLayerDragData(event.active.data.current);
+      endInteraction(activeInteraction.sessionId);
+      if (dragged?.nodeId !== activeInteraction.source.nodeId) {
+        setInteractionError(t("prototype.structured.canvas.invalidDrop"));
+      }
+      return;
+    }
+    const session = activeMoveProjectionRef.current;
     if (
       session === null ||
       activeInteraction.kind !== "move" ||
@@ -1344,6 +1404,212 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     setMobileDrawer(null);
   };
 
+  const applyCreatedPage = async (
+    kind: "add" | "duplicate",
+    sourcePageId: string,
+    batch: Parameters<typeof controller.applyCommandsWithResult>[0],
+  ): Promise<boolean> => {
+    const currentDraft = controller.draft;
+    if (interactionRef.current.kind !== "idle" || currentDraft === null) return false;
+    const previousPageIds = currentDraft.document.pages.map((page) => page.id);
+    const allocationKey = structuredPrototypePageAllocationKey(kind, sourcePageId);
+    setInteractionError(null);
+    const application = await runLockedMutation("commands", () =>
+      controller.applyCommandsWithResult(batch),
+    );
+    if (application === null) return false;
+    const pageId = resolveStructuredPrototypeCreatedPageId(
+      previousPageIds,
+      allocationKey,
+      application,
+    );
+    if (pageId === null) {
+      setInteractionError(t("prototype.structured.pages.selectionFailed"));
+      return false;
+    }
+    setManualPageId(pageId);
+    setFlowPageId(pageId);
+    setNodeSelection(createStructuredPrototypeEmptySelection());
+    return true;
+  };
+
+  const addPage = async (): Promise<boolean> => {
+    const sourcePageId = mode === "flow" ? (selectedFlowPageId ?? activePage.id) : activePage.id;
+    try {
+      return await applyCreatedPage(
+        "add",
+        sourcePageId,
+        addPageBatch(sourcePageId, t("prototype.structured.pages.newTitle"), true),
+      );
+    } catch (error) {
+      console.error("structured prototype page add failed:", error);
+      setInteractionError(t("prototype.structured.pages.addFailed"));
+      return false;
+    }
+  };
+
+  const duplicatePage = async (pageId: string, title: string): Promise<boolean> => {
+    try {
+      return await applyCreatedPage(
+        "duplicate",
+        pageId,
+        duplicatePageBatch(pageId, t("prototype.structured.pages.copyTitle", { name: title })),
+      );
+    } catch (error) {
+      console.error("structured prototype page duplicate failed:", error);
+      setInteractionError(t("prototype.structured.pages.duplicateFailed"));
+      return false;
+    }
+  };
+
+  const renamePage = async (pageId: string, title: string): Promise<boolean> => {
+    if (interactionRef.current.kind !== "idle") return false;
+    setInteractionError(null);
+    try {
+      const application = await runLockedMutation("commands", () =>
+        controller.applyCommandsWithResult(renamePageBatch(pageId, title)),
+      );
+      return application !== null;
+    } catch (error) {
+      console.error("structured prototype page rename failed:", error);
+      setInteractionError(t("prototype.structured.pages.renameFailed"));
+      return false;
+    }
+  };
+
+  const deletePage = async (pageId: string): Promise<boolean> => {
+    const currentDraft = controller.draft;
+    if (interactionRef.current.kind !== "idle" || currentDraft === null) return false;
+    const pages = currentDraft.document.pages;
+    const sourceIndex = pages.findIndex((page) => page.id === pageId);
+    if (sourceIndex < 0 || pages.length <= 1) return false;
+    const fallbackPageId = resolveStructuredPrototypeNearestSurvivingPageId(pages, pageId);
+    if (fallbackPageId === null) return false;
+    setInteractionError(null);
+    try {
+      const application = await runLockedMutation("commands", () =>
+        controller.applyCommandsWithResult(deletePageBatch(pageId)),
+      );
+      if (application === null) return false;
+      if (
+        application.draft.document.pages.length !== pages.length - 1 ||
+        application.draft.document.pages.some((page) => page.id === pageId)
+      ) {
+        setInteractionError(t("prototype.structured.pages.deleteFailed"));
+        return false;
+      }
+      if (activePage.id === pageId) {
+        setManualPageId(fallbackPageId);
+        setNodeSelection(createStructuredPrototypeEmptySelection());
+      }
+      if (selectedFlowPageId === pageId) setFlowPageId(fallbackPageId);
+      return true;
+    } catch (error) {
+      console.error("structured prototype page delete failed:", error);
+      setInteractionError(
+        visibleMutationError(error, t("prototype.structured.pages.deleteFailed")),
+      );
+      return false;
+    }
+  };
+
+  const handleLayerSelect = (nodeId: string): void => {
+    if (interactionRef.current.kind !== "idle") return;
+    setNodeSelection(resolveStructuredPrototypeNodeSelection(activePage.root, [nodeId], nodeId));
+    setInspectorTab("properties");
+    setInteractionError(null);
+    if (!desktopLayout) setMobileDrawer(null);
+  };
+
+  const renameLayer = async (nodeId: string, name: string): Promise<boolean> => {
+    if (interactionRef.current.kind !== "idle") return false;
+    setInteractionError(null);
+    try {
+      const renamed = await runLockedMutation("commands", () =>
+        controller.applyCommandsWithResult(updateNodeNameBatch(nodeId, name)),
+      );
+      if (renamed !== null) return true;
+      setInteractionError(t("prototype.structured.layers.renameFailed"));
+      return false;
+    } catch (error) {
+      console.error("structured prototype layer rename failed:", error);
+      setInteractionError(t("prototype.structured.layers.renameFailed"));
+      return false;
+    }
+  };
+
+  const changeLayerVisibility = (nodeId: string, visibility: "visible" | "hidden"): void => {
+    if (interactionRef.current.kind !== "idle") return;
+    setInteractionError(null);
+    void (async () => {
+      try {
+        const changed = await runLockedMutation("commands", () =>
+          controller.applyCommandsWithResult({
+            commandContractVersion: 1,
+            summary: visibility === "visible" ? "Show component" : "Hide component",
+            commands: [
+              {
+                kind: "setNodeProperty",
+                node: { kind: "existing", nodeId },
+                update: { kind: "visibility", visibility },
+              },
+            ],
+          }),
+        );
+        if (changed === null) {
+          setInteractionError(t("prototype.structured.layers.visibilityFailed"));
+        }
+      } catch (error) {
+        console.error("structured prototype layer visibility change failed:", error);
+        setInteractionError(t("prototype.structured.layers.visibilityFailed"));
+      }
+    })();
+  };
+
+  const moveLayer = (move: StructuredPrototypeLayerDropAccepted): void => {
+    const currentInteraction = interactionRef.current;
+    if (
+      currentInteraction.kind === "move" &&
+      currentInteraction.source.kind === "layer" &&
+      currentInteraction.source.nodeId === move.nodeId
+    ) {
+      endInteraction(currentInteraction.sessionId);
+    } else if (currentInteraction.kind !== "idle") {
+      return;
+    }
+    const targetParent = findDocumentContainer(document, activePage.id, move.targetParentId);
+    if (targetParent === null) {
+      setInteractionError(t("prototype.structured.canvas.invalidDrop"));
+      return;
+    }
+    setInteractionError(null);
+    void (async () => {
+      try {
+        const moved = await runLockedMutation("commands", () =>
+          controller.applyCommandsWithResult(
+            moveNodeBatch(move.nodeId, targetParent, move.targetIndex, move.targetPosition),
+          ),
+        );
+        if (moved === null) setInteractionError(t("prototype.structured.layers.moveFailed"));
+      } catch (error) {
+        console.error("structured prototype layer move failed:", error);
+        setInteractionError(t("prototype.structured.layers.moveFailed"));
+      }
+    })();
+  };
+
+  const refuseLayerDrop = (reason: StructuredPrototypeLayerDropRefusalReason): void => {
+    const currentInteraction = interactionRef.current;
+    if (currentInteraction.kind === "move" && currentInteraction.source.kind === "layer") {
+      endInteraction(currentInteraction.sessionId);
+    }
+    if (reason === "unchanged" || reason === "target-not-found") {
+      setInteractionError(null);
+      return;
+    }
+    setInteractionError(t("prototype.structured.canvas.invalidDrop"));
+  };
+
   const handleViewportSelect = (value: StudioViewport): void => {
     if (interactionRef.current.kind !== "idle") return;
     setViewportOverride(value);
@@ -1392,6 +1658,20 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     Button: getDictionaryValue(document.locale, "prototype.structured.palette.button"),
     Table: getDictionaryValue(document.locale, "prototype.structured.palette.table"),
   };
+  const layerTreeLabels = {
+    tree: t("prototype.structured.layers.tree"),
+    select: (name: string) => t("prototype.structured.layers.select", { name }),
+    expand: (name: string) => t("prototype.structured.layers.expand", { name }),
+    collapse: (name: string) => t("prototype.structured.layers.collapse", { name }),
+    rename: (name: string) => t("prototype.structured.layers.rename", { name }),
+    renameInput: (name: string) => t("prototype.structured.layers.renameInput", { name }),
+    show: (name: string) => t("prototype.structured.layers.show", { name }),
+    hide: (name: string) => t("prototype.structured.layers.hide", { name }),
+    drag: (name: string) => t("prototype.structured.layers.drag", { name }),
+    nameRequired: t("prototype.structured.layers.nameRequired"),
+    renameFailed: t("prototype.structured.layers.renameFailed"),
+  };
+  const activePageLayerCount = deriveStructuredPrototypeLayerRows(activePage.root).length;
   const visibleError =
     interactionError ?? (controller.runtimeRecovery === null ? controller.error : null);
   const activeDragPage =
@@ -1401,7 +1681,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
   const activeOverlayViewportWidth =
     viewport === "desktop" ? activePage.viewport.width : FIXED_OVERLAY_VIEWPORT_WIDTH[viewport];
 
-  const persistFreeformSelectionPositions = async (
+  const persistPositionedSelectionPositions = async (
     items: readonly StructuredPrototypeGroupTransformItem[],
     options: {
       minimumItems: number;
@@ -1411,23 +1691,23 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     },
   ): Promise<boolean> => {
     if (interactionRef.current.kind !== "idle") return false;
-    const freeformSelection = resolveStructuredPrototypeFreeformSelection(
+    const positionedSelection = resolveStructuredPrototypePositionedSelection(
       activePage.root,
       activeSelectedNodeIds,
     );
     if (
       items.length < options.minimumItems ||
-      freeformSelection === null ||
+      positionedSelection === null ||
       !sameStructuredPrototypeNodeIds(
         items,
-        freeformSelection.items.map((item) => item.node.id),
+        positionedSelection.items.map((item) => item.node.id),
       )
     ) {
       setInteractionError(options.unavailableMessage);
       return false;
     }
     const currentItemsById = new Map(
-      freeformSelection.items.map((item) => [item.node.id, item] as const),
+      positionedSelection.items.map((item) => [item.node.id, item] as const),
     );
     const changedItems = items.filter((item) => {
       const current = currentItemsById.get(item.nodeId);
@@ -1446,7 +1726,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     setInteractionError(null);
     const applied = await runLockedMutation("commands", () =>
       controller.applyCommands(
-        setFreeformGroupLayoutBatch(changedItems, "position", options.summary),
+        setPositionedGroupLayoutBatch(changedItems, "position", options.summary),
       ),
     );
     const succeeded = applied === true;
@@ -1454,27 +1734,27 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     return succeeded;
   };
 
-  const arrangeFreeformGroup = (
+  const arrangePositionedGroup = (
     items: readonly StructuredPrototypeGroupTransformItem[],
   ): Promise<boolean> =>
-    persistFreeformSelectionPositions(items, {
+    persistPositionedSelectionPositions(items, {
       minimumItems: 2,
-      summary: `Arrange ${items.length} freeform components`,
+      summary: `Arrange ${items.length} positioned components`,
       unavailableMessage: t("prototype.structured.canvas.freeformGroupMoveUnavailable"),
       failureMessage: t("prototype.structured.canvas.freeformGroupArrangeFailed"),
     });
 
-  const nudgeFreeformSelection = (
+  const nudgePositionedSelection = (
     items: readonly StructuredPrototypeGroupTransformItem[],
   ): Promise<boolean> =>
-    persistFreeformSelectionPositions(items, {
+    persistPositionedSelectionPositions(items, {
       minimumItems: 1,
-      summary: `Nudge ${items.length} freeform component${items.length === 1 ? "" : "s"}`,
+      summary: `Nudge ${items.length} positioned component${items.length === 1 ? "" : "s"}`,
       unavailableMessage: t("prototype.structured.canvas.freeformMoveFailed"),
       failureMessage: t("prototype.structured.canvas.freeformMoveFailed"),
     });
 
-  const moveFreeformNode = async (
+  const movePositionedNode = async (
     nodeId: string,
     x: number,
     y: number,
@@ -1501,11 +1781,11 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       setInteractionError(t("prototype.structured.canvas.freeformMoveFailed"));
       return false;
     }
-    const freeformSelection = resolveStructuredPrototypeFreeformSelection(
+    const positionedSelection = resolveStructuredPrototypePositionedSelection(
       activePage.root,
       evidenceCapture.selectedNodeIds,
     );
-    if (freeformSelection === null) {
+    if (positionedSelection === null) {
       setInteractionError(
         activeSelectedNodeIds.length > 1
           ? t("prototype.structured.canvas.freeformGroupMoveUnavailable")
@@ -1516,16 +1796,19 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     const activeSelectedNodeIdSet = new Set(activeSelectedNodeIds);
     if (
       activeSelectedNodeIdSet.size !== activeSelectedNodeIds.length ||
-      freeformSelection.items.length !== activeSelectedNodeIds.length ||
-      !freeformSelection.items.every((item) => activeSelectedNodeIdSet.has(item.node.id))
+      positionedSelection.items.length !== activeSelectedNodeIds.length ||
+      !positionedSelection.items.every((item) => activeSelectedNodeIdSet.has(item.node.id))
     ) {
       setInteractionError(t("prototype.structured.canvas.freeformMoveFailed"));
       return false;
     }
-    const currentGridIds = (freeformSelection.parent.grids ?? []).map((grid) => grid.id);
+    const currentGridIds =
+      positionedSelection.parent.type === "Freeform"
+        ? (positionedSelection.parent.grids ?? []).map((grid) => grid.id)
+        : [];
     if (
-      freeformSelection.parent.id !== moveInteraction.freeformId ||
-      !freeformSelection.items.some((item) => item.node.id === nodeId) ||
+      positionedSelection.parent.id !== moveInteraction.freeformId ||
+      !positionedSelection.items.some((item) => item.node.id === nodeId) ||
       !sameOrderedIds(currentGridIds, capturedGridIds)
     ) {
       setInteractionError(t("prototype.structured.canvas.freeformMoveFailed"));
@@ -1533,10 +1816,10 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     }
     const deltaX = replay.position.x - replay.canonicalInput.selectionBounds.x;
     const deltaY = replay.position.y - replay.canonicalInput.selectionBounds.y;
-    const projectedItems = freeformSelection.items.map((item) => {
+    const projectedItems = positionedSelection.items.map((item) => {
       const currentPosition = item.node.layoutItem.position;
       if (currentPosition === undefined) {
-        throw new Error(`selected Freeform node ${item.node.id} has no position`);
+        throw new Error(`selected positioned node ${item.node.id} has no position`);
       }
       const targetX = item.x + deltaX;
       const targetY = item.y + deltaY;
@@ -1556,16 +1839,16 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     setNodeSelection((current) =>
       promoteStructuredPrototypePrimarySelection(activePage.root, current, nodeId),
     );
-    const batch = moveFreeformSelectionBatch(
-      freeformSelection.parent,
+    const batch = movePositionedSelectionBatch(
+      positionedSelection.parent,
       projectedItems.map(({ nodeId: itemNodeId, x: itemX, y: itemY }) => ({
         nodeId: itemNodeId,
         x: itemX,
         y: itemY,
       })),
       projectedItems.length === 1
-        ? "Move freeform component"
-        : `Move ${projectedItems.length} freeform components`,
+        ? "Move positioned component"
+        : `Move ${projectedItems.length} positioned components`,
     );
     const evidence = await serializeStructuredPrototypeFreeformMoveEvidence({
       ...evidenceCapture,
@@ -1606,7 +1889,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       return false;
     }
     if (groupItems !== undefined) {
-      const groupSelection = resolveStructuredPrototypeFreeformGroupSelection(
+      const groupSelection = resolveStructuredPrototypePositionedGroupSelection(
         activePage.root,
         activeSelectedNodeIds,
       );
@@ -1648,7 +1931,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         promoteStructuredPrototypePrimarySelection(activePage.root, current, nodeId),
       );
       const applied = await controller.applyCommands(
-        setFreeformGroupLayoutBatch(
+        setPositionedGroupLayoutBatch(
           changedItems,
           "frame",
           `Resize ${groupItems.length} freeform components`,
@@ -1742,6 +2025,55 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     return runLockedMutation("commands", () => controller.applyCommands(batch)).then(
       (applied) => applied === true,
     );
+  };
+
+  const captureSelectedNodePlacementFrame = (): StructuredPrototypePlacementFrame | null => {
+    if (
+      interactionRef.current.kind !== "idle" ||
+      selectedNode === null ||
+      selectedNodeParent === null ||
+      !selectedNodePlacementModeAvailable
+    ) {
+      setInteractionError(t("prototype.structured.inspector.placementCaptureFailed"));
+      return null;
+    }
+    const canvas = globalThis.document.querySelector<HTMLElement>(
+      '[data-prototype-canvas-region="persistent"] [data-prototype-canvas-wrapper="true"]',
+    );
+    const element = Array.from(canvas?.querySelectorAll<HTMLElement>("[data-node-id]") ?? []).find(
+      (candidate) => candidate.dataset["nodeId"] === selectedNode.id,
+    );
+    const offsetParent = element?.offsetParent;
+    if (
+      element === undefined ||
+      !(offsetParent instanceof HTMLElement) ||
+      offsetParent.dataset["containerId"] !== selectedNodeParent.id
+    ) {
+      setInteractionError(t("prototype.structured.inspector.placementCaptureFailed"));
+      return null;
+    }
+    const frame = {
+      x: element.offsetLeft,
+      y: element.offsetTop,
+      width: element.offsetWidth,
+      height: element.offsetHeight,
+    };
+    const values = [frame.x, frame.y, frame.width, frame.height];
+    if (
+      frame.width <= 0 ||
+      frame.height <= 0 ||
+      values.some(
+        (value) =>
+          !Number.isFinite(value) ||
+          value < 0 ||
+          value > STRUCTURED_PROTOTYPE_MAX_FREEFORM_COORDINATE,
+      )
+    ) {
+      setInteractionError(t("prototype.structured.inspector.placementCaptureFailed"));
+      return null;
+    }
+    setInteractionError(null);
+    return frame;
   };
 
   const applyFlowNodePosition = (flowNodeId: string, x: number, y: number): Promise<boolean> => {
@@ -1868,6 +2200,11 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
       onDragCancel={() => {
+        const activeInteraction = interactionRef.current;
+        if (activeInteraction.kind === "move" && activeInteraction.source.kind === "layer") {
+          endInteraction(activeInteraction.sessionId);
+          return;
+        }
         const session = activeMoveProjectionRef.current;
         if (session !== null) cancelActiveMove(session);
       }}
@@ -1875,7 +2212,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       <div
         className={cn(
           "relative grid h-full min-h-[640px] overflow-hidden bg-background/60 pb-14 text-foreground lg:grid-rows-[52px_minmax(0,1fr)] xl:pb-0",
-          isFullscreen && "fixed inset-0 z-[100] h-dvh min-h-0 bg-background pb-14 xl:pb-0",
+          isFullscreen && "fixed inset-0 z-40 h-dvh min-h-0 bg-background pb-14 xl:pb-0",
         )}
         data-prototype-studio-fullscreen={isFullscreen ? "true" : "false"}
         data-prototype-interaction={interaction.kind}
@@ -2073,11 +2410,23 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         <main className="grid min-h-0 min-w-0 grid-cols-1 xl:grid-cols-[240px_minmax(440px,1fr)_300px]">
           <StructuredPrototypeResponsiveSideRegion
             desktop={desktopLayout}
-            desktopClassName="grid min-h-0 grid-rows-[44px_minmax(130px,1fr)_44px_minmax(180px,1fr)] border-r border-border-subtle bg-surface"
-            drawerClassName="grid w-[min(90vw,20rem)] grid-rows-[44px_minmax(130px,1fr)_44px_minmax(180px,1fr)] bg-surface"
+            desktopClassName={cn(
+              "grid min-h-0 border-r border-border-subtle bg-surface",
+              mode === "design"
+                ? "grid-rows-[44px_minmax(112px,1fr)_44px_minmax(160px,1.4fr)_44px_minmax(150px,1fr)]"
+                : "grid-rows-[44px_minmax(130px,1fr)_44px_minmax(180px,1fr)]",
+            )}
+            drawerClassName={cn(
+              "grid w-[min(90vw,20rem)] bg-surface",
+              mode === "design"
+                ? "grid-rows-[44px_minmax(90px,0.8fr)_44px_minmax(120px,1.2fr)_44px_minmax(100px,1fr)]"
+                : "grid-rows-[44px_minmax(130px,1fr)_44px_minmax(180px,1fr)]",
+            )}
             open={mobileDrawer === "left"}
             side="left"
-            title={t("prototype.structured.pages")}
+            title={t(
+              mode === "design" ? "prototype.structured.navigator" : "prototype.structured.pages",
+            )}
             description={t("prototype.structured.mobile.pagesDescription")}
             closeLabel={t("prototype.structured.mobile.closeDrawer")}
             onOpenChange={(open) => {
@@ -2096,26 +2445,26 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
             <StructuredPrototypePageRail
               pages={pageRailPages ?? document.pages}
               activePageId={mode === "flow" ? (selectedFlowPageId ?? activePage.id) : activePage.id}
+              externalError={visibleError}
               dragDisabled={interactionCapabilities.moveDisabled}
               selectionDisabled={interactionCapabilities.documentControlsDisabled}
+              mutationDisabled={interactionCapabilities.documentControlsDisabled}
               onSelect={mode === "flow" ? selectFlowPage : handlePageSelect}
+              onAdd={addPage}
+              onDuplicate={duplicatePage}
+              onRename={renamePage}
+              onDelete={deletePage}
             />
-            <div className="flex items-center justify-between border-y border-border-subtle px-3 text-xs font-bold uppercase">
-              {t(
-                mode === "flow"
-                  ? "prototype.structured.flow.rules"
-                  : "prototype.structured.components",
-              )}
-              <span className="font-normal text-text-muted">
-                {mode === "flow"
-                  ? document.runtime.rules.length
-                  : STRUCTURED_PROTOTYPE_PALETTE_TYPES.length}
-              </span>
-            </div>
-            <div className="min-h-0 overflow-auto">
-              {mode === "flow" ? (
+            {mode === "flow" ? (
+              <>
+                <div className="flex items-center justify-between border-y border-border-subtle px-3 text-xs font-bold uppercase">
+                  {t("prototype.structured.flow.rules")}
+                  <span className="font-normal text-text-muted">
+                    {document.runtime.rules.length}
+                  </span>
+                </div>
                 <div
-                  className="divide-y divide-border-subtle border-b border-border-subtle"
+                  className="min-h-0 overflow-auto divide-y divide-border-subtle border-b border-border-subtle"
                   aria-label={t("prototype.structured.flow.ruleList")}
                 >
                   {document.runtime.rules.length === 0 ? (
@@ -2158,20 +2507,48 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
                     ))
                   )}
                 </div>
-              ) : (
-                <StructuredPrototypePalette
-                  labels={paletteLabels}
-                  forms={document.runtime.forms}
-                  selectedFormId={paletteFormDefinition?.id ?? null}
-                  formSelectorLabel={t("prototype.structured.palette.formSelector")}
-                  formSelectorPlaceholder={t("prototype.structured.palette.formPlaceholder")}
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between border-y border-border-subtle px-3 text-xs font-bold uppercase">
+                  {t("prototype.structured.layers")}
+                  <span className="font-normal text-text-muted">{activePageLayerCount}</span>
+                </div>
+                <StructuredPrototypeLayerTree
+                  root={activePage.root}
+                  selectedNodeId={activeNodeSelection.primaryNodeId}
+                  error={interactionError}
+                  labels={layerTreeLabels}
+                  selectionDisabled={interactionCapabilities.documentControlsDisabled}
+                  mutationDisabled={interactionCapabilities.documentControlsDisabled}
                   dragDisabled={interactionCapabilities.moveDisabled}
-                  controlsDisabled={interactionCapabilities.documentControlsDisabled}
-                  onFormSelect={setPaletteFormId}
-                  onInsert={insertPaletteNode}
+                  onSelect={handleLayerSelect}
+                  onRename={renameLayer}
+                  onVisibilityChange={changeLayerVisibility}
+                  onMove={moveLayer}
+                  onDropRefused={refuseLayerDrop}
                 />
-              )}
-            </div>
+                <div className="flex items-center justify-between border-y border-border-subtle px-3 text-xs font-bold uppercase">
+                  {t("prototype.structured.components")}
+                  <span className="font-normal text-text-muted">
+                    {STRUCTURED_PROTOTYPE_PALETTE_TYPES.length}
+                  </span>
+                </div>
+                <div className="min-h-0 overflow-auto">
+                  <StructuredPrototypePalette
+                    labels={paletteLabels}
+                    forms={document.runtime.forms}
+                    selectedFormId={paletteFormDefinition?.id ?? null}
+                    formSelectorLabel={t("prototype.structured.palette.formSelector")}
+                    formSelectorPlaceholder={t("prototype.structured.palette.formPlaceholder")}
+                    dragDisabled={interactionCapabilities.moveDisabled}
+                    controlsDisabled={interactionCapabilities.documentControlsDisabled}
+                    onFormSelect={setPaletteFormId}
+                    onInsert={insertPaletteNode}
+                  />
+                </div>
+              </>
+            )}
           </StructuredPrototypeResponsiveSideRegion>
 
           <section
@@ -2367,11 +2744,11 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
                       );
                     }}
                     onMarqueeGestureChange={handleMarqueeGestureChange}
-                    onFreeformMoveNode={moveFreeformNode}
+                    onFreeformMoveNode={movePositionedNode}
                     onFreeformMoveError={handleFreeformMoveError}
                     onFreeformMoveGestureChange={handleFreeformMoveGestureChange}
-                    onFreeformGroupArrange={arrangeFreeformGroup}
-                    onFreeformSelectionNudge={nudgeFreeformSelection}
+                    onFreeformGroupArrange={arrangePositionedGroup}
+                    onFreeformSelectionNudge={nudgePositionedSelection}
                     onResizeNode={resizeNode}
                     onResizeError={handleResizeError}
                     onResizeGestureChange={handleResizeGestureChange}
@@ -2486,8 +2863,10 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
                     selectedCount={activeSelectedNodeIds.length}
                     disabled={interactionCapabilities.documentControlsDisabled}
                     canDelete={activeSelectedNodeIds.length > 0}
+                    placementModeAvailable={selectedNodePlacementModeAvailable}
                     isRuntimeBoundTable={selectedNodeIsRuntimeBoundTable}
                     runtimeTable={selectedRuntimeTable}
+                    onCapturePlacementFrame={captureSelectedNodePlacementFrame}
                     onApply={applyInspectorCommands}
                     onDelete={() => void deleteSelectedNodes()}
                   />
@@ -2517,7 +2896,9 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
             {
               action: "pages",
               drawer: "left" as const,
-              label: t("prototype.structured.pages"),
+              label: t(
+                mode === "design" ? "prototype.structured.navigator" : "prototype.structured.pages",
+              ),
               icon: Files,
             },
             {

@@ -207,8 +207,13 @@ const enUS = {
   "startupConfig.stepRun.ready": "Configuration complete and ready to start",
   "startupConfig.stepRun.running": "The startup command is running; follow the logs below",
   "startupConfig.stepRun.starting": "The process is running; waiting for the local service",
-  "startupConfig.stepRun.external":
-    "A local service is already reachable outside console ownership",
+  "startupConfig.stepRun.unhealthy":
+    "The expected application was identified, but its readiness status is unhealthy",
+  "startupConfig.stepRun.external": "The expected application is ready outside console ownership",
+  "startupConfig.stepRun.occupiedUnknown":
+    "The configured address is occupied by an unknown or unready responder",
+  "startupConfig.stepRun.invalidConfig":
+    "Readiness identity is missing; analyze the startup configuration again",
   "startupConfig.stepRun.completed": "The startup command exited successfully",
   "startupConfig.stepRun.failed": "Startup failed with exit code {code}",
   "startupConfig.summaryTitle": "Analysis result",
@@ -228,10 +233,22 @@ const enUS = {
     "No environment variables detected yet. Analysis results will appear here.",
   "startupConfig.envIncomplete": "Environment variables are incomplete",
   "startupConfig.runSubmitted": "Startup command submitted; loading runtime logs",
-  "startupConfig.serviceAlreadyReachable": "A local service is already reachable",
-  "startupConfig.externalServiceTitle": "Local service is already running",
+  "startupConfig.externalServiceTitle": "Expected application is ready",
   "startupConfig.externalServiceDetail":
-    "A service responded at {url}. It was started outside this console, so Stop is unavailable.",
+    "The expected application passed its readiness identity check at {url}. It was started outside this console, so Stop is unavailable.",
+  "startupConfig.externalUnhealthyTitle": "Expected application is not ready",
+  "startupConfig.externalUnhealthyDetail":
+    "The application identity matched at {url}, but HTTP {status} did not satisfy its readiness contract. Automatic start remains blocked while the address is occupied.",
+  "startupConfig.occupiedUnknownTitle": "Configured address is occupied",
+  "startupConfig.occupiedUnknownDetail":
+    "An HTTP responder exists at {url}, but it did not prove the expected application identity. Automatic start remains blocked to avoid a port collision.",
+  "startupConfig.invalidReadinessTitle": "Startup configuration must be regenerated",
+  "startupConfig.invalidReadinessDetail":
+    "This startup configuration has no valid application readiness identity. Analyze it again before starting services.",
+  "startupConfig.serviceUnhealthyTitle": "Managed process is not ready",
+  "startupConfig.serviceUnhealthyDetail":
+    "The console-managed process is alive, but the expected application at {url} is unhealthy or its identity did not match.",
+  "startupConfig.readinessProbe": "Readiness check: {url}",
   "startupConfig.serviceStartingTitle": "Process running, service starting",
   "startupConfig.serviceStartingDetail":
     "The console-managed process is running, but {url} has not responded yet.",
@@ -242,7 +259,11 @@ const enUS = {
   "startupConfig.serviceUnknownDetail":
     "No valid analyzed local URL is available, so service reachability cannot be checked.",
   "startupConfig.openService": "Open service",
-  "startupConfig.serviceState.reachable": "Reachable",
+  "startupConfig.serviceState.reachable": "Address reachable",
+  "startupConfig.serviceState.ready": "Application ready",
+  "startupConfig.serviceState.occupiedUnknown": "Occupied / unknown",
+  "startupConfig.serviceState.invalidConfig": "Regeneration required",
+  "startupConfig.serviceState.unhealthy": "Identified but unhealthy",
   "startupConfig.serviceState.starting": "Starting",
   "startupConfig.serviceState.offline": "Offline",
   "startupConfig.serviceState.unknown": "Not detectable",
@@ -2275,6 +2296,41 @@ const enUS = {
   "prototype.structured.generation.status.interrupted": "Generation interrupted",
   "prototype.structured.generation.status.cancelled": "Generation cancelled",
   "prototype.structured.pages": "Pages",
+  "prototype.structured.navigator": "Pages and layers",
+  "prototype.structured.pages.select": "Open {name}",
+  "prototype.structured.pages.add": "Add page",
+  "prototype.structured.pages.newTitle": "Untitled page",
+  "prototype.structured.pages.addFailed": "The page could not be added.",
+  "prototype.structured.pages.duplicate": "Duplicate {name}",
+  "prototype.structured.pages.copyTitle": "{name} copy",
+  "prototype.structured.pages.duplicateFailed": "The page could not be duplicated.",
+  "prototype.structured.pages.rename": "Rename {name}",
+  "prototype.structured.pages.renameInput": "New title for {name}",
+  "prototype.structured.pages.nameRequired": "Enter a page title.",
+  "prototype.structured.pages.renameFailed": "The page title could not be saved.",
+  "prototype.structured.pages.delete": "Delete {name}",
+  "prototype.structured.pages.deleteLast": "The final page cannot be deleted",
+  "prototype.structured.pages.deleteTitle": "Delete {name}?",
+  "prototype.structured.pages.deleteDescription":
+    "This removes {name} and its page-owned runtime records. This action can be undone.",
+  "prototype.structured.pages.deleteConfirm": "Delete page",
+  "prototype.structured.pages.deleteFailed": "The page could not be deleted.",
+  "prototype.structured.pages.selectionFailed":
+    "The page was saved, but its authoritative allocation could not be selected.",
+  "prototype.structured.layers": "Layers",
+  "prototype.structured.layers.tree": "Active page layer hierarchy",
+  "prototype.structured.layers.select": "Select {name}",
+  "prototype.structured.layers.expand": "Expand {name}",
+  "prototype.structured.layers.collapse": "Collapse {name}",
+  "prototype.structured.layers.rename": "Rename {name}",
+  "prototype.structured.layers.renameInput": "New name for {name}",
+  "prototype.structured.layers.show": "Show {name}",
+  "prototype.structured.layers.hide": "Hide {name}",
+  "prototype.structured.layers.drag": "Move {name} in the layer hierarchy",
+  "prototype.structured.layers.nameRequired": "Enter a layer name.",
+  "prototype.structured.layers.renameFailed": "The layer name could not be saved.",
+  "prototype.structured.layers.visibilityFailed": "Layer visibility could not be saved.",
+  "prototype.structured.layers.moveFailed": "The layer move could not be saved.",
   "prototype.structured.components": "Components",
   "prototype.structured.canvas": "Canvas",
   "prototype.structured.canvas.drag": "Drag {name}",
@@ -2297,7 +2353,7 @@ const enUS = {
   "prototype.structured.canvas.freeformMoveFailed":
     "The component position could not be saved. Try again.",
   "prototype.structured.canvas.freeformGroupMoveUnavailable":
-    "Group movement requires components directly inside the same freeform canvas.",
+    "Group movement requires positioned components directly inside the same container.",
   "prototype.structured.canvas.freeformGroupArrangeFailed":
     "The selected components could not be arranged. Try again.",
   "prototype.structured.canvas.commitFailed": "The layout change could not be saved. Try again.",
@@ -2311,7 +2367,7 @@ const enUS = {
   "prototype.structured.mobile.navigation": "Mobile studio navigation",
   "prototype.structured.mobile.closeDrawer": "Close side panel",
   "prototype.structured.mobile.pagesDescription":
-    "Browse prototype pages and the tools available for the current mode.",
+    "Browse prototype pages, the active page layer hierarchy, and available components.",
   "prototype.structured.mobile.inspectorTitle": "Inspector",
   "prototype.structured.mobile.inspectorDescription":
     "Review AI changes or edit the current Studio selection.",
@@ -2364,6 +2420,13 @@ const enUS = {
   "prototype.structured.inspector.deleteColumnShort": "Delete",
   "prototype.structured.inspector.deleteRow": "Delete row {row}",
   "prototype.structured.inspector.layout": "Layout",
+  "prototype.structured.inspector.placement": "Placement",
+  "prototype.structured.inspector.placement.auto": "Auto",
+  "prototype.structured.inspector.placement.absolute": "Absolute",
+  "prototype.structured.inspector.position.x": "X",
+  "prototype.structured.inspector.position.y": "Y",
+  "prototype.structured.inspector.placementCaptureFailed":
+    "The canvas position could not be measured. Make sure the element is visible.",
   "prototype.structured.inspector.containerLayout": "Container layout",
   "prototype.structured.inspector.layoutGrids": "Layout grids",
   "prototype.structured.inspector.layoutGridCount": "{count} configured",

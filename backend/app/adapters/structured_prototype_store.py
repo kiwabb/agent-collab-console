@@ -12,6 +12,7 @@ import aiosqlite
 
 from app.adapters.prototype_object_store import canonical_json_bytes
 from app.domain.structured_prototype import (
+    PROTOTYPE_FORWARD_COMMAND_BATCH_MAX_BYTES,
     PrototypeCheckpointRecord,
     PrototypeCommandAppendResult,
     PrototypeCommandBatchRecord,
@@ -6210,16 +6211,18 @@ class AsyncStructuredPrototypeStore:
                 "command_batch_invalid",
                 "prototype command result sequence must follow its base",
             )
+        if not batch.commands_json or not batch.inverse_commands_json:
+            raise StructuredPrototypeStoreError(
+                "command_batch_invalid",
+                "prototype command payload is empty",
+            )
         if (
-            not batch.commands_json
-            or not batch.inverse_commands_json
-            or len(batch.commands_json.encode("utf-8"))
-            + len(batch.inverse_commands_json.encode("utf-8"))
-            > 262_144
+            batch.operation_kind == "forward"
+            and len(batch.commands_json.encode("utf-8")) > PROTOTYPE_FORWARD_COMMAND_BATCH_MAX_BYTES
         ):
             raise StructuredPrototypeStoreError(
                 "command_batch_invalid",
-                "prototype command payload is empty or exceeds 256 KiB",
+                "prototype forward command payload exceeds 256 KiB",
             )
         for value, field in (
             (batch.command_batch_hash, "batch.command_batch_hash"),

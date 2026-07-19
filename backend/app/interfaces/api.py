@@ -35,6 +35,7 @@ from app.application.local_service_probe import (
     add_service_status,
     probe_local_service,
     resolve_project_access_url,
+    resolve_project_readiness_probe,
     unknown_local_service_status,
 )
 from app.application.mcp_registry import McpManagementService
@@ -48,6 +49,11 @@ from app.application.project_conductor import _run_subprocess as _project_conduc
 from app.application.project_run_manager import ProjectRunError, project_run_manager
 from app.application.project_script_suggestions import suggest_project_scripts
 from app.application.project_service import ProjectError, ProjectService
+from app.application.project_service_readiness import (
+    ApplicationReadinessStatus,
+    evaluate_project_service,
+    invalid_readiness_status,
+)
 from app.application.resume_service import (
     MAX_PDF_IMPORT_BYTES,
     ResumeDependencyError,
@@ -113,6 +119,7 @@ from app.domain.models import (
     Project,
     ProjectConductorState,
     ProjectEnvVar,
+    ProjectReadinessProbe,
     ProjectStartupService,
     RuntimeCatalog,
     RuntimeExecutorConfig,
@@ -3320,12 +3327,47 @@ async def _project_service_status(
     return await probe_local_service(access_url)
 
 
+async def _project_readiness_probe(
+    project: Project,
+    store: CodexApiStore | None,
+) -> ProjectReadinessProbe | None:
+    if store is None:
+        return None
+    if not callable(getattr(store, "list_codex_tasks", None)) or not callable(
+        getattr(store, "load_codex_task", None)
+    ):
+        return None
+    return await resolve_project_readiness_probe(
+        store,
+        project.id,
+        project.run_command,
+    )
+
+
+async def _project_run_evaluation(
+    project: Project,
+    store: CodexApiStore | None,
+) -> tuple[LocalServiceStatus, ApplicationReadinessStatus]:
+    service = await _project_service_status(project, store)
+    if store is None:
+        return service, invalid_readiness_status("store_unavailable")
+    readiness_probe = await _project_readiness_probe(project, store)
+    if readiness_probe is None:
+        return service, invalid_readiness_status("readiness_not_configured")
+    evaluation = await evaluate_project_service(readiness_probe)
+    return evaluation["service"], evaluation["readiness"]
+
+
 async def _project_run_status_payload(
     project: Project,
     store: CodexApiStore | None,
 ) -> ProjectRunStatusPayload:
-    service = await _project_service_status(project, store)
-    return add_service_status(project_run_manager.status(project.id), service)
+    service, readiness = await _project_run_evaluation(project, store)
+    return add_service_status(
+        project_run_manager.status(project.id),
+        service,
+        readiness,
+    )
 
 
 async def _load_startup_service(project_id: str, service_id: str) -> tuple[Project, ProjectStartupService]:
@@ -3338,14 +3380,52 @@ async def _load_startup_service(project_id: str, service_id: str) -> tuple[Proje
     raise HTTPException(status_code=404, detail="startup_service_not_found")
 
 
+async def _startup_service_evaluation(
+    service: ProjectStartupService,
+) -> tuple[LocalServiceStatus, ApplicationReadinessStatus]:
+    evaluation = await evaluate_project_service(
+        service.readiness_probe,
+        fallback_access_url=service.access_url,
+    )
+    return evaluation["service"], evaluation["readiness"]
+
+
 async def _startup_service_status(
     project: Project, service: ProjectStartupService
 ) -> ProjectRunStatusPayload:
-    local_service = await probe_local_service(service.access_url)
+    local_service, readiness = await _startup_service_evaluation(service)
     return add_service_status(
         project_run_manager.status(project.id, service_id=service.service_id),
         local_service,
+        readiness,
     )
+
+
+def _startup_config_invalid_detail(service_id: str | None = None) -> dict[str, object]:
+    detail: dict[str, object] = {
+        "reason": "startup_config_invalid",
+        "message": "Startup readiness identity is missing or invalid. Re-analyze startup configuration.",
+    }
+    if service_id is not None:
+        detail["service_id"] = service_id
+    return detail
+
+
+def _occupied_service_detail(
+    local_service: LocalServiceStatus,
+    readiness: ApplicationReadinessStatus,
+    *,
+    service_id: str | None = None,
+) -> dict[str, object]:
+    detail: dict[str, object] = {
+        "reason": "service_address_occupied",
+        "url": local_service["url"],
+        "http_status": local_service["http_status"],
+        "readiness_state": readiness["state"],
+    }
+    if service_id is not None:
+        detail["service_id"] = service_id
+    return detail
 
 
 def _startup_service_order(services: list[ProjectStartupService]) -> list[ProjectStartupService]:
@@ -3397,18 +3477,23 @@ async def get_project_service_run_logs(
 async def start_project_service_run(project_id: str, service_id: str) -> object:
     project, service = await _load_startup_service(project_id, service_id)
     store = _require_codex_store()
-    await _reconcile_project_env_file(project, store)
-    local_service = await probe_local_service(service.access_url)
+    local_service, readiness = await _startup_service_evaluation(service)
     current = project_run_manager.status(project.id, service_id=service.service_id)
+    if readiness["state"] == "invalid_config":
+        raise HTTPException(
+            status_code=409,
+            detail=_startup_config_invalid_detail(service.service_id),
+        )
     if local_service["state"] == "reachable" and not current["running"]:
         raise HTTPException(
             status_code=409,
-            detail={
-                "reason": "service_already_reachable",
-                "url": local_service["url"],
-                "http_status": local_service["http_status"],
-            },
+            detail=_occupied_service_detail(
+                local_service,
+                readiness,
+                service_id=service.service_id,
+            ),
         )
+    await _reconcile_project_env_file(project, store)
     try:
         started = await project_run_manager.start(
             project.id,
@@ -3421,14 +3506,16 @@ async def start_project_service_run(project_id: str, service_id: str) -> object:
         if exc.pattern:
             detail["pattern"] = exc.pattern
         raise HTTPException(status_code=409, detail=detail) from exc
-    return add_service_status(started, await probe_local_service(service.access_url))
+    local_service, readiness = await _startup_service_evaluation(service)
+    return add_service_status(started, local_service, readiness)
 
 
 @router.post("/projects/{project_id}/services/{service_id}/run/stop")
 async def stop_project_service_run(project_id: str, service_id: str) -> object:
     project, service = await _load_startup_service(project_id, service_id)
     stopped = await project_run_manager.stop(project.id, service_id=service.service_id)
-    return add_service_status(stopped, await probe_local_service(service.access_url))
+    local_service, readiness = await _startup_service_evaluation(service)
+    return add_service_status(stopped, local_service, readiness)
 
 
 @router.post("/projects/{project_id}/run/start-all")
@@ -3438,20 +3525,24 @@ async def start_all_project_services(project_id: str) -> object:
     services = _startup_service_order(await store.list_project_startup_services(project_id))
     if not services:
         raise HTTPException(status_code=409, detail={"reason": "no_run_command"})
-    await _reconcile_project_env_file(project, store)
     for service in services:
-        local_service = await probe_local_service(service.access_url)
+        local_service, readiness = await _startup_service_evaluation(service)
         managed = project_run_manager.status(project.id, service_id=service.service_id)
+        if readiness["state"] == "invalid_config":
+            raise HTTPException(
+                status_code=409,
+                detail=_startup_config_invalid_detail(service.service_id),
+            )
         if local_service["state"] == "reachable" and not managed["running"]:
             raise HTTPException(
                 status_code=409,
-                detail={
-                    "reason": "service_already_reachable",
-                    "service_id": service.service_id,
-                    "url": local_service["url"],
-                    "http_status": local_service["http_status"],
-                },
+                detail=_occupied_service_detail(
+                    local_service,
+                    readiness,
+                    service_id=service.service_id,
+                ),
             )
+    await _reconcile_project_env_file(project, store)
     results: list[dict[str, object]] = []
     for service in services:
         try:
@@ -3471,7 +3562,13 @@ async def start_all_project_services(project_id: str) -> object:
                     **({"pattern": exc.pattern} if exc.pattern else {}),
                 },
             ) from exc
-        results.append({"service_id": service.service_id, "status": status})
+        local_service, readiness = await _startup_service_evaluation(service)
+        results.append(
+            {
+                "service_id": service.service_id,
+                "status": add_service_status(status, local_service, readiness),
+            }
+        )
     return {"services": results}
 
 
@@ -3484,7 +3581,13 @@ async def stop_all_project_services(project_id: str) -> object:
     results: list[dict[str, object]] = []
     for service in reversed(services):
         status = await project_run_manager.stop(project.id, service_id=service.service_id)
-        results.append({"service_id": service.service_id, "status": status})
+        local_service, readiness = await _startup_service_evaluation(service)
+        results.append(
+            {
+                "service_id": service.service_id,
+                "status": add_service_status(status, local_service, readiness),
+            }
+        )
     return {"services": results}
 
 
@@ -3493,50 +3596,64 @@ async def start_project_run(project_id: str) -> ProjectRunStatusPayload:
     project = await _load_project_for_run(project_id)
     store = _require_codex_store()
     service = await _project_service_status(project, store)
-    if service["state"] == "reachable" and not project_run_manager.status(project.id)["running"]:
-        await store.append_project_audit(
-            project_id=project.id,
-            issue_id=None,
-            event="run_refused:service_already_reachable",
-        )
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "reason": "service_already_reachable",
-                "url": service["url"],
-                "http_status": service["http_status"],
-            },
-        )
-    await _reconcile_project_env_file(project, store)
-
-    try:
-        started = await project_run_manager.start(
-            project.id,
-            project.run_command or "",
-            project.repo_path,
-        )
-    except ProjectRunError as exc:
-        if exc.reason == "refused":
+    readiness_probe = await _project_readiness_probe(project, store)
+    if readiness_probe is None:
+        readiness = invalid_readiness_status("readiness_not_configured")
+    else:
+        evaluation = await evaluate_project_service(readiness_probe)
+        service = evaluation["service"]
+        readiness = evaluation["readiness"]
+    current = project_run_manager.status(project.id)
+    if readiness["state"] == "invalid_config":
+        if service["state"] == "reachable" and not current["running"]:
             await store.append_project_audit(
                 project_id=project.id,
                 issue_id=None,
-                event=f"run_refused:{exc.pattern or 'unknown'}",
+                event="run_refused:service_address_occupied",
             )
-        detail = {"reason": exc.reason}
+            raise HTTPException(
+                status_code=409,
+                detail=_occupied_service_detail(service, readiness),
+            )
+        raise HTTPException(
+            status_code=409,
+            detail=_startup_config_invalid_detail(),
+        )
+    if service["state"] == "reachable" and not current["running"]:
+        await store.append_project_audit(
+            project_id=project.id,
+            issue_id=None,
+            event="run_refused:service_address_occupied",
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=_occupied_service_detail(service, readiness),
+        )
+    run_command = project.run_command
+    if not run_command or not run_command.strip():
+        raise HTTPException(status_code=409, detail={"reason": "no_run_command"})
+    await _reconcile_project_env_file(project, store)
+    try:
+        started = await project_run_manager.start(
+            project.id,
+            run_command,
+            project.repo_path,
+        )
+    except ProjectRunError as exc:
+        detail: dict[str, object] = {"reason": exc.reason}
         if exc.pattern:
             detail["pattern"] = exc.pattern
         raise HTTPException(status_code=409, detail=detail) from exc
-    return add_service_status(
-        started,
-        await _project_service_status(project, store),
-    )
+    service, readiness = await _project_run_evaluation(project, store)
+    return add_service_status(started, service, readiness)
 
 
 @router.post("/projects/{project_id}/run/stop")
 async def stop_project_run(project_id: str) -> ProjectRunStatusPayload:
     project = await _load_project_for_run(project_id)
     stopped = await project_run_manager.stop(project_id)
-    return add_service_status(stopped, await _project_service_status(project, codex_store))
+    service, readiness = await _project_run_evaluation(project, codex_store)
+    return add_service_status(stopped, service, readiness)
 
 
 @router.get("/projects/{project_id}/run/status")

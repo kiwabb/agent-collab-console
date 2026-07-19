@@ -14,7 +14,7 @@ import httpx
 from app.application import timeouts
 from app.application.project_run_manager import RunStatus
 from app.application.task_statuses import is_task_success_status
-from app.domain.models import CodexTask
+from app.domain.models import CodexTask, ProjectReadinessProbe
 from app.json_safety import JsonObject
 
 LocalServiceState = Literal[
@@ -34,6 +34,21 @@ class LocalServiceStatus(TypedDict):
     error: str | None
 
 
+class ApplicationReadinessPayload(TypedDict):
+    state: Literal[
+        "ready",
+        "unreachable",
+        "occupied_unknown",
+        "identified_unready",
+        "invalid_config",
+    ]
+    url: str | None
+    http_status: int | None
+    checked_at: str | None
+    identity_matched: bool
+    error: str | None
+
+
 class ProjectRunStatusPayload(TypedDict):
     running: bool
     command: str | None
@@ -41,6 +56,7 @@ class ProjectRunStatusPayload(TypedDict):
     started_at: str | None
     exit_code: int | None
     service: LocalServiceStatus
+    readiness: ApplicationReadinessPayload
 
 
 class LocalServiceUrlError(ValueError):
@@ -131,8 +147,18 @@ def unknown_local_service_status(reason: str) -> LocalServiceStatus:
 
 
 def add_service_status(
-    run_status: RunStatus, service: LocalServiceStatus
+    run_status: RunStatus,
+    service: LocalServiceStatus,
+    readiness: ApplicationReadinessPayload | None = None,
 ) -> ProjectRunStatusPayload:
+    readiness_payload: ApplicationReadinessPayload = readiness or {
+        "state": "invalid_config",
+        "url": None,
+        "http_status": None,
+        "checked_at": None,
+        "identity_matched": False,
+        "error": "readiness_not_configured",
+    }
     return {
         "running": run_status["running"],
         "command": run_status["command"],
@@ -140,6 +166,7 @@ def add_service_status(
         "started_at": run_status["started_at"],
         "exit_code": run_status["exit_code"],
         "service": service,
+        "readiness": readiness_payload,
     }
 
 
@@ -148,9 +175,9 @@ def _task_timestamp(task: CodexTask) -> float:
     return timestamp.timestamp() if timestamp is not None else 0.0
 
 
-def select_project_access_url(tasks: Sequence[CodexTask], run_command: str | None) -> str | None:
-    """Select a URL from the newest successful analysis for the current command."""
-
+def _latest_project_script_contract(
+    tasks: Sequence[CodexTask], run_command: str | None
+) -> tuple[str | None, ProjectReadinessProbe | None] | None:
     current_command = (run_command or "").strip()
     if not current_command:
         return None
@@ -174,16 +201,32 @@ def select_project_access_url(tasks: Sequence[CodexTask], run_command: str | Non
     if suggestion is None or suggestion.run_command.strip() != current_command:
         return None
     access_url = suggestion.access_url
-    return access_url.strip() if access_url and access_url.strip() else None
+    return (
+        access_url.strip() if access_url and access_url.strip() else None,
+        suggestion.readiness_probe,
+    )
 
 
-async def resolve_project_access_url(
+def select_project_access_url(tasks: Sequence[CodexTask], run_command: str | None) -> str | None:
+    """Select a URL from the newest successful analysis for the current command."""
+
+    contract = _latest_project_script_contract(tasks, run_command)
+    return contract[0] if contract is not None else None
+
+
+def select_project_readiness_probe(
+    tasks: Sequence[CodexTask], run_command: str | None
+) -> ProjectReadinessProbe | None:
+    """Select the matcher from the newest successful analysis for the current command."""
+
+    contract = _latest_project_script_contract(tasks, run_command)
+    return contract[1] if contract is not None else None
+
+
+async def _load_project_script_tasks(
     store: ProjectStartupTaskStore,
     project_id: str,
-    run_command: str | None,
-) -> str | None:
-    """Load typed task rows before selecting an access URL at the DB boundary."""
-
+) -> list[CodexTask]:
     rows = await store.list_codex_tasks(project_id=project_id)
     candidates: list[CodexTask] = []
     for row in rows:
@@ -199,7 +242,41 @@ async def resolve_project_access_url(
         task = await store.load_codex_task(task_id)
         if task is not None:
             candidates.append(task)
-    return select_project_access_url(candidates, run_command)
+    return candidates
+
+
+async def resolve_project_startup_contract(
+    store: ProjectStartupTaskStore,
+    project_id: str,
+    run_command: str | None,
+) -> tuple[str | None, ProjectReadinessProbe | None]:
+    """Load the current command's access URL and matcher from one task snapshot."""
+
+    candidates = await _load_project_script_tasks(store, project_id)
+    contract = _latest_project_script_contract(candidates, run_command)
+    return contract if contract is not None else (None, None)
+
+
+async def resolve_project_access_url(
+    store: ProjectStartupTaskStore,
+    project_id: str,
+    run_command: str | None,
+) -> str | None:
+    """Load typed task rows before selecting an access URL at the DB boundary."""
+
+    access_url, _ = await resolve_project_startup_contract(store, project_id, run_command)
+    return access_url
+
+
+async def resolve_project_readiness_probe(
+    store: ProjectStartupTaskStore,
+    project_id: str,
+    run_command: str | None,
+) -> ProjectReadinessProbe | None:
+    """Load the current command's application matcher from the typed task boundary."""
+
+    _, readiness_probe = await resolve_project_startup_contract(store, project_id, run_command)
+    return readiness_probe
 
 
 async def probe_local_service(

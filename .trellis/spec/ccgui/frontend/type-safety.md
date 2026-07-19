@@ -615,12 +615,16 @@ export interface ProjectScriptTaskResponse {
 - API client: `startProjectRun(projectId) -> Promise<StartProjectRunResult>`.
 - Success: `ProjectRunStatus`.
 - Refusal: `{ error: ProjectRunStartReason; pattern?; errors?; message? }`.
-- Status service field:
+- Transport service field:
   `{ state, url, http_status, checked_at, error }`.
+- Readiness field:
+  `{ state, url, http_status, checked_at, identity_matched, error }`.
 - Service states:
   `reachable | unreachable | not_configured | invalid_url | unknown`.
+- Readiness states:
+  `ready | unreachable | occupied_unknown | identified_unready | invalid_config`.
 - Reasons:
-  `no_run_command | already_running | service_already_reachable | refused | env_incomplete`.
+  `no_run_command | already_running | service_address_occupied | startup_config_invalid | refused | env_incomplete`.
 
 ### 3. Contracts
 
@@ -821,4 +825,78 @@ const value = safeJsonParse(raw);
 if (value === null) throw new StructuredPrototypeStorageError("invalid pending JSON");
 const pending = parseStructuredPrototypePendingOperation(value, projectId);
 resume(pending);
+```
+
+---
+
+## Scenario: Structured Prototype Recovered Failure Identity
+
+### 1. Scope / Trigger
+
+- Trigger: changing timeout recovery for a structured-prototype mutation whose
+  original HTTP error contains user-actionable blocking detail.
+- A later terminal outcome is authoritative, but its compact error code may not
+  contain the Scenario or rule name from the original typed API response.
+
+### 2. Signatures
+
+- Request error: `StructuredPrototypeApiError` with `code`, `operationId`, and
+  `correlationId`.
+- Recovery error: `StructuredPrototypeOperationOutcomeError` with a terminal
+  `StructuredPrototypeOperationOutcome`.
+- Resolver:
+  `resolveStructuredPrototypeRecoveredOperationFailure(requestError, recoveryError) -> unknown`.
+
+### 3. Contracts
+
+- Reuse the original API error only when it is typed, its `operationId` is
+  non-null, and its operation ID, correlation ID, and code exactly equal the
+  terminal outcome's `operationId`, `correlationId`, and `errorCode`.
+- Otherwise surface the terminal outcome error. Similar text, status, resource,
+  or retryability is not sufficient identity evidence.
+- Outcome-versus-pending descriptor identity validation happens first; this
+  resolver only decides which already-validated failure presentation is safe.
+
+### 4. Validation & Error Matrix
+
+- All three identity fields match -> preserve the original detailed API error.
+- Missing request operation ID -> use the recovery error.
+- Operation ID, correlation ID, or error code differs -> use the recovery error.
+- Request error is untyped or recovery is non-terminal/pending -> do not reuse
+  request detail.
+
+### 5. Good/Base/Bad Cases
+
+- Good: page deletion is blocked by Scenario `purchase-happy-path`; the matching
+  terminal outcome proves that the original message names the same failure.
+- Base: direct failures display their typed API error without recovery.
+- Bad: preserve a prior `command_page_inbound_navigation` message after the
+  recovered outcome reports `command_page_scenario_start`.
+
+### 6. Tests Required
+
+- Unit tests match all three fields and assert the original blocking detail is
+  returned.
+- Parameterized mismatches for null/different operation ID, correlation ID, and
+  error code return `StructuredPrototypeOperationOutcomeError`.
+- Navigator/controller tests prove the selected error reaches the visible page
+  or layer mutation error surface without clearing the recovered draft.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+return requestError instanceof StructuredPrototypeApiError ? requestError : recoveryError;
+```
+
+Correct:
+
+```ts
+return requestError.operationId !== null &&
+  requestError.operationId === recoveryError.outcome.operationId &&
+  requestError.correlationId === recoveryError.outcome.correlationId &&
+  requestError.code === recoveryError.outcome.errorCode
+  ? requestError
+  : recoveryError;
 ```

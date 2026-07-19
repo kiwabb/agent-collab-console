@@ -163,6 +163,28 @@ Keep the structural regression assertions in
 `frontend/tests/projectShellRouting.test.ts` when changing the project shell or
 structured prototype Studio.
 
+### Full-screen editor stacking contract
+
+A route-level full-screen editor is still page content. Keep its root at
+`z-40` or below so body-portaled Dialog, Sheet, Dropdown, Select, and Tooltip
+surfaces at `z-50` remain visible and pointer-operable. Toast and command-palette
+layers may intentionally sit higher.
+
+High z-index values inside the editor, including a drag overlay or mobile
+toolbar, remain confined by the root stacking context. Do not raise the editor
+root to solve an internal overlay problem; that places the whole editor above
+global modal chrome. Source-contract tests must compare the full-screen and
+Dialog layer tokens, and browser acceptance must click a modal action while the
+editor is full-screen.
+
+```tsx
+// Wrong: the dialog exists in the accessibility tree but is visually covered.
+<main className="fixed inset-0 z-[100]" />
+
+// Correct: page content stays below body-portaled modal chrome at z-50.
+<main className="fixed inset-0 z-40" />
+```
+
 ### Scheduling motion convention
 
 Conductor, dispatch, policy-routing, and active tool surfaces use semantic

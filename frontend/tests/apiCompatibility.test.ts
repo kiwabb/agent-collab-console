@@ -230,21 +230,6 @@ test("runtime-critical callers import split api modules directly", () => {
     "approvals page task list should come from api/tasks",
   );
   assert.match(
-    readSource("features/workbench/WorkbenchPage.tsx"),
-    /from "@\/lib\/api\/approvals"/,
-    "workbench approval helpers should come from api/approvals",
-  );
-  assert.match(
-    readSource("features/workbench/WorkbenchPage.tsx"),
-    /from "@\/lib\/api\/issues"/,
-    "workbench issue calls and legacy phase transitions should come from api/issues",
-  );
-  assert.match(
-    readSource("features/workbench/WorkbenchPage.tsx"),
-    /from "@\/lib\/api\/tasks"/,
-    "workbench task actions and execution process calls should come from api/tasks",
-  );
-  assert.match(
     readSource("store/workbenchStore.ts"),
     /from ["']@\/lib\/api\/approvals["']/,
     "workbench store pending approvals should come from api/approvals",

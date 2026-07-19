@@ -176,7 +176,9 @@ async def test_verify_project_launch_reaches_local_http_server(tmp_path):
 
     suggestion = parse_project_script_suggestion(
         f'{{"setup_script":"","run_command":"python3 -m http.server {port}",'
-        f'"access_url":"http://127.0.0.1:{port}"}}'
+        f'"access_url":"http://127.0.0.1:{port}",'
+        f'"readiness_probe":{{"kind":"http","url":"http://127.0.0.1:{port}/",'
+        '"expected_status":200,"identity":{"kind":"text_contains","text":"Directory listing"}}}'
     )
 
     assert suggestion is not None
@@ -187,7 +189,7 @@ async def test_verify_project_launch_reaches_local_http_server(tmp_path):
     )
 
     assert verification.status == "verified"
-    assert verification.access_url == f"http://127.0.0.1:{port}"
+    assert verification.access_url == f"http://127.0.0.1:{port}/"
 
 
 @pytest.mark.asyncio

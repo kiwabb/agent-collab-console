@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import cast
 
+import pytest
+
 from app.application.event_bus import EventBus, event_bus
+from app.domain.models import LogEvent
 
 
 def test_event_bus_wraps_events_and_evicts_old_entries():
@@ -75,3 +79,65 @@ def test_global_events_ws_replays_then_streams_live_without_duplicate(client):
         assert message["event_id"] == "evt-00000002"
         assert message["type"] == "issue_updated"
         assert message["payload"]["status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_event_bus_shutdown_drains_log_queue() -> None:
+    persisted: list[str] = []
+
+    class LogStore:
+        async def append_log_event(self, event: LogEvent) -> None:
+            persisted.append(event.id)
+
+    bus = EventBus()
+    bus.set_log_store(LogStore())
+    bus.set_loop(asyncio.get_running_loop())
+    for index in range(5):
+        await bus.queue_log_event(
+            LogEvent(
+                id=f"log-{index}",
+                session_id="workspace-1",
+                stream="stdout",
+                content=f"line {index}",
+                created_at=datetime.now(),
+            )
+        )
+
+    await bus.shutdown()
+
+    assert persisted == [f"log-{index}" for index in range(5)]
+    assert bus._db_queue.empty()
+    assert bus._db_worker_task is None
+
+
+@pytest.mark.asyncio
+async def test_event_bus_log_worker_retries_write_failure_without_loss(monkeypatch) -> None:
+    persisted: list[str] = []
+    failed_once = False
+
+    class FlakyLogStore:
+        async def append_log_event(self, event: LogEvent) -> None:
+            nonlocal failed_once
+            if event.id == "log-failed" and not failed_once:
+                failed_once = True
+                raise RuntimeError("write failed")
+            persisted.append(event.id)
+
+    bus = EventBus()
+    monkeypatch.setattr("app.application.timeouts.event_bus_log_retry_delay_s", lambda: 0)
+    bus.set_log_store(FlakyLogStore())
+    bus.set_loop(asyncio.get_running_loop())
+    for event_id in ("log-failed", "log-ok"):
+        await bus.queue_log_event(
+            LogEvent(
+                id=event_id,
+                session_id="workspace-1",
+                stream="stdout",
+                content=event_id,
+                created_at=datetime.now(),
+            )
+        )
+
+    await bus.shutdown()
+
+    assert persisted == ["log-failed", "log-ok"]

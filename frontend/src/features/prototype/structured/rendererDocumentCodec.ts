@@ -415,13 +415,15 @@ function validateTable(value: Record<string, unknown>, path: string, entityIds: 
   });
 }
 
+type NodePositionPolicy = "forbidden" | "required" | "optional";
+
 function validateNodeChildren(
   value: unknown,
   path: string,
   entityIds: Set<string>,
   minimumLength: number,
   maximumLength: number,
-  positionRequired: boolean,
+  positionPolicy: NodePositionPolicy,
   colorTokenKeys: ReadonlySet<string>,
 ): void {
   const children = array(value, path);
@@ -431,7 +433,7 @@ function validateNodeChildren(
     );
   }
   children.forEach((child, index) =>
-    validateNode(child, `${path}[${index}]`, entityIds, positionRequired, colorTokenKeys),
+    validateNode(child, `${path}[${index}]`, entityIds, positionPolicy, colorTokenKeys),
   );
 }
 
@@ -439,7 +441,7 @@ function validateNode(
   value: unknown,
   path: string,
   entityIds: Set<string>,
-  positionRequired: boolean,
+  positionPolicy: NodePositionPolicy,
   colorTokenKeys: ReadonlySet<string>,
 ): void {
   const item = record(value, path);
@@ -472,11 +474,14 @@ function validateNode(
   validateCommon(item, path);
   const layoutItem = record(item["layoutItem"], `${path}.layoutItem`);
   const hasPosition = Object.hasOwn(layoutItem, "position");
-  if (positionRequired !== hasPosition) {
+  if (positionPolicy === "required" && !hasPosition) {
     throw new RendererDocumentCodecError(
-      positionRequired
-        ? `${path}.layoutItem.position is required inside a Freeform container`
-        : `${path}.layoutItem.position is only valid inside a Freeform container`,
+      `${path}.layoutItem.position is required inside a Freeform container`,
+    );
+  }
+  if (positionPolicy === "forbidden" && hasPosition) {
+    throw new RendererDocumentCodecError(
+      `${path}.layoutItem.position is forbidden on a document or component root`,
     );
   }
   registerEntityId(item["id"], `${path}.id`, entityIds);
@@ -510,7 +515,7 @@ function validateNode(
         entityIds,
         0,
         500,
-        true,
+        "required",
         colorTokenKeys,
       );
       return;
@@ -527,7 +532,7 @@ function validateNode(
         entityIds,
         0,
         500,
-        false,
+        "optional",
         colorTokenKeys,
       );
       return;
@@ -561,7 +566,7 @@ function validateNode(
         entityIds,
         0,
         500,
-        false,
+        "optional",
         colorTokenKeys,
       );
       return;
@@ -576,7 +581,7 @@ function validateNode(
         entityIds,
         1,
         200,
-        false,
+        "optional",
         colorTokenKeys,
       );
       return;
@@ -867,7 +872,7 @@ export function parseRendererDocument(value: unknown): StructuredPrototypeDocume
         parsed["root"],
         `document.componentDefinitions[${index}].root`,
         entityIds,
-        false,
+        "forbidden",
         colorTokenKeys,
       );
     },
@@ -890,7 +895,13 @@ export function parseRendererDocument(value: unknown): StructuredPrototypeDocume
     exactKeys(viewport, ["width", "height"], `document.pages[${index}].viewport`);
     boundedInteger(viewport["width"], 320, 2560, `document.pages[${index}].viewport.width`);
     boundedInteger(viewport["height"], 480, 2160, `document.pages[${index}].viewport.height`);
-    validateNode(parsed["root"], `document.pages[${index}].root`, entityIds, false, colorTokenKeys);
+    validateNode(
+      parsed["root"],
+      `document.pages[${index}].root`,
+      entityIds,
+      "forbidden",
+      colorTokenKeys,
+    );
   });
   const navigation = record(item["navigation"], "document.navigation");
   exactKeys(navigation, ["items"], "document.navigation");

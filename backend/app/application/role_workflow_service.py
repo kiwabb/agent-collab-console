@@ -459,6 +459,8 @@ class RoleWorkflowService:
                 "Inspect the repository directly with Glob, Grep, and Read. Follow references instead of relying on a fixed file list.",
                 "Identify every long-running local service required for the usable application, including frontend, backend, workers, and required local infrastructure.",
                 "For each service, determine a stable lowercase service_id, working directory relative to the repository root, setup command, run command, access URL, dependencies, and the repository-relative evidence files you actually read.",
+                "Every service must include a readiness_probe with kind=http, a separate loopback URL, an exact expected_status, and an application-specific identity predicate. Use json_subset with stable identity/readiness fields from a health endpoint when available; otherwise use text_contains with a stable literal HTML marker. Status alone is never identity.",
+                "The readiness URL may differ from access_url. Prefer a dedicated health/readiness endpoint. Keep json_subset small and stable; never fingerprint volatile product/business data when a health identity marker exists.",
                 "Commands are executed inside working_directory. Use bare commands such as `mvn spring-boot:run` or `npm run dev`; do not add cd, shell operators, or grouping.",
                 "Evidence entries must use repository-root-relative paths in the path field and put explanations only in the detail field.",
                 "Do not execute setup or run commands and do not modify repository files.",

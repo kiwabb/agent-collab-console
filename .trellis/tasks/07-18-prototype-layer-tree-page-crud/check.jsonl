@@ -1,0 +1,8 @@
+{"file":".trellis/spec/ccgui/frontend/component-guidelines.md","reason":"Review navigator accessibility, pane composition, and i18n."}
+{"file":".trellis/spec/ccgui/frontend/state-management.md","reason":"Verify no browser-only document mutation path was introduced."}
+{"file":".trellis/spec/ccgui/frontend/type-safety.md","reason":"Verify exact command and API boundary typing."}
+{"file":".trellis/spec/ccgui/frontend/quality-guidelines.md","reason":"Run focused editor and source-contract checks."}
+{"file":".trellis/spec/vibe-kanban/backend/error-handling.md","reason":"Verify invalid mutations fail closed with typed errors."}
+{"file":".trellis/spec/vibe-kanban/backend/database-guidelines.md","reason":"Verify journal, replay, retry, recovery, and publication parity."}
+{"file":".trellis/spec/vibe-kanban/backend/quality-guidelines.md","reason":"Run focused backend checks and review forbidden patterns."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Audit the full page command data flow and reference integrity."}

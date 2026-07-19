@@ -25,7 +25,9 @@ import {
   readStructuredPrototypePaletteDragData,
   resolveStructuredPrototypeActiveLayoutNodeId,
   resolveStructuredPrototypeMoveTargetIndex,
+  resolveStructuredPrototypeSelectionChromeState,
   structuredPrototypeCollisionDetection,
+  structuredPrototypeNodeDragMatchesSelection,
 } from "../src/features/prototype/structured/structuredPrototypeDrag";
 import { createPaletteNode } from "../src/features/prototype/structured/structuredPrototypeCommands";
 import { resolveStructuredPrototypeMeasuredDropAreas } from "../src/features/prototype/structured/structuredPrototypeDropAreas";
@@ -598,6 +600,61 @@ test("nested prototype drag data preserves the target parent and canonical index
   );
 });
 
+test("selection chrome hides only for selected canvas dragging or active Freeform movement", () => {
+  const nodeDrag = { kind: "node", nodeId: "metric-a", parentId: "metrics-grid", index: 0 };
+  assert.equal(structuredPrototypeNodeDragMatchesSelection(nodeDrag, ["metric-a"]), true);
+  assert.equal(structuredPrototypeNodeDragMatchesSelection(nodeDrag, ["metric-b"]), false);
+  assert.equal(
+    structuredPrototypeNodeDragMatchesSelection(
+      { kind: "palette", nodeType: "Text", formDefinitionId: null },
+      ["metric-a"],
+    ),
+    false,
+  );
+  assert.equal(
+    structuredPrototypeNodeDragMatchesSelection({ kind: "page", pageId: "page-a", index: 0 }, [
+      "page-a",
+    ]),
+    false,
+  );
+  assert.equal(
+    structuredPrototypeNodeDragMatchesSelection({ kind: "node", nodeId: "metric-a" }, ["metric-a"]),
+    false,
+  );
+  assert.equal(
+    resolveStructuredPrototypeSelectionChromeState(nodeDrag, ["metric-a"], "idle"),
+    "hidden-during-node-drag",
+  );
+  assert.equal(
+    resolveStructuredPrototypeSelectionChromeState(nodeDrag, ["metric-b"], "idle"),
+    "visible",
+  );
+  assert.equal(
+    resolveStructuredPrototypeSelectionChromeState(
+      { kind: "palette", nodeType: "Text", formDefinitionId: null },
+      ["metric-a"],
+      "idle",
+    ),
+    "visible",
+  );
+  assert.equal(
+    resolveStructuredPrototypeSelectionChromeState(null, ["metric-a"], "idle"),
+    "visible",
+  );
+  assert.equal(
+    resolveStructuredPrototypeSelectionChromeState(null, ["metric-a"], "armed"),
+    "visible",
+  );
+  assert.equal(
+    resolveStructuredPrototypeSelectionChromeState(null, ["metric-a"], "preview"),
+    "hidden-during-freeform-move",
+  );
+  assert.equal(
+    resolveStructuredPrototypeSelectionChromeState(null, ["metric-a"], "pending"),
+    "hidden-during-freeform-move",
+  );
+});
+
 test("prototype collision prefers the deepest valid target and excludes the dragged subtree", () => {
   const sharedRect = collisionRect(0, 0, 200, 200);
   const collisions = structuredPrototypeCollisionDetection(
@@ -1113,6 +1170,7 @@ test("Studio recursively registers sortable children and faithful drag mirrors",
   assert.match(canvas, /right: parentElement\.clientWidth/);
   assert.match(canvas, /left: element\.offsetLeft/);
   assert.match(canvas, /activeIndex/);
+  assert.match(canvas, /child\.id !== activeNodeId && child\.layoutItem\.position === undefined/);
   assert.match(canvas, /data-prototype-active-layout-node-id/);
   assert.match(canvas, /data-prototype-measured-layout-child-count/);
   assert.match(canvas, /data-prototype-drop-area-count/);
@@ -1124,16 +1182,76 @@ test("Studio recursively registers sortable children and faithful drag mirrors",
   assert.match(controlsLayerSource, /data-prototype-selection-count={targets\.length}/);
   assert.match(controlsLayerSource, /data-prototype-selection-primary/);
   assert.match(controlsLayerSource, /data-prototype-selection-outline="true"/);
+  assert.match(controlsLayerSource, /resolveStructuredPrototypeSelectionChromeState/);
+  assert.match(controlsLayerSource, /data-prototype-selection-chrome/);
+  assert.match(controlsLayerSource, /outlineColor: selectionChromeHidden/);
+  assert.match(controlsLayerSource, /visibility: selectionChromeHidden/);
   assert.match(controlsLayerSource, /data-prototype-marquee="true"/);
   assert.match(controlsLayerSource, /ref=\{sortableControls\.setActivatorNodeRef\}/);
-  assert.match(controlsLayerSource, /cursor-nwse-resize/);
-  assert.match(controlsLayerSource, /cursor-ew-resize/);
-  assert.match(controlsLayerSource, /cursor-ns-resize/);
+  assert.match(controlsLayerSource, /data-prototype-selection-move-surface="sortable"/);
+  assert.match(controlsLayerSource, /data-prototype-selection-move-surface="freeform"/);
+  assert.match(canvas, /data-prototype-selection-move-edge="top"/);
+  assert.match(canvas, /data-prototype-selection-move-edge="bottom"/);
+  assert.match(canvas, /data-prototype-selection-move-edge="left"/);
+  assert.match(canvas, /data-prototype-selection-move-edge="right"/);
+  const selectionMoveEdgesStart = canvas.indexOf("function StructuredPrototypeSelectionMoveEdges");
+  const selectionIntentStart = canvas.indexOf(
+    "export type StructuredPrototypeNodeSelectionIntent",
+    selectionMoveEdgesStart,
+  );
+  assert.ok(selectionMoveEdgesStart >= 0 && selectionIntentStart > selectionMoveEdgesStart);
+  const selectionMoveEdgesSource = canvas.slice(selectionMoveEdgesStart, selectionIntentStart);
+  assert.match(
+    selectionMoveEdgesSource,
+    /disabled \? "pointer-events-none" : "pointer-events-auto"/,
+  );
+  assert.equal(
+    [...selectionMoveEdgesSource.matchAll(/data-prototype-selection-move-edge=/g)].length,
+    4,
+  );
+  for (const surface of ["group-freeform", "freeform", "sortable"]) {
+    const surfaceIndex = controlsLayerSource.indexOf(
+      `data-prototype-selection-move-surface="${surface}"`,
+    );
+    const buttonStart = controlsLayerSource.lastIndexOf("<button", surfaceIndex);
+    assert.ok(buttonStart >= 0 && surfaceIndex > buttonStart);
+    assert.match(
+      controlsLayerSource.slice(buttonStart, surfaceIndex),
+      /className="pointer-events-none absolute inset-0/,
+    );
+  }
+  const firstSelectionTools = controlsLayerSource.indexOf("data-prototype-selection-tools=");
+  const lastSnapGuide = controlsLayerSource.lastIndexOf('data-prototype-snap-guide="true"');
+  const lastSpacingGuide = controlsLayerSource.lastIndexOf('data-prototype-spacing-guide="true"');
+  assert.ok(lastSnapGuide >= 0 && lastSnapGuide < firstSelectionTools);
+  assert.ok(lastSpacingGuide >= 0 && lastSpacingGuide < firstSelectionTools);
+  assert.ok(
+    controlsLayerSource.indexOf('data-prototype-selection-move-surface="group-freeform"') <
+      controlsLayerSource.indexOf('data-prototype-selection-tools="group"'),
+  );
+  assert.ok(
+    controlsLayerSource.indexOf('data-prototype-selection-move-surface="freeform"') <
+      controlsLayerSource.indexOf("data-prototype-selection-tools={primary"),
+  );
+  assert.ok(
+    controlsLayerSource.indexOf('data-prototype-selection-move-surface="sortable"') <
+      controlsLayerSource.indexOf("data-prototype-selection-tools={primary"),
+  );
+  assert.equal(
+    [...controlsLayerSource.matchAll(/style=\{\{visibility: selectionChromeHidden/g)].length,
+    2,
+  );
+  assert.match(canvas, /cursor-nwse-resize/);
+  assert.match(canvas, /cursor-ew-resize/);
+  assert.match(canvas, /cursor-ns-resize/);
   assert.match(controlsLayerSource, /data-prototype-resize-direction/);
-  assert.match(controlsLayerSource, /onResizePointerDown\(target\.node\.id, "east", event\)/);
-  assert.match(controlsLayerSource, /onResizePointerDown\(target\.node\.id, "south", event\)/);
-  assert.match(controlsLayerSource, /onResizePointerDown\(target\.node\.id, "southeast", event\)/);
-  assert.match(controlsLayerSource, /<GripVertical/);
+  assert.match(
+    controlsLayerSource,
+    /onResizePointerDown\(target\.node\.id, handle\.direction, event\)/,
+  );
+  assert.match(canvas, /markerClassName/);
+  assert.match(canvas, /size-2 border border-\[var\(--prototype-accent\)\]/);
+  assert.doesNotMatch(canvas, /GripVertical/);
   assert.doesNotMatch(sortableNodeSource, /data-prototype-node-selected/);
   assert.doesNotMatch(sortableNodeSource, /cursor-nwse-resize/);
   assert.doesNotMatch(sortableNodeSource, /<GripVertical/);
@@ -1144,10 +1262,8 @@ test("Studio recursively registers sortable children and faithful drag mirrors",
     controlsLayerSource,
     /handleScale = resolveStructuredPrototypeInverseScale\(previewScale\)/,
   );
-  assert.match(controlsLayerSource, /bottom-full right-0/);
-  assert.match(controlsLayerSource, /bottom-full left-full z-20/);
-  assert.match(controlsLayerSource, /right-0 top-full/);
-  assert.match(controlsLayerSource, /origin-top-right/);
+  assert.match(canvas, /left-full top-full/);
+  assert.match(canvas, /origin-top-right/);
   assert.match(canvas, /resolveStructuredPrototypeLayoutItem/);
   assert.match(canvas, /canvasLayoutStyle\(resolvedLayoutItem\)/);
   assert.match(canvas, /\[&>:last-child\]:w-full/);

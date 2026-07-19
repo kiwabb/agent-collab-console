@@ -11,12 +11,6 @@ function readSource(relativePath: string): string {
   return readFileSync(join(SRC_ROOT, relativePath), "utf-8");
 }
 
-function snippetAround(source: string, token: string, radius = 500): string {
-  const index = source.indexOf(token);
-  assert.notEqual(index, -1, `Expected source to contain ${token}`);
-  return source.slice(Math.max(0, index - radius), index + token.length + radius);
-}
-
 test("useIssueBudget narrows websocket budget events before updating state", () => {
   const source = readSource("features/issues/components/useIssueBudget.ts");
 
@@ -106,19 +100,6 @@ test("useIssueBudget normalizes real backend budget steering events", () => {
     null,
   );
 });
-test("WorkbenchPage keeps executionProcessesAll as an array and preserves process output on reload failure", () => {
-  const source = readSource("features/workbench/WorkbenchPage.tsx");
-
-  assert.doesNotMatch(source, /Object\.values\(executionProcessesAll\)/);
-  assert.match(source, /const executionProcesses = executionProcessesAll;/);
-
-  const reloadFailure = snippetAround(source, "workbench process output reload failed");
-  assert.match(reloadFailure, /setError\(msg\)/);
-  assert.doesNotMatch(reloadFailure, /setProcessLogs\(\[\]\)/);
-  assert.doesNotMatch(reloadFailure, /setProcessMessages\(\[\]\)/);
-  assert.match(source, /console\.error\("workbench selectedProjectId sync failed:"/);
-});
-
 test("CommandPalette keeps a visible load error state", () => {
   const source = readSource("features/workbench/components/CommandPalette.tsx");
 

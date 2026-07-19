@@ -3,20 +3,55 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Annotated, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+from app.application.local_service_probe import LocalServiceUrlError, canonicalize_local_service_url
 from app.application.project_command import (
     ProjectCommandError,
     parse_project_command,
     parse_project_setup_commands,
 )
-from app.domain.models import Project, ProjectStartupService
+from app.domain.models import (
+    Project,
+    ProjectReadinessProbe,
+    ProjectStartupEvidence,
+    ProjectStartupService,
+)
 
 
 class StartupConfigError(ValueError):
     pass
+
+
+class ReadinessJsonSubsetInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    kind: Literal["json_subset"]
+    expected: dict[str, JsonValue] = Field(min_length=1, max_length=50)
+
+
+class ReadinessTextContainsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    kind: Literal["text_contains"]
+    text: str = Field(min_length=1, max_length=1_000)
+
+
+ReadinessIdentityInput = Annotated[
+    ReadinessJsonSubsetInput | ReadinessTextContainsInput,
+    Field(discriminator="kind"),
+]
+
+
+class HttpReadinessProbeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    kind: Literal["http"]
+    url: str = Field(min_length=1, max_length=2_000)
+    expected_status: int = Field(ge=100, le=599)
+    identity: ReadinessIdentityInput
 
 
 class StartupServiceInput(BaseModel):
@@ -28,6 +63,7 @@ class StartupServiceInput(BaseModel):
     setup_command: str = Field(default="", max_length=8_000)
     run_command: str = Field(min_length=1, max_length=8_000)
     access_url: str | None = Field(default=None, max_length=2_000)
+    readiness_probe: HttpReadinessProbeInput
     depends_on: list[str] = Field(default_factory=list, max_length=50)
     evidence: list[StartupEvidenceInput] = Field(default_factory=list, min_length=1, max_length=100)
 
@@ -174,14 +210,25 @@ class ProjectStartupConfigService:
                 raise StartupConfigError(
                     f"service {item.service_id} command was refused: {exc.reason}"
                 ) from exc
-            normalized_evidence: list[str] = []
+            try:
+                readiness_url = canonicalize_local_service_url(item.readiness_probe.url)
+            except LocalServiceUrlError as exc:
+                raise StartupConfigError(
+                    f"service {item.service_id} readiness URL was refused: {exc.reason}"
+                ) from exc
+            normalized_evidence: list[ProjectStartupEvidence] = []
             for evidence in item.evidence:
                 evidence_path = (root / evidence.path).resolve()
                 if not evidence_path.is_relative_to(root) or not evidence_path.is_file():
                     raise StartupConfigError(
                         f"service {item.service_id} evidence is outside the project or missing"
                     )
-                normalized_evidence.append(evidence_path.relative_to(root).as_posix())
+                normalized_evidence.append(
+                    ProjectStartupEvidence(
+                        path=evidence_path.relative_to(root).as_posix(),
+                        detail=evidence.detail.strip(),
+                    )
+                )
             services.append(
                 ProjectStartupService(
                     project_id=project.id,
@@ -191,6 +238,12 @@ class ProjectStartupConfigService:
                     setup_command=item.setup_command.strip(),
                     run_command=item.run_command.strip(),
                     access_url=item.access_url,
+                    readiness_probe=ProjectReadinessProbe.model_validate(
+                        {
+                            **item.readiness_probe.model_dump(mode="json"),
+                            "url": readiness_url,
+                        }
+                    ),
                     depends_on=item.depends_on,
                     evidence=normalized_evidence,
                     created_at=now,

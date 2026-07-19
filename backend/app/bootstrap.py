@@ -191,7 +191,11 @@ except PrototypeSnapWorkerError as exc:
     )
     structured_prototype_snap_worker = None
 try:
-    structured_prototype_runtime_worker = PrototypeRuntimeWorker() if use_sqlite else None
+    structured_prototype_runtime_worker = (
+        PrototypeRuntimeWorker(timeout_s=timeouts.prototype_runtime_worker_timeout_s())
+        if use_sqlite
+        else None
+    )
 except PrototypeRuntimeWorkerError as exc:
     logger.warning(
         "prototype runtime worker unavailable: code=%s",

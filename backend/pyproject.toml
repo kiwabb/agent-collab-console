@@ -172,6 +172,7 @@ module = [
     "app.application.project_review_scheduler",
     "app.application.project_run_manager",
     "app.application.project_script_suggestions",
+    "app.application.project_service_readiness",
     "app.application.project_startup_mcp",
     "app.application.project_startup_service",
     "app.application.project_service",

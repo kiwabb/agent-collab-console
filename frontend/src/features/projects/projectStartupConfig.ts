@@ -2,6 +2,7 @@ import type {
   CodexTask,
   Project,
   ProjectEnvVarDisplay,
+  ProjectApplicationReadinessState,
   ProjectRunLogLine,
   ProjectRunServiceState,
   ProjectRunStatus,
@@ -23,7 +24,11 @@ export type ProjectRunOutcome = "idle" | "running" | "completed" | "failed" | "s
 export type ProjectRunPresentation =
   | "managed_running"
   | "managed_starting"
-  | "external_reachable"
+  | "managed_unhealthy"
+  | "external_ready"
+  | "external_unhealthy"
+  | "occupied_unknown"
+  | "invalid_config"
   | "failed"
   | "completed"
   | "stopped"
@@ -41,6 +46,7 @@ export interface ProjectStartupState {
   canStart: boolean;
   runOutcome: ProjectRunOutcome;
   serviceState: ProjectRunServiceState;
+  readinessState: ProjectApplicationReadinessState;
 }
 
 export interface ProjectRunRefreshErrors {
@@ -74,9 +80,19 @@ export function deriveProjectServiceState(
   return runStatus?.service.state ?? "unknown";
 }
 
+export function deriveProjectReadinessState(
+  runStatus: ProjectRunStatus | null,
+): ProjectApplicationReadinessState {
+  return runStatus?.readiness.state ?? "invalid_config";
+}
+
 export function shouldPollProjectServiceStatus(runStatus: ProjectRunStatus | null): boolean {
   if (runStatus === null) return true;
-  return runStatus.service.state === "reachable" || runStatus.service.state === "unreachable";
+  return (
+    runStatus.service.state === "reachable" ||
+    runStatus.service.state === "unreachable" ||
+    runStatus.readiness.state === "identified_unready"
+  );
 }
 
 export function deriveProjectRunPresentation(
@@ -84,10 +100,26 @@ export function deriveProjectRunPresentation(
   startupState: ProjectStartupState,
 ): ProjectRunPresentation {
   const managedRunning = runStatus?.running === true;
-  if (!managedRunning && startupState.serviceState === "reachable") {
-    return "external_reachable";
+  if (!managedRunning && startupState.readinessState === "ready") {
+    return "external_ready";
   }
-  if (managedRunning && startupState.serviceState === "unreachable") {
+  if (!managedRunning && startupState.readinessState === "invalid_config") {
+    return "invalid_config";
+  }
+  if (!managedRunning && startupState.readinessState === "identified_unready") {
+    return "external_unhealthy";
+  }
+  if (!managedRunning && startupState.serviceState === "reachable") {
+    return "occupied_unknown";
+  }
+  if (
+    managedRunning &&
+    (startupState.readinessState === "occupied_unknown" ||
+      startupState.readinessState === "identified_unready")
+  ) {
+    return "managed_unhealthy";
+  }
+  if (managedRunning && startupState.readinessState !== "ready") {
     return "managed_starting";
   }
   if (managedRunning) return "managed_running";
@@ -191,13 +223,15 @@ export function deriveProjectStartupState({
   const configureComplete = hasAnalysisResult && missingCount === 0 && unsavedCount === 0;
   const runOutcome = deriveProjectRunOutcome(runStatus);
   const serviceState = deriveProjectServiceState(runStatus);
+  const readinessState = deriveProjectReadinessState(runStatus);
   const running = runOutcome === "running";
   const canStart =
     hasAnalysisResult &&
     configureComplete &&
     Boolean(project.run_command?.trim()) &&
     !running &&
-    serviceState !== "reachable";
+    serviceState !== "reachable" &&
+    readinessState !== "invalid_config";
 
   return {
     analysis: analysisActive
@@ -210,20 +244,25 @@ export function deriveProjectStartupState({
     configure:
       !hasAnalysisResult || unsavedCount > 0 ? "pending" : missingCount > 0 ? "error" : "complete",
     run:
-      runOutcome === "running" || serviceState === "reachable"
+      readinessState === "ready"
         ? "complete"
-        : runOutcome === "failed"
+        : readinessState === "invalid_config"
           ? "error"
-          : runOutcome === "completed"
-            ? "complete"
-            : canStart
-              ? "ready"
-              : "pending",
+          : runOutcome === "running"
+            ? "active"
+            : runOutcome === "failed"
+              ? "error"
+              : runOutcome === "completed"
+                ? "complete"
+                : canStart
+                  ? "ready"
+                  : "pending",
     envCount: envVars.length,
     missingCount,
     unsavedCount,
     canStart,
     runOutcome,
     serviceState,
+    readinessState,
   };
 }

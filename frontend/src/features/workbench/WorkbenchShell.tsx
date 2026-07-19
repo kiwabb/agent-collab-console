@@ -14,6 +14,7 @@ interface Props {
   children: React.ReactNode;
   breadcrumbs?: BreadcrumbItem[] | undefined;
   headerRight?: React.ReactNode | undefined;
+  projectId?: string | null | undefined;
   workspaceId?: string | null | undefined;
   issueId?: string | null | undefined;
 }
@@ -22,11 +23,18 @@ export function WorkbenchShell({
   children,
   breadcrumbs,
   headerRight,
+  projectId,
   workspaceId,
   issueId,
 }: Props) {
+  const initialSelection = {
+    ...(projectId !== undefined ? { projectId: projectId ?? null } : {}),
+    workspaceId: workspaceId ?? null,
+    issueId: issueId ?? null,
+  };
+
   return (
-    <SelectionProvider initial={{ workspaceId: workspaceId ?? null, issueId: issueId ?? null }}>
+    <SelectionProvider initial={initialSelection}>
       <ExecutionProcessesProvider workspaceId={workspaceId ?? null}>
         <WorkbenchInner breadcrumbs={breadcrumbs} headerRight={headerRight}>
           {children}

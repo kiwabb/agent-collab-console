@@ -233,13 +233,6 @@ test("split API modules route ordinary JSON requests through shared helpers", ()
         "const response = await fetch(`${API_BASE}/codex/status`);",
       ]),
     ],
-    [
-      "projects.ts",
-      new Set([
-        'const response = await fetch(`${API_BASE}/projects/${projectId}/pull`, { method: "POST" });',
-        'const response = await fetch(`${API_BASE}/projects/${projectId}/run/start`, { method: "POST" });',
-      ]),
-    ],
     ["issues.ts", new Set(["const response = await fetch(`${url}&format=${format}`);"])],
     ["tasks.ts", new Set(["const response = await fetch(`${url}&format=${format}`);"])],
     [
@@ -451,17 +444,8 @@ test("frontend format scripts cover runtime and test TypeScript files", () => {
   );
 });
 
-test("prerendered grid storage helpers guard browser storage access", () => {
-  const workspaceGrid = readFileSync(
-    join(SRC_ROOT, "features/workspaces/WorkspaceGrid.tsx"),
-    "utf-8",
-  );
+test("prerendered issue grid storage helpers guard browser storage access", () => {
   const issueGrid = readFileSync(join(SRC_ROOT, "features/issues/IssueGrid.tsx"), "utf-8");
-
-  assert.match(workspaceGrid, /typeof window === "undefined"\) return new Set\(\)/);
-  assert.match(workspaceGrid, /window\.localStorage\.getItem\(FAVORITES_KEY\)/);
-  assert.match(workspaceGrid, /window\.localStorage\.setItem\(FAVORITES_KEY/);
-  assert.match(workspaceGrid, /safeJsonStringArray\(stored\)/);
 
   assert.match(issueGrid, /typeof window === "undefined"\) return \[\]/);
   assert.match(issueGrid, /window\.localStorage\.getItem\(RECENT_SEARCHES_KEY\)/);
@@ -469,27 +453,14 @@ test("prerendered grid storage helpers guard browser storage access", () => {
   assert.match(issueGrid, /safeJsonStringArray\(stored\)/);
 });
 
-test("workbench project MRU storage narrows to a number record", () => {
-  const source = readFileSync(join(SRC_ROOT, "features/workbench/WorkbenchPage.tsx"), "utf-8");
-
-  assert.match(source, /window\.localStorage\.getItem\("projectLastUsedAt"\)/);
-  assert.match(source, /safeJsonNumberRecord\(/);
-});
-
-test("workbench QA report status parsing is centralized", () => {
-  const workbenchPage = readFileSync(
-    join(SRC_ROOT, "features/workbench/WorkbenchPage.tsx"),
-    "utf-8",
-  );
+test("task execution QA report status parsing is centralized", () => {
   const taskExecutionSheet = readFileSync(
     join(SRC_ROOT, "features/workbench/components/TaskExecutionSheet.tsx"),
     "utf-8",
   );
   const helper = readFileSync(join(SRC_ROOT, "features/workbench/qaReportStatus.ts"), "utf-8");
 
-  assert.doesNotMatch(workbenchPage, /JSON\.parse\s*\(/);
   assert.doesNotMatch(taskExecutionSheet, /JSON\.parse\s*\(/);
-  assert.match(workbenchPage, /readQaReportStatus/);
   assert.match(taskExecutionSheet, /readQaReportStatus/);
   assert.match(helper, /safeJsonRecord/);
 });

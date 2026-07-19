@@ -87,8 +87,16 @@ export function ProjectStartupConfigPage({ projectId, initialProject }: Props) {
     Boolean(config.startupConfig?.services.length) ||
     Boolean(config.project.setup_script?.trim() || config.project.run_command?.trim());
   const running = config.runStatus?.running === true;
-  const externalReachable = config.startupState.serviceState === "reachable" && !running;
-  const serviceStarting = config.startupState.serviceState === "unreachable" && running;
+  const externalReady = config.startupState.readinessState === "ready" && !running;
+  const occupiedUnknown =
+    config.startupState.serviceState === "reachable" &&
+    config.startupState.readinessState !== "ready" &&
+    !running;
+  const serviceStarting =
+    running &&
+    (config.startupState.readinessState === "unreachable" ||
+      config.startupState.readinessState === "occupied_unknown");
+  const serviceUnhealthy = config.startupState.readinessState === "identified_unready";
   const runFailed = config.startupState.runOutcome === "failed";
   const runCompleted = config.startupState.runOutcome === "completed";
   const analysisStepDescription =
@@ -99,28 +107,40 @@ export function ProjectStartupConfigPage({ projectId, initialProject }: Props) {
         : config.startupState.analysis === "error"
           ? t("startupConfig.stepAnalyze.error")
           : t("startupConfig.stepAnalyze.pending");
-  const runStepDescription = externalReachable
-    ? t("startupConfig.stepRun.external")
-    : serviceStarting
-      ? t("startupConfig.stepRun.starting")
-      : runFailed
-        ? t("startupConfig.stepRun.failed", { code: config.runStatus?.exit_code ?? "" })
-        : running
-          ? t("startupConfig.stepRun.running")
-          : runCompleted
-            ? t("startupConfig.stepRun.completed")
-            : config.startupState.run === "ready"
-              ? t("startupConfig.stepRun.ready")
-              : t("startupConfig.stepRun.pending");
-  const serviceStateLabel =
-    config.startupState.serviceState === "reachable"
-      ? t("startupConfig.serviceState.reachable")
-      : serviceStarting
-        ? t("startupConfig.serviceState.starting")
-        : config.startupState.serviceState === "unreachable"
-          ? t("startupConfig.serviceState.offline")
-          : t("startupConfig.serviceState.unknown");
-  const serviceUrl = config.runStatus?.service.url ?? config.analysis?.accessUrl ?? null;
+  const runStepDescription = config.hasInvalidStartupService
+    ? t("startupConfig.stepRun.invalidConfig")
+    : externalReady
+      ? t("startupConfig.stepRun.external")
+      : occupiedUnknown
+        ? t("startupConfig.stepRun.occupiedUnknown")
+        : serviceUnhealthy
+          ? t("startupConfig.stepRun.unhealthy")
+          : serviceStarting
+            ? t("startupConfig.stepRun.starting")
+            : runFailed
+            ? t("startupConfig.stepRun.failed", { code: config.runStatus?.exit_code ?? "" })
+            : running
+              ? t("startupConfig.stepRun.running")
+              : runCompleted
+                ? t("startupConfig.stepRun.completed")
+                : config.startupState.run === "ready"
+                  ? t("startupConfig.stepRun.ready")
+                  : t("startupConfig.stepRun.pending");
+  const serviceStateLabel = config.hasInvalidStartupService
+    ? t("startupConfig.serviceState.invalidConfig")
+    : externalReady
+      ? t("startupConfig.serviceState.ready")
+      : occupiedUnknown
+        ? t("startupConfig.serviceState.occupiedUnknown")
+        : serviceUnhealthy
+          ? t("startupConfig.serviceState.unhealthy")
+          : serviceStarting
+            ? t("startupConfig.serviceState.starting")
+            : config.startupState.serviceState === "unreachable"
+            ? t("startupConfig.serviceState.offline")
+            : t("startupConfig.serviceState.unknown");
+  const serviceUrl =
+    (externalReady ? config.runStatus?.readiness.url : null) ?? config.analysis?.accessUrl ?? null;
   const configureStepDescription =
     config.startupState.unsavedCount > 0
       ? t("startupConfig.stepConfigure.unsaved", { count: config.startupState.unsavedCount })
@@ -189,6 +209,24 @@ export function ProjectStartupConfigPage({ projectId, initialProject }: Props) {
         </div>
       )}
 
+      {config.hasInvalidStartupService && (
+        <div
+          role="alert"
+          className="rounded-xl border border-status-failed/40 bg-status-failed/5 p-4"
+        >
+          <p className="text-sm font-semibold text-status-failed">
+            {t("startupConfig.invalidReadinessTitle")}
+          </p>
+          <p className="mt-1 text-sm text-text-muted">
+            {t("startupConfig.invalidReadinessDetail")}
+          </p>
+          <Button variant="outline" size="sm" onClick={config.startAnalysis} className="mt-3 gap-2">
+            <RotateCcw size={14} />
+            {t("startupConfig.reanalyze")}
+          </Button>
+        </div>
+      )}
+
       {config.analysisFeedback && (
         <div
           role="status"
@@ -246,7 +284,7 @@ export function ProjectStartupConfigPage({ projectId, initialProject }: Props) {
               aria-live="polite"
               className={cn(
                 "inline-flex min-h-8 items-center gap-2 rounded-full border px-3 text-xs font-semibold",
-                config.startupState.serviceState === "reachable"
+                config.startupState.readinessState === "ready"
                   ? "border-status-done/40 bg-status-done/10 text-status-done"
                   : serviceStarting
                     ? "border-status-awaiting/40 bg-status-awaiting/10 text-status-awaiting"
@@ -257,7 +295,7 @@ export function ProjectStartupConfigPage({ projectId, initialProject }: Props) {
                 aria-hidden
                 className={cn(
                   "size-2 rounded-full",
-                  config.startupState.serviceState === "reachable"
+                  config.startupState.readinessState === "ready"
                     ? "bg-status-done"
                     : serviceStarting
                       ? "animate-pulse bg-status-awaiting"
@@ -317,6 +355,7 @@ export function ProjectStartupConfigPage({ projectId, initialProject }: Props) {
                   projectId={projectId}
                   service={service}
                   disabled={config.runBusy || config.isAnalyzing}
+                  onStatusChange={config.updateServiceStatus}
                 />
               ))}
             </div>

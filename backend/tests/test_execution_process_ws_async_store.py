@@ -81,8 +81,14 @@ class AsyncStoreStub:
         assert task_id is None
         return [self.process]
 
-    async def list_execution_process_runtime_rows(self, session_id: str):
+    async def list_execution_process_runtime_rows(
+        self,
+        session_id: str,
+        *,
+        log_limit: int = 10000,
+    ):
         assert session_id == self.task.session_id
+        assert log_limit == 1000
         return [(self.process, self.task, [], self.logs)]
 
 
@@ -203,6 +209,142 @@ async def test_get_state_supports_async_runtime_rows(monkeypatch):
     logs = process_payload["logs"]
     assert isinstance(logs, list)
     assert logs[0]["id"] == "log-1"
+    assert logs[0]["session_id"] == store.task.session_id
+
+
+@pytest.mark.asyncio
+async def test_add_log_publishes_incremental_patch_without_reloading_store(monkeypatch):
+    store = AsyncStoreStub()
+    manager = ExecutionProcessWorkspaceStreamManager()
+
+    class FakeWebSocket:
+        async def send_json(self, frame):
+            return None
+
+    sub = codex_ws_module.WsSubscriber(cast(WebSocket, FakeWebSocket()), maxsize=10)
+    monkeypatch.setattr(codex_ws_module, "codex_store", store)
+    manager.subscribe(store.task.session_id, sub)
+    await manager.get_state(store.task.session_id)
+
+    async def fail_full_refresh(*args, **kwargs):
+        raise AssertionError("incremental log append must not reload the process view")
+
+    monkeypatch.setattr(manager, "_publish_execution_process_view", fail_full_refresh)
+    log: dict[str, object] = {
+        "id": "log-2",
+        "session_id": store.task.session_id,
+        "stream": "stdout",
+        "content": "world",
+        "task_id": store.task.id,
+        "execution_process_id": store.process.id,
+        "created_at": datetime.now().isoformat(),
+    }
+
+    await manager.add_log(
+        store.task.session_id,
+        store.task.id,
+        log,
+        execution_process_id=store.process.id,
+    )
+
+    frame = cast(dict[str, object], sub.queue.get_nowait())
+    assert frame == {
+        "JsonPatch": [
+            {
+                "op": "add",
+                "path": f"/execution_processes/{store.process.id}/logs/-",
+                "value": log,
+            }
+        ]
+    }
+    logs = manager._states[store.task.session_id]["execution_processes"][store.process.id][
+        "logs"
+    ]
+    assert isinstance(logs, list)
+    assert logs[-1] == log
+
+
+@pytest.mark.asyncio
+async def test_get_state_and_incremental_logs_share_bounded_window(monkeypatch):
+    store = AsyncStoreStub()
+    now = datetime.now()
+    store.logs = [
+        LogEvent(
+            id=f"log-{index}",
+            session_id=store.task.session_id,
+            task_id=store.task.id,
+            execution_process_id=store.process.id,
+            stream="stdout",
+            content=str(index),
+            created_at=now,
+        )
+        for index in range(1005)
+    ]
+    manager = ExecutionProcessWorkspaceStreamManager()
+
+    class FakeWebSocket:
+        async def send_json(self, frame):
+            return None
+
+    sub = codex_ws_module.WsSubscriber(cast(WebSocket, FakeWebSocket()), maxsize=10)
+    monkeypatch.setattr(codex_ws_module, "codex_store", store)
+    manager.subscribe(store.task.session_id, sub)
+    state = await manager.get_state(store.task.session_id)
+    logs = state["execution_processes"][store.process.id]["logs"]
+    assert isinstance(logs, list)
+    assert len(logs) == 1000
+    assert logs[0]["id"] == "log-5"
+
+    next_log: dict[str, object] = {
+        "id": "log-1005",
+        "session_id": store.task.session_id,
+        "stream": "stdout",
+        "content": "1005",
+        "task_id": store.task.id,
+        "execution_process_id": store.process.id,
+        "created_at": now.isoformat(),
+    }
+    await manager.add_log(
+        store.task.session_id,
+        store.task.id,
+        next_log,
+        execution_process_id=store.process.id,
+    )
+
+    frame = cast(dict[str, object], sub.queue.get_nowait())
+    assert frame["JsonPatch"] == [
+        {
+            "op": "remove",
+            "path": f"/execution_processes/{store.process.id}/logs/0",
+        },
+        {
+            "op": "add",
+            "path": f"/execution_processes/{store.process.id}/logs/-",
+            "value": next_log,
+        },
+    ]
+    assert len(logs) == 1000
+    assert logs[0]["id"] == "log-6"
+    assert logs[-1] == next_log
+
+
+@pytest.mark.asyncio
+async def test_add_log_without_workspace_subscriber_does_not_read_store(monkeypatch):
+    store = AsyncStoreStub()
+    manager = ExecutionProcessWorkspaceStreamManager()
+
+    async def fail_task_load(task_id: str):
+        raise AssertionError("log append without subscribers must not read the store")
+
+    monkeypatch.setattr(store, "load_codex_task", fail_task_load)
+    monkeypatch.setattr(codex_ws_module, "codex_store", store)
+
+    await manager.add_log(
+        store.task.session_id,
+        store.task.id,
+        {"id": "log-2"},
+        execution_process_id=None,
+    )
 
 
 @pytest.mark.asyncio

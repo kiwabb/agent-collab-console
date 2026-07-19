@@ -69,12 +69,27 @@ export function SelectionProvider({ children, initial }: ProviderProps) {
   const setTab = useCallback((next: IssueTab) => setTabState(next), []);
 
   useEffect(() => {
-    if (initial?.projectId !== undefined) setProjectIdState(initial.projectId ?? null);
-    else setProjectIdState(readLocal(PROJECT_KEY));
-    if (initial?.workspaceId !== undefined) setWorkspaceIdState(initial.workspaceId ?? null);
-    else setWorkspaceIdState(readLocal(WORKSPACE_KEY));
-    if (initial?.issueId !== undefined) setIssueIdState(initial.issueId ?? null);
-    else setIssueIdState(readLocal(ISSUE_KEY));
+    if (initial?.projectId !== undefined) {
+      const nextProjectId = initial.projectId ?? null;
+      setProjectIdState(nextProjectId);
+      writeLocal(PROJECT_KEY, nextProjectId);
+    } else {
+      setProjectIdState(readLocal(PROJECT_KEY));
+    }
+    if (initial?.workspaceId !== undefined) {
+      const nextWorkspaceId = initial.workspaceId ?? null;
+      setWorkspaceIdState(nextWorkspaceId);
+      writeLocal(WORKSPACE_KEY, nextWorkspaceId);
+    } else {
+      setWorkspaceIdState(readLocal(WORKSPACE_KEY));
+    }
+    if (initial?.issueId !== undefined) {
+      const nextIssueId = initial.issueId ?? null;
+      setIssueIdState(nextIssueId);
+      writeLocal(ISSUE_KEY, nextIssueId);
+    } else {
+      setIssueIdState(readLocal(ISSUE_KEY));
+    }
     if (initial?.tab) setTabState(initial.tab);
   }, [initial?.projectId, initial?.workspaceId, initial?.issueId, initial?.tab]);
 

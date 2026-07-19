@@ -138,6 +138,8 @@ export type {
   OrchestrationSignal,
 } from "./types/issues";
 export type {
+  ProjectApplicationReadinessState,
+  ProjectApplicationReadinessStatus,
   ProjectConductorAskResult,
   ProjectConductorLoopResult,
   ProjectConductorState,
@@ -443,6 +445,22 @@ export interface ProjectScriptTaskResponse {
   reused: boolean;
 }
 
+export type ProjectStartupReadinessIdentity =
+  | { kind: "json_subset"; expected: Record<string, unknown> }
+  | { kind: "text_contains"; text: string };
+
+export interface ProjectStartupEvidence {
+  path: string;
+  detail: string;
+}
+
+export interface ProjectStartupReadinessProbe {
+  kind: "http";
+  url: string;
+  expected_status: number;
+  identity: ProjectStartupReadinessIdentity;
+}
+
 export interface ProjectStartupService {
   project_id: string;
   service_id: string;
@@ -451,8 +469,9 @@ export interface ProjectStartupService {
   setup_command: string;
   run_command: string;
   access_url: string | null;
+  readiness_probe: ProjectStartupReadinessProbe | null;
   depends_on: string[];
-  evidence: string[];
+  evidence: ProjectStartupEvidence[];
   created_at: string | null;
   updated_at: string | null;
 }

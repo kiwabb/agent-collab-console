@@ -68,16 +68,53 @@ class EventBus:
 
     async def _db_worker(self) -> None:
         while True:
+            event = await self._db_queue.get()
             try:
-                event = await self._db_queue.get()
                 if event is None:
                     break
-                if self._log_store is not None:
-                    result = self._log_store.append_log_event(event)
-                    if isinstance(result, Awaitable):
-                        await result
+                await self._persist_log_event(event)
+            finally:
+                self._db_queue.task_done()
+
+    async def _persist_log_event(self, event: LogEvent) -> None:
+        store = self._log_store
+        if store is None:
+            raise RuntimeError("event bus log store is not configured")
+        attempt = 0
+        while True:
+            try:
+                result = store.append_log_event(event)
+                if isinstance(result, Awaitable):
+                    await result
+                if attempt:
+                    logger.info(
+                        "event bus log write recovered: event_id=%s attempts=%d",
+                        event.id,
+                        attempt + 1,
+                    )
+                return
             except Exception:
-                logger.exception("event bus db worker failed")
+                attempt += 1
+                if attempt == 1 or attempt % 10 == 0:
+                    logger.warning(
+                        "event bus log write failed; retrying: event_id=%s attempt=%d "
+                        "queue_depth=%d",
+                        event.id,
+                        attempt,
+                        self._db_queue.qsize(),
+                        exc_info=True,
+                    )
+                await asyncio.sleep(timeouts.event_bus_log_retry_delay_s())
+
+    async def shutdown(self) -> None:
+        worker = self._db_worker_task
+        if worker is None:
+            return
+        await self._db_queue.put(None)
+        try:
+            await worker
+        finally:
+            self._db_worker_task = None
 
     async def queue_log_event(self, event: LogEvent) -> None:
         try:
@@ -238,8 +275,11 @@ class EventBus:
                 if workspace_id and task_id:
                     log: JsonEvent = {
                         "id": event.get("id"),
+                        "session_id": event.get("session_id"),
                         "stream": event.get("stream"),
                         "content": event.get("content"),
+                        "task_id": event.get("task_id"),
+                        "execution_process_id": event.get("execution_process_id"),
                         "created_at": event.get("created_at"),
                     }
                     await stream_manager.add_log(

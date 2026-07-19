@@ -50,7 +50,7 @@ async def test_record_each_category_lands_in_db(audit_store):
             payload={"k": category},
             status="ok",
             duration_ms=12,
-    )
+        )
     await logger.drain()
 
     rows = await audit_store.list_audit_logs(limit=100)
@@ -151,6 +151,55 @@ async def test_table_idempotent_create(tmp_path):
 
         rows = await store.list_audit_logs(limit=10)
         assert rows == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_async_store_initializes_once_per_connection(tmp_path, monkeypatch):
+    store = AsyncSQLiteStore(tmp_path / "console.db")
+    init_calls = 0
+    original_init = store._init_db
+
+    async def counted_init() -> None:
+        nonlocal init_calls
+        init_calls += 1
+        await original_init()
+
+    monkeypatch.setattr(store, "_init_db", counted_init)
+    try:
+        await asyncio.gather(*(store._ensure_db() for _ in range(8)))
+        await store._ensure_db()
+        assert init_calls == 1
+
+        await store.close()
+        await store._ensure_db()
+        assert init_calls == 2
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_async_store_retries_initialization_after_failure(tmp_path, monkeypatch):
+    store = AsyncSQLiteStore(tmp_path / "console.db")
+    init_calls = 0
+    original_init = store._init_db
+
+    async def flaky_init() -> None:
+        nonlocal init_calls
+        init_calls += 1
+        if init_calls == 1:
+            raise RuntimeError("initialization failed")
+        await original_init()
+
+    monkeypatch.setattr(store, "_init_db", flaky_init)
+    try:
+        with pytest.raises(RuntimeError, match="initialization failed"):
+            await store._ensure_db()
+
+        await store._ensure_db()
+        assert init_calls == 2
+        assert store._initialized_connection is store._conn
     finally:
         await store.close()
 
