@@ -2160,6 +2160,10 @@ const zhCN = {
   "prototype.structured.history.restoreConfirm": "确认恢复",
   "prototype.structured.history.restoreCancel": "取消",
   "prototype.structured.history.restoreFailed": "恢复失败：{message}",
+  "prototype.structured.share.title": "已发布的结构化原型",
+  "prototype.structured.share.versionLabel": "版本",
+  "prototype.structured.share.viewingArchived": "正在回看历史版本 v{no}",
+  "prototype.structured.share.backToCurrent": "返回当前版本",
   "prototype.structured.delete": "删除整个原型",
   "prototype.structured.deleteTitle": "删除整个原型？",
   "prototype.structured.deleteDescription":

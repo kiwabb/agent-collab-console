@@ -2264,6 +2264,10 @@ const enUS = {
   "prototype.structured.history.restoreConfirm": "Restore",
   "prototype.structured.history.restoreCancel": "Cancel",
   "prototype.structured.history.restoreFailed": "Restore failed: {message}",
+  "prototype.structured.share.title": "Published structured prototype",
+  "prototype.structured.share.versionLabel": "Version",
+  "prototype.structured.share.viewingArchived": "Viewing archived revision v{no}",
+  "prototype.structured.share.backToCurrent": "Back to current",
   "prototype.structured.delete": "Delete entire prototype",
   "prototype.structured.deleteTitle": "Delete the entire prototype?",
   "prototype.structured.deleteDescription":
