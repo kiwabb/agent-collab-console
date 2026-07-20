@@ -9,5 +9,4 @@ export const STRUCTURED_PROTOTYPE_PALETTE_TYPES = [
   "Table",
 ] as const;
 
-export type StructuredPrototypePaletteType =
-  (typeof STRUCTURED_PROTOTYPE_PALETTE_TYPES)[number];
+export type StructuredPrototypePaletteType = (typeof STRUCTURED_PROTOTYPE_PALETTE_TYPES)[number];

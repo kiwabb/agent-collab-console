@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 import aiosqlite
 import pytest
@@ -191,7 +190,7 @@ def test_generation_api_exposes_plan_review_preview_and_atomic_accept(
         ] == [("open-users", "dashboard")]
         assert planned_body["canConfirm"] is True
 
-        def operation_detail(operation_id: str) -> dict[str, Any]:
+        def operation_detail(operation_id: str) -> dict[str, object]:
             response = client.get(f"/api/prototype-operations/{operation_id}")
             if response.status_code != 200:
                 portal.call(store.close)
@@ -204,7 +203,7 @@ def test_generation_api_exposes_plan_review_preview_and_atomic_accept(
             assert [event["eventNo"] for event in events] == list(range(len(events)))
             payload: object = response.json()
             assert isinstance(payload, dict)
-            result: dict[str, Any] = {}
+            result: dict[str, object] = {}
             for key, item in payload.items():
                 assert isinstance(key, str)
                 result[key] = item
@@ -325,7 +324,7 @@ def test_generation_api_exposes_plan_review_preview_and_atomic_accept(
         ]
         assert ready_body["previewPath"].endswith("/preview/index.html")
         ready_root_detail = operation_detail(planned.job.operation_id)
-        discovered: dict[str, dict[str, Any]] = {}
+        discovered: dict[str, dict[str, object]] = {}
         pending_operation_ids = list(ready_root_detail["childOperationIds"])
         while pending_operation_ids:
             operation_id = pending_operation_ids.pop()

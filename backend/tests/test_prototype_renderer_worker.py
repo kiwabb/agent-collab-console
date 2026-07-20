@@ -130,6 +130,35 @@ async def test_renderer_rejects_duplicate_view_binding_targets_like_preview() ->
     assert "duplicate node target" in str(error.value)
 
 
+@pytest.mark.asyncio
+async def test_renderer_accepts_absolute_positioned_child_inside_stack() -> None:
+    worker = PrototypeRendererWorker()
+    manifest = _input_manifest(worker)
+    document = document_payload(procurement_document())
+    pages = document["pages"]
+    assert isinstance(pages, list)
+    root = pages[0]["root"]
+    assert isinstance(root, dict)
+    assert root["type"] == "Stack"
+    title = root["children"][0]
+    assert isinstance(title, dict)
+    title["layoutItem"]["position"] = {"x": "24", "y": "32"}
+    manifest["documentObjectHash"] = (
+        "sha256:" + hashlib.sha256(canonical_json_bytes(document)).hexdigest()
+    )
+
+    rendered = await worker.render(
+        request_id=fixture_id("renderer-stack-absolute-child"),
+        artifact_id=fixture_id("renderer-stack-absolute-artifact"),
+        input_manifest=manifest,
+        document=document,
+    )
+
+    styles = next(file.content for file in rendered.files if file.relative_path == "styles.css")
+    assert b"position:absolute;left:24px;top:32px" in styles
+    assert b"position:relative" in styles
+
+
 def test_renderer_refuses_a_tampered_bundle_manifest(tmp_path: Path) -> None:
     source = Path(__file__).resolve().parents[1] / "app" / "runtime_assets"
     target = tmp_path / "runtime-assets"

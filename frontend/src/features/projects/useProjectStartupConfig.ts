@@ -334,9 +334,7 @@ export function useProjectStartupConfig(projectId: string, initialProject: Proje
     try {
       const result = await startProjectRun(projectId);
       if (isProjectRunStartError(result)) {
-        if (
-          result.error === "already_running" || result.error === "service_address_occupied"
-        ) {
+        if (result.error === "already_running" || result.error === "service_address_occupied") {
           const addressOccupied = result.error !== "already_running";
           addToast({
             type: addressOccupied ? "error" : "info",
@@ -468,66 +466,61 @@ export function useProjectStartupConfig(projectId: string, initialProject: Proje
   const isAnalyzing = analysisStarting || analysisTaskId !== null;
   const hasInvalidStartupService =
     startupConfig?.services.some((service) => service.readiness_probe === null) ?? false;
-  const startupState = useMemo(
-    () => {
-      const derived = deriveProjectStartupState({
-        project: {
-          ...project,
-          run_command: startupConfig?.services[0]?.run_command ?? project.run_command,
-        },
-        envVars,
-        latestTask,
-        runStatus: startupConfig?.services.length ? null : runStatus,
-        isAnalysisActive: isAnalyzing,
-        unsavedCount: envVars.filter((envVar) => envVar.dirty).length,
-      });
-      if (hasInvalidStartupService) {
-        return {
-          ...derived,
-          configure: "error" as const,
-          run: "error" as const,
-          canStart: false,
-          readinessState: "invalid_config" as const,
-        };
-      }
-      if (startupConfig?.services.length) {
-        const statuses = startupConfig.services.map((service) => serviceStatuses[service.service_id]);
-        const anyRunning = statuses.some((status) => status?.running === true);
-        const anyAddressOccupied = statuses.some(
-          (status) => status?.service.state === "reachable",
-        );
-        const allReady = statuses.every((status) => status?.readiness.state === "ready");
-        const canStart =
-          derived.analysis === "complete" &&
-          derived.configure === "complete" &&
-          !anyRunning &&
-          !anyAddressOccupied;
-        return {
-          ...derived,
-          run: allReady
-            ? ("complete" as const)
-            : anyRunning
-              ? ("active" as const)
-              : canStart
-                ? ("ready" as const)
-                : ("pending" as const),
-          canStart,
-          readinessState: allReady ? ("ready" as const) : ("unreachable" as const),
-        };
-      }
-      return derived;
-    },
-    [
-      project,
-      startupConfig,
-      serviceStatuses,
+  const startupState = useMemo(() => {
+    const derived = deriveProjectStartupState({
+      project: {
+        ...project,
+        run_command: startupConfig?.services[0]?.run_command ?? project.run_command,
+      },
       envVars,
       latestTask,
-      runStatus,
-      isAnalyzing,
-      hasInvalidStartupService,
-    ],
-  );
+      runStatus: startupConfig?.services.length ? null : runStatus,
+      isAnalysisActive: isAnalyzing,
+      unsavedCount: envVars.filter((envVar) => envVar.dirty).length,
+    });
+    if (hasInvalidStartupService) {
+      return {
+        ...derived,
+        configure: "error" as const,
+        run: "error" as const,
+        canStart: false,
+        readinessState: "invalid_config" as const,
+      };
+    }
+    if (startupConfig?.services.length) {
+      const statuses = startupConfig.services.map((service) => serviceStatuses[service.service_id]);
+      const anyRunning = statuses.some((status) => status?.running === true);
+      const anyAddressOccupied = statuses.some((status) => status?.service.state === "reachable");
+      const allReady = statuses.every((status) => status?.readiness.state === "ready");
+      const canStart =
+        derived.analysis === "complete" &&
+        derived.configure === "complete" &&
+        !anyRunning &&
+        !anyAddressOccupied;
+      return {
+        ...derived,
+        run: allReady
+          ? ("complete" as const)
+          : anyRunning
+            ? ("active" as const)
+            : canStart
+              ? ("ready" as const)
+              : ("pending" as const),
+        canStart,
+        readinessState: allReady ? ("ready" as const) : ("unreachable" as const),
+      };
+    }
+    return derived;
+  }, [
+    project,
+    startupConfig,
+    serviceStatuses,
+    envVars,
+    latestTask,
+    runStatus,
+    isAnalyzing,
+    hasInvalidStartupService,
+  ]);
 
   return {
     project,

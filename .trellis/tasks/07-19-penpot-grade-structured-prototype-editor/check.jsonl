@@ -1,1 +1,2 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/tasks/07-19-penpot-grade-structured-prototype-editor/research/transform-model-audit.md","reason":"Verify the landed slice matches all seven first-slice constraints before building on it."}
+{"file":".trellis/spec/vibe-kanban/backend/structured-prototype-snap-attestation.md","reason":"Check rebuilt renderer/snap manifests stay consistent with sources and describe identity."}

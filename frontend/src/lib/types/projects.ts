@@ -25,11 +25,7 @@ export interface ProjectRunServiceStatus {
 }
 
 export type ProjectApplicationReadinessState =
-  | "ready"
-  | "unreachable"
-  | "occupied_unknown"
-  | "identified_unready"
-  | "invalid_config";
+  "ready" | "unreachable" | "occupied_unknown" | "identified_unready" | "invalid_config";
 
 export interface ProjectApplicationReadinessStatus {
   state: ProjectApplicationReadinessState;
