@@ -77,7 +77,7 @@ export function ProjectStartupServicePanel({
             ? t("startupConfig.invalidReadinessDetail")
             : result.error === "service_address_occupied"
               ? t("startupConfig.occupiedUnknownDetail", { url: result.url ?? "" })
-              : result.message ?? result.pattern ?? t("projects.runStartFailed"),
+              : (result.message ?? result.pattern ?? t("projects.runStartFailed")),
         );
         await refresh();
         return;

@@ -118,14 +118,14 @@ export function ProjectStartupConfigPage({ projectId, initialProject }: Props) {
           : serviceStarting
             ? t("startupConfig.stepRun.starting")
             : runFailed
-            ? t("startupConfig.stepRun.failed", { code: config.runStatus?.exit_code ?? "" })
-            : running
-              ? t("startupConfig.stepRun.running")
-              : runCompleted
-                ? t("startupConfig.stepRun.completed")
-                : config.startupState.run === "ready"
-                  ? t("startupConfig.stepRun.ready")
-                  : t("startupConfig.stepRun.pending");
+              ? t("startupConfig.stepRun.failed", { code: config.runStatus?.exit_code ?? "" })
+              : running
+                ? t("startupConfig.stepRun.running")
+                : runCompleted
+                  ? t("startupConfig.stepRun.completed")
+                  : config.startupState.run === "ready"
+                    ? t("startupConfig.stepRun.ready")
+                    : t("startupConfig.stepRun.pending");
   const serviceStateLabel = config.hasInvalidStartupService
     ? t("startupConfig.serviceState.invalidConfig")
     : externalReady
@@ -137,8 +137,8 @@ export function ProjectStartupConfigPage({ projectId, initialProject }: Props) {
           : serviceStarting
             ? t("startupConfig.serviceState.starting")
             : config.startupState.serviceState === "unreachable"
-            ? t("startupConfig.serviceState.offline")
-            : t("startupConfig.serviceState.unknown");
+              ? t("startupConfig.serviceState.offline")
+              : t("startupConfig.serviceState.unknown");
   const serviceUrl =
     (externalReady ? config.runStatus?.readiness.url : null) ?? config.analysis?.accessUrl ?? null;
   const configureStepDescription =

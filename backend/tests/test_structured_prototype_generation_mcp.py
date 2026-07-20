@@ -5,7 +5,6 @@ import hashlib
 import json
 import threading
 from pathlib import Path
-from typing import Any
 
 import pytest
 from test_structured_prototype_generation_contracts import (
@@ -1394,7 +1393,7 @@ async def test_generation_mcp_close_waits_for_in_flight_repository_read(
     release = threading.Event()
     original = generation_mcp_module._list_project_files
 
-    def slow_list(*args: Any, **kwargs: Any) -> Any:
+    def slow_list(*args: object, **kwargs: object) -> object:
         started.set()
         assert release.wait(timeout=2)
         return original(*args, **kwargs)
@@ -1444,7 +1443,7 @@ async def test_cancelled_repository_scan_consumes_quota_and_records_safe_audit(
     release = threading.Event()
     original = generation_mcp_module._list_project_files
 
-    def slow_list(*args: Any, **kwargs: Any) -> Any:
+    def slow_list(*args: object, **kwargs: object) -> object:
         started.set()
         assert release.wait(timeout=2)
         return original(*args, **kwargs)

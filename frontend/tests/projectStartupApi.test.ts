@@ -27,7 +27,10 @@ test("per-service start preserves the occupied-address refusal payload", async (
       const result = await startProjectServiceRun("project id", "backend/service");
 
       assert.equal(calls.length, 1);
-      assert.equal(calls[0]?.input, "/api/projects/project id/services/backend%2Fservice/run/start");
+      assert.equal(
+        calls[0]?.input,
+        "/api/projects/project id/services/backend%2Fservice/run/start",
+      );
       assert.equal(calls[0]?.init?.method, "POST");
       assert.equal(isProjectRunStartError(result), true);
       if (!isProjectRunStartError(result)) assert.fail("expected a typed refusal");
