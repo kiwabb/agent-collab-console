@@ -25,9 +25,12 @@ from app.application.structured_prototype_service import (
     ApplyStructuredPrototypeCommandsResult,
     CreateStructuredPrototypeResult,
     PrototypeOperationDetail,
+    PublishedPrototypeHistory,
     PublishedPrototypeSnapshot,
+    PublishedRevisionDiffResult,
     PublishStructuredPrototypeResult,
     RecoverStructuredPrototypeResult,
+    RollbackStructuredPrototypeResult,
     StructuredPrototypeService,
     StructuredPrototypeServiceError,
 )
@@ -227,6 +230,14 @@ class PublishStructuredPrototypeRequestV1(StrictRequestModel):
     client_request_id: Annotated[str, Field(min_length=36, max_length=36)]
     expected_head_sequence_no: Annotated[int, Field(ge=0)]
     expected_document_hash: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    summary: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+
+
+class RollbackStructuredPrototypeRequestV1(StrictRequestModel):
+    contract_version: Literal[1]
+    client_request_id: Annotated[str, Field(min_length=36, max_length=36)]
+    target_revision_no: Annotated[int, Field(ge=1)]
+    expected_current_revision_no: Annotated[int, Field(ge=1)]
 
 
 class AllocatedEntityIdResponseV1(StrictResponseModel):
@@ -312,6 +323,78 @@ class PublishStructuredPrototypeResponseV1(PublishedPrototypeResponseV1):
     operation_id: str
     correlation_id: str
     active_draft: StructuredPrototypeDraftResponseV1
+
+
+class RollbackStructuredPrototypeResponseV1(PublishedPrototypeResponseV1):
+    operation_id: str
+    correlation_id: str
+
+
+class PublishedPrototypeRevisionResponseV1(StrictResponseModel):
+    revision_id: str
+    revision_no: int
+    summary: str
+    source: Literal["user", "ai", "initial_generation"]
+    is_current: bool
+    render_run_id: str
+    artifact_id: str
+    renderer_version: str
+    document_hash: str
+    output_hash: str
+    published_at: str
+    artifact_path: str
+
+
+class PublicationTimelineEventResponseV1(StrictResponseModel):
+    kind: Literal["publish", "rollback"]
+    revision_no: int
+    occurred_at: str
+    summary: str | None
+
+
+class StructuredPrototypeRevisionHistoryResponseV1(StrictResponseModel):
+    contract_version: Literal[1]
+    document_id: str
+    current_revision_no: int | None
+    revisions: list[PublishedPrototypeRevisionResponseV1]
+    events: list[PublicationTimelineEventResponseV1]
+
+
+class PrototypeRevisionDiffPageResponseV1(StrictResponseModel):
+    id: str
+    title: str
+    route: str
+
+
+class PrototypeRevisionDiffPageChangeResponseV1(PrototypeRevisionDiffPageResponseV1):
+    title_changed: bool
+    route_changed: bool
+    nodes_added: int
+    nodes_removed: int
+    nodes_modified: int
+
+
+class StructuredPrototypeRevisionDiffResponseV1(StrictResponseModel):
+    contract_version: Literal[1]
+    document_id: str
+    base_revision_no: int
+    target_revision_no: int
+    identical: bool
+    title_from: str | None
+    title_to: str | None
+    pages_added: list[PrototypeRevisionDiffPageResponseV1]
+    pages_removed: list[PrototypeRevisionDiffPageResponseV1]
+    pages_modified: list[PrototypeRevisionDiffPageChangeResponseV1]
+    flows_added: int
+    flows_removed: int
+    flows_modified: int
+    component_definitions_changed: bool
+    settings_changed: bool
+    tokens_changed: bool
+    navigation_changed: bool
+    runtime_changed: bool
+    asset_refs_added: int
+    asset_refs_removed: int
 
 
 class StructuredPrototypeOperationOutcomeResponseV1(StrictResponseModel):
@@ -503,6 +586,8 @@ def _status_for_error(code: str) -> int:
         "publication_state_conflict",
         "revision_sequence_conflict",
         "render_run_conflict",
+        "rollback_target_current",
+        "rollback_conflict",
         "undo_unavailable",
         "redo_unavailable",
     }:
@@ -920,6 +1005,103 @@ def _published_response(
     )
 
 
+def _revision_history_response(
+    history: PublishedPrototypeHistory,
+) -> StructuredPrototypeRevisionHistoryResponseV1:
+    return StructuredPrototypeRevisionHistoryResponseV1(
+        contract_version=HTTP_CONTRACT_VERSION,
+        document_id=history.document_id,
+        current_revision_no=history.current_revision_no,
+        revisions=[
+            PublishedPrototypeRevisionResponseV1(
+                revision_id=entry.publication.revision_id,
+                revision_no=entry.publication.revision_no,
+                summary=entry.summary,
+                source=entry.source,
+                is_current=entry.is_current,
+                render_run_id=entry.publication.render_run_id,
+                artifact_id=entry.publication.artifact_id,
+                renderer_version=entry.publication.renderer_version,
+                document_hash=entry.publication.document_hash,
+                output_hash=entry.publication.output_hash,
+                published_at=entry.publication.published_at.isoformat(),
+                artifact_path=(
+                    f"/api/structured-prototype-public/{entry.publication.document_id}"
+                    f"/revisions/{entry.publication.revision_no}"
+                    f"/artifacts/{entry.publication.artifact_id}/index.html"
+                ),
+            )
+            for entry in history.revisions
+        ],
+        events=[
+            PublicationTimelineEventResponseV1(
+                kind=event.kind,
+                revision_no=event.revision_no,
+                occurred_at=event.occurred_at.isoformat(),
+                summary=event.summary,
+            )
+            for event in history.events
+        ],
+    )
+
+
+def _revision_diff_response(
+    result: PublishedRevisionDiffResult,
+) -> StructuredPrototypeRevisionDiffResponseV1:
+    diff = result.diff
+    return StructuredPrototypeRevisionDiffResponseV1(
+        contract_version=HTTP_CONTRACT_VERSION,
+        document_id=result.document_id,
+        base_revision_no=result.base_revision_no,
+        target_revision_no=result.target_revision_no,
+        identical=diff.identical,
+        title_from=diff.title_from,
+        title_to=diff.title_to,
+        pages_added=[
+            PrototypeRevisionDiffPageResponseV1(id=page.id, title=page.title, route=page.route)
+            for page in diff.pages_added
+        ],
+        pages_removed=[
+            PrototypeRevisionDiffPageResponseV1(id=page.id, title=page.title, route=page.route)
+            for page in diff.pages_removed
+        ],
+        pages_modified=[
+            PrototypeRevisionDiffPageChangeResponseV1(
+                id=page.id,
+                title=page.title,
+                route=page.route,
+                title_changed=page.title_changed,
+                route_changed=page.route_changed,
+                nodes_added=page.nodes_added,
+                nodes_removed=page.nodes_removed,
+                nodes_modified=page.nodes_modified,
+            )
+            for page in diff.pages_modified
+        ],
+        flows_added=diff.flows_added,
+        flows_removed=diff.flows_removed,
+        flows_modified=diff.flows_modified,
+        component_definitions_changed=diff.component_definitions_changed,
+        settings_changed=diff.settings_changed,
+        tokens_changed=diff.tokens_changed,
+        navigation_changed=diff.navigation_changed,
+        runtime_changed=diff.runtime_changed,
+        asset_refs_added=diff.asset_refs_added,
+        asset_refs_removed=diff.asset_refs_removed,
+    )
+
+
+def _rollback_response(
+    result: RollbackStructuredPrototypeResult,
+) -> RollbackStructuredPrototypeResponseV1:
+    published = _published_response(result.publication)
+    return RollbackStructuredPrototypeResponseV1(
+        **published.model_dump(),
+        operation_id=result.operation_id,
+        correlation_id=result.correlation_id,
+    )
+
+
 def _publish_response(
     result: PublishStructuredPrototypeResult,
 ) -> PublishStructuredPrototypeResponseV1:
@@ -1188,6 +1370,7 @@ async def publish_structured_prototype_draft(
             client_request_id=body.client_request_id,
             expected_head_sequence_no=body.expected_head_sequence_no,
             expected_document_hash=body.expected_document_hash,
+            summary=body.summary,
         )
     except StructuredPrototypeServiceError as exc:
         return _service_failure(exc)
@@ -1207,6 +1390,60 @@ async def get_structured_prototype_publication(
     except StructuredPrototypeServiceError as exc:
         return _service_failure(exc)
     return _published_response(snapshot) if snapshot is not None else None
+
+
+@router.get(
+    "/structured-prototype-documents/{document_id}/revisions",
+    response_model=StructuredPrototypeRevisionHistoryResponseV1,
+)
+async def list_structured_prototype_revisions(
+    document_id: str,
+) -> StructuredPrototypeRevisionHistoryResponseV1 | JSONResponse:
+    try:
+        history = await _require_service().list_published_revisions(document_id)
+    except StructuredPrototypeServiceError as exc:
+        return _service_failure(exc)
+    return _revision_history_response(history)
+
+
+@router.get(
+    "/structured-prototype-documents/{document_id}/revisions/{revision_no}/diff",
+    response_model=StructuredPrototypeRevisionDiffResponseV1,
+)
+async def diff_structured_prototype_revisions(
+    document_id: str,
+    revision_no: int,
+    against: Annotated[int | None, Query(alias="against", ge=1)] = None,
+) -> StructuredPrototypeRevisionDiffResponseV1 | JSONResponse:
+    try:
+        result = await _require_service().diff_published_revisions(
+            document_id=document_id,
+            target_revision_no=revision_no,
+            base_revision_no=against,
+        )
+    except StructuredPrototypeServiceError as exc:
+        return _service_failure(exc)
+    return _revision_diff_response(result)
+
+
+@router.post(
+    "/structured-prototype-documents/{document_id}/rollback",
+    response_model=RollbackStructuredPrototypeResponseV1,
+)
+async def rollback_structured_prototype_publication(
+    document_id: str,
+    body: RollbackStructuredPrototypeRequestV1,
+) -> RollbackStructuredPrototypeResponseV1 | JSONResponse:
+    try:
+        result = await _require_service().rollback_publication(
+            document_id=document_id,
+            client_request_id=body.client_request_id,
+            target_revision_no=body.target_revision_no,
+            expected_current_revision_no=body.expected_current_revision_no,
+        )
+    except StructuredPrototypeServiceError as exc:
+        return _service_failure(exc)
+    return _rollback_response(result)
 
 
 @router.get(

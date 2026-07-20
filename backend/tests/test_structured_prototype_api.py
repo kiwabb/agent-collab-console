@@ -976,3 +976,309 @@ def test_publish_and_public_artifact_routes_serve_only_verified_revision(
 
         assert client.portal is not None
         client.portal.call(store.close)
+
+
+def test_revision_history_lists_published_revisions_and_keeps_old_artifacts_viewable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, store = _client(tmp_path, monkeypatch)
+    with client:
+        created_response = client.post(
+            "/api/projects/project-1/structured-prototype-documents",
+            json=_create_body(fixture_id("api-revision-history-document")),
+        )
+        assert created_response.status_code == 201
+        created = created_response.json()
+
+        empty_history = client.get(
+            f"/api/structured-prototype-documents/{created['documentId']}/revisions"
+        )
+        assert empty_history.status_code == 200
+        assert empty_history.json() == {
+            "contractVersion": 1,
+            "documentId": created["documentId"],
+            "currentRevisionNo": None,
+            "revisions": [],
+            "events": [],
+        }
+
+        first_publish = client.post(
+            f"/api/structured-prototype-drafts/{created['draftId']}/publish",
+            json={
+                "contractVersion": 1,
+                "clientRequestId": fixture_id("api-revision-history-publish-1"),
+                "expectedHeadSequenceNo": 0,
+                "expectedDocumentHash": created["documentHash"],
+            },
+        )
+        assert first_publish.status_code == 201
+        first_published = first_publish.json()
+        second_draft = first_published["activeDraft"]
+
+        edited_response = client.post(
+            f"/api/structured-prototype-drafts/{second_draft['draftId']}/commands",
+            json={
+                "contractVersion": 1,
+                "clientRequestId": fixture_id("api-revision-history-edit"),
+                "expectedHeadSequenceNo": second_draft["headSequenceNo"],
+                "expectedDocumentHash": second_draft["documentHash"],
+                "batch": text_insert_batch_payload(),
+            },
+        )
+        assert edited_response.status_code == 200
+        edited = edited_response.json()
+
+        second_publish = client.post(
+            f"/api/structured-prototype-drafts/{second_draft['draftId']}/publish",
+            json={
+                "contractVersion": 1,
+                "clientRequestId": fixture_id("api-revision-history-publish-2"),
+                "expectedHeadSequenceNo": edited["headSequenceNo"],
+                "expectedDocumentHash": edited["documentHash"],
+                "summary": "  添加审批说明区块  ",
+            },
+        )
+        assert second_publish.status_code == 201
+        second_published = second_publish.json()
+        assert second_published["revisionNo"] == 2
+
+        history_response = client.get(
+            f"/api/structured-prototype-documents/{created['documentId']}/revisions"
+        )
+        assert history_response.status_code == 200
+        history = history_response.json()
+        assert history["contractVersion"] == 1
+        assert history["documentId"] == created["documentId"]
+        assert history["currentRevisionNo"] == 2
+        assert [entry["revisionNo"] for entry in history["revisions"]] == [2, 1]
+        assert [entry["isCurrent"] for entry in history["revisions"]] == [True, False]
+
+        latest, oldest = history["revisions"]
+        assert latest["revisionId"] == second_published["revisionId"]
+        assert latest["artifactId"] == second_published["artifactId"]
+        assert latest["artifactPath"] == second_published["artifactPath"]
+        assert latest["documentHash"] == edited["documentHash"]
+        assert latest["summary"] == "添加审批说明区块"
+        assert oldest["revisionId"] == first_published["revisionId"]
+        assert oldest["artifactId"] == first_published["artifactId"]
+        assert oldest["artifactPath"] == first_published["artifactPath"]
+        assert oldest["documentHash"] == created["documentHash"]
+        assert oldest["summary"] == "Publish draft sequence 0"
+        for entry in history["revisions"]:
+            assert entry["source"] == "user"
+            assert entry["summary"]
+            assert entry["outputHash"].startswith("sha256:")
+            assert entry["publishedAt"]
+            archived = client.get(entry["artifactPath"])
+            assert archived.status_code == 200
+            assert '<script src="./runtime.js" defer></script>' in archived.text
+
+        missing_history = client.get(
+            "/api/structured-prototype-documents/missing-document/revisions"
+        )
+        assert missing_history.status_code == 404
+        assert missing_history.json()["error"]["code"] == "document_missing"
+
+        diff_response = client.get(
+            f"/api/structured-prototype-documents/{created['documentId']}/revisions/2/diff"
+        )
+        assert diff_response.status_code == 200, diff_response.text
+        diff = diff_response.json()
+        assert diff["contractVersion"] == 1
+        assert diff["baseRevisionNo"] == 1
+        assert diff["targetRevisionNo"] == 2
+        assert diff["identical"] is False
+        assert diff["titleFrom"] is None and diff["titleTo"] is None
+        assert diff["pagesAdded"] == [] and diff["pagesRemoved"] == []
+        assert len(diff["pagesModified"]) == 1
+        changed_page = diff["pagesModified"][0]
+        assert changed_page["titleChanged"] is False
+        assert changed_page["nodesAdded"] == 1
+        assert changed_page["nodesRemoved"] == 0
+        assert changed_page["nodesModified"] == 1
+        assert diff["tokensChanged"] is False
+        assert diff["settingsChanged"] is False
+
+        explicit_diff = client.get(
+            f"/api/structured-prototype-documents/{created['documentId']}"
+            "/revisions/2/diff?against=2"
+        )
+        assert explicit_diff.status_code == 200
+        assert explicit_diff.json()["identical"] is True
+
+        no_base = client.get(
+            f"/api/structured-prototype-documents/{created['documentId']}/revisions/1/diff"
+        )
+        assert no_base.status_code == 404
+        assert no_base.json()["error"]["code"] == "revision_missing"
+
+        assert client.portal is not None
+        client.portal.call(store.close)
+
+
+def test_rollback_repoints_publication_to_archived_revision_and_replays_idempotently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, store = _client(tmp_path, monkeypatch)
+    with client:
+        created_response = client.post(
+            "/api/projects/project-1/structured-prototype-documents",
+            json=_create_body(fixture_id("api-rollback-document")),
+        )
+        assert created_response.status_code == 201
+        created = created_response.json()
+
+        first_publish = client.post(
+            f"/api/structured-prototype-drafts/{created['draftId']}/publish",
+            json={
+                "contractVersion": 1,
+                "clientRequestId": fixture_id("api-rollback-publish-1"),
+                "expectedHeadSequenceNo": 0,
+                "expectedDocumentHash": created["documentHash"],
+            },
+        )
+        assert first_publish.status_code == 201
+        first_published = first_publish.json()
+        second_draft = first_published["activeDraft"]
+
+        edited_response = client.post(
+            f"/api/structured-prototype-drafts/{second_draft['draftId']}/commands",
+            json={
+                "contractVersion": 1,
+                "clientRequestId": fixture_id("api-rollback-edit"),
+                "expectedHeadSequenceNo": second_draft["headSequenceNo"],
+                "expectedDocumentHash": second_draft["documentHash"],
+                "batch": text_insert_batch_payload(),
+            },
+        )
+        assert edited_response.status_code == 200
+        edited = edited_response.json()
+
+        second_publish = client.post(
+            f"/api/structured-prototype-drafts/{second_draft['draftId']}/publish",
+            json={
+                "contractVersion": 1,
+                "clientRequestId": fixture_id("api-rollback-publish-2"),
+                "expectedHeadSequenceNo": edited["headSequenceNo"],
+                "expectedDocumentHash": edited["documentHash"],
+            },
+        )
+        assert second_publish.status_code == 201
+        assert second_publish.json()["revisionNo"] == 2
+
+        rollback_request_id = fixture_id("api-rollback-request")
+        rollback_body = {
+            "contractVersion": 1,
+            "clientRequestId": rollback_request_id,
+            "targetRevisionNo": 1,
+            "expectedCurrentRevisionNo": 2,
+        }
+        rollback_response = client.post(
+            f"/api/structured-prototype-documents/{created['documentId']}/rollback",
+            json=rollback_body,
+        )
+        assert rollback_response.status_code == 200, rollback_response.text
+        rollback = rollback_response.json()
+        assert rollback["revisionNo"] == 1
+        assert rollback["revisionId"] == first_published["revisionId"]
+        assert rollback["artifactId"] == first_published["artifactId"]
+        assert rollback["artifactPath"] == first_published["artifactPath"]
+        assert rollback["operationId"]
+
+        current = client.get(
+            f"/api/structured-prototype-documents/{created['documentId']}/published"
+        )
+        assert current.status_code == 200
+        assert current.json()["revisionNo"] == 1
+        redirect = client.get(
+            f"/api/structured-prototype-public/{created['documentId']}/current/index.html",
+            follow_redirects=False,
+        )
+        assert redirect.status_code == 307
+        assert redirect.headers["location"] == first_published["artifactPath"]
+
+        history = client.get(
+            f"/api/structured-prototype-documents/{created['documentId']}/revisions"
+        ).json()
+        assert history["currentRevisionNo"] == 1
+        assert [entry["isCurrent"] for entry in history["revisions"]] == [False, True]
+        assert sorted(
+            (event["kind"], event["revisionNo"]) for event in history["events"]
+        ) == [("publish", 1), ("publish", 2), ("rollback", 1)]
+        rollback_events = [event for event in history["events"] if event["kind"] == "rollback"]
+        assert all(event["summary"] is None for event in rollback_events)
+        assert all(event["occurredAt"] for event in history["events"])
+
+        replay_response = client.post(
+            f"/api/structured-prototype-documents/{created['documentId']}/rollback",
+            json=rollback_body,
+        )
+        assert replay_response.status_code == 200
+        replay = replay_response.json()
+        assert replay["operationId"] == rollback["operationId"]
+        assert replay["revisionNo"] == 1
+
+        detail_response = client.get(f"/api/prototype-operations/{rollback['operationId']}")
+        assert detail_response.status_code == 200, detail_response.text
+        detail = detail_response.json()
+        assert detail["operation"]["operationKind"] == "rollback_publication"
+        assert detail["operation"]["status"] == "succeeded"
+        assert detail["replayManifest"] is not None
+
+        stale_pointer = client.post(
+            f"/api/structured-prototype-documents/{created['documentId']}/rollback",
+            json={
+                "contractVersion": 1,
+                "clientRequestId": fixture_id("api-rollback-stale"),
+                "targetRevisionNo": 2,
+                "expectedCurrentRevisionNo": 2,
+            },
+        )
+        assert stale_pointer.status_code == 409
+        assert stale_pointer.json()["error"]["code"] == "publication_state_conflict"
+
+        target_current = client.post(
+            f"/api/structured-prototype-documents/{created['documentId']}/rollback",
+            json={
+                "contractVersion": 1,
+                "clientRequestId": fixture_id("api-rollback-noop"),
+                "targetRevisionNo": 1,
+                "expectedCurrentRevisionNo": 1,
+            },
+        )
+        assert target_current.status_code == 409
+        assert target_current.json()["error"]["code"] == "rollback_target_current"
+
+        missing_target = client.post(
+            f"/api/structured-prototype-documents/{created['documentId']}/rollback",
+            json={
+                "contractVersion": 1,
+                "clientRequestId": fixture_id("api-rollback-missing"),
+                "targetRevisionNo": 9,
+                "expectedCurrentRevisionNo": 1,
+            },
+        )
+        assert missing_target.status_code == 404
+        assert missing_target.json()["error"]["code"] == "revision_missing"
+
+        roll_forward = client.post(
+            f"/api/structured-prototype-documents/{created['documentId']}/rollback",
+            json={
+                "contractVersion": 1,
+                "clientRequestId": fixture_id("api-rollback-forward"),
+                "targetRevisionNo": 2,
+                "expectedCurrentRevisionNo": 1,
+            },
+        )
+        assert roll_forward.status_code == 200
+        assert roll_forward.json()["revisionNo"] == 2
+        assert (
+            client.get(f"/api/structured-prototype-documents/{created['documentId']}/published")
+            .json()["revisionNo"]
+            == 2
+        )
+
+        assert client.portal is not None
+        client.portal.call(store.close)

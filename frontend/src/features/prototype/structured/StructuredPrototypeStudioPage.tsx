@@ -19,6 +19,7 @@ import {
   ExternalLink,
   Files,
   GitBranch,
+  History,
   Magnet,
   Maximize2,
   Minimize2,
@@ -114,6 +115,8 @@ import {
   type StructuredPrototypeMutationOperation,
 } from "./structuredPrototypeInteraction";
 import { StructuredPrototypeAiPanel } from "./StructuredPrototypeAiPanel";
+import { StructuredPrototypePublishDialog } from "./StructuredPrototypePublishDialog";
+import { StructuredPrototypeReleaseHistoryDialog } from "./StructuredPrototypeReleaseHistory";
 import {
   StructuredPrototypeNodeDragOverlay,
   type StructuredPrototypeMarqueeGestureEvent,
@@ -318,6 +321,8 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
   const [mobileDrawer, setMobileDrawer] = useState<MobileDrawer>(null);
   const desktopLayout = useStructuredPrototypeDesktopLayout();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [aiMutating, setAiMutating] = useState(false);
@@ -2015,7 +2020,13 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
 
   const publishPrototype = (): void => {
     if (interactionRef.current.kind !== "idle") return;
-    void runLockedMutation("publish", controller.publish);
+    setPublishDialogOpen(true);
+  };
+
+  const confirmPublish = (summary: string | null): void => {
+    setPublishDialogOpen(false);
+    if (interactionRef.current.kind !== "idle") return;
+    void runLockedMutation("publish", () => controller.publish(summary));
   };
 
   const applyInspectorCommands = (
@@ -2394,6 +2405,15 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
                 <ExternalLink size={15} aria-hidden />
               </Link>
             )}
+            <button
+              type="button"
+              className="grid size-9 cursor-pointer place-items-center rounded-md border border-border-muted bg-surface-raised text-brand hover:bg-surface-hover"
+              onClick={() => setHistoryDialogOpen(true)}
+              aria-label={t("prototype.structured.history")}
+              title={t("prototype.structured.history")}
+            >
+              <History size={15} aria-hidden />
+            </button>
             <button
               type="button"
               className="grid size-9 cursor-pointer place-items-center rounded-md border border-error/35 bg-surface-raised text-error hover:bg-error/10 disabled:cursor-not-allowed disabled:opacity-45"
@@ -2943,6 +2963,17 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
           })}
         </nav>
       </div>
+      <StructuredPrototypePublishDialog
+        open={publishDialogOpen}
+        onOpenChange={setPublishDialogOpen}
+        onConfirm={confirmPublish}
+      />
+      <StructuredPrototypeReleaseHistoryDialog
+        open={historyDialogOpen}
+        onOpenChange={setHistoryDialogOpen}
+        documentId={controller.draft.documentId}
+        onRestored={() => void controller.refreshPublication()}
+      />
       <ConfirmDialog
         open={deleteDialogOpen}
         onOpenChange={(open) => {

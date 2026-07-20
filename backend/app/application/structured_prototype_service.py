@@ -51,6 +51,10 @@ from app.application.structured_prototype_contracts import (
     parse_prototype_document_json,
     validate_command_batch_evidence_context,
 )
+from app.application.structured_prototype_revision_diff import (
+    PrototypeRevisionDiff,
+    diff_prototype_documents,
+)
 from app.domain.structured_prototype import (
     PROTOTYPE_FORWARD_COMMAND_BATCH_MAX_BYTES,
     REPLAY_MANIFEST_SCHEMA_VERSION,
@@ -84,7 +88,10 @@ from app.domain.structured_prototype import (
     PrototypeReplayManifestError,
     PrototypeReplayManifestV1,
     PrototypeReplayManifestVersionsV1,
+    PrototypeRevisionHistoryEntry,
     PrototypeRevisionRecord,
+    PrototypeRevisionSource,
+    PrototypeRollbackEventRecord,
     PrototypeRuntimeCheckpointRecord,
     PrototypeRuntimeEventAppendResult,
     PrototypeRuntimeEventBatchRecord,
@@ -417,6 +424,12 @@ class StructuredPrototypePersistence(Protocol):
 
     async def load_revision(self, revision_id: str) -> PrototypeRevisionRecord | None: ...
 
+    async def load_revision_by_no(
+        self,
+        document_id: str,
+        revision_no: int,
+    ) -> PrototypeRevisionRecord | None: ...
+
     async def load_render_run_by_operation(
         self,
         operation_id: str,
@@ -491,6 +504,36 @@ class StructuredPrototypePersistence(Protocol):
     ) -> PrototypePublicationCompletionResult: ...
 
     async def load_published_record(self, document_id: str) -> PrototypePublishedRecord | None: ...
+
+    async def list_published_revisions(
+        self,
+        document_id: str,
+    ) -> tuple[PrototypeRevisionHistoryEntry, ...]: ...
+
+    async def list_publication_rollbacks(
+        self,
+        document_id: str,
+    ) -> tuple[PrototypeRollbackEventRecord, ...]: ...
+
+    async def load_ready_revision_publication(
+        self,
+        document_id: str,
+        revision_no: int,
+    ) -> PrototypePublishedRecord | None: ...
+
+    async def rollback_publication(
+        self,
+        *,
+        document_id: str,
+        target_revision_no: int,
+        expected_current_revision_no: int,
+        rolled_back_at: datetime,
+        completed_operation: PrototypeOperation,
+        completed_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
+    ) -> PrototypePublishedRecord: ...
 
     async def load_ready_publication(
         self,
@@ -746,11 +789,53 @@ class PublishedPrototypeSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class PublishedPrototypeRevision:
+    publication: PublishedPrototypeSnapshot
+    summary: str
+    source: PrototypeRevisionSource
+    is_current: bool
+
+
+PublicationTimelineEventKind = Literal["publish", "rollback"]
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationTimelineEvent:
+    kind: PublicationTimelineEventKind
+    revision_no: int
+    occurred_at: datetime
+    summary: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedPrototypeHistory:
+    document_id: str
+    current_revision_no: int | None
+    revisions: tuple[PublishedPrototypeRevision, ...]
+    events: tuple[PublicationTimelineEvent, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class PublishStructuredPrototypeResult:
     operation_id: str
     correlation_id: str
     publication: PublishedPrototypeSnapshot
     state: ActivePrototypeState
+
+
+@dataclass(frozen=True, slots=True)
+class RollbackStructuredPrototypeResult:
+    operation_id: str
+    correlation_id: str
+    publication: PublishedPrototypeSnapshot
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedRevisionDiffResult:
+    document_id: str
+    base_revision_no: int
+    target_revision_no: int
+    diff: PrototypeRevisionDiff
 
 
 @dataclass(frozen=True, slots=True)
@@ -2535,8 +2620,13 @@ class StructuredPrototypeService:
         client_request_id: str,
         expected_head_sequence_no: int,
         expected_document_hash: str,
+        summary: str | None = None,
     ) -> PublishStructuredPrototypeResult:
         _require_client_request_id(client_request_id)
+        # Release-note metadata: intentionally excluded from the request manifest
+        # hash so a crash retry replays the original outcome even if the note text
+        # differs — the first successful attempt's note wins.
+        release_note = summary.strip() if summary is not None else None
         draft = await self._store.load_draft(draft_id)
         if draft is None:
             raise StructuredPrototypeServiceError("draft_missing", "prototype draft does not exist")
@@ -2656,7 +2746,7 @@ class StructuredPrototypeService:
                 checkpoint_id=revision_checkpoint_id,
                 document_object_hash=expected_document_hash,
                 document_hash=expected_document_hash,
-                summary=f"Publish draft sequence {expected_head_sequence_no}",
+                summary=release_note or f"Publish draft sequence {expected_head_sequence_no}",
                 source="user",
                 created_at=now,
             )
@@ -3113,6 +3203,268 @@ class StructuredPrototypeService:
             record.revision,
             record.render_run,
             record.artifact,
+        )
+
+    async def list_published_revisions(
+        self,
+        document_id: str,
+    ) -> PublishedPrototypeHistory:
+        try:
+            document = await self._store.load_document(document_id)
+            if document is None:
+                raise StructuredPrototypeServiceError(
+                    "document_missing",
+                    "prototype document does not exist",
+                )
+            entries = await self._store.list_published_revisions(document_id)
+            rollbacks = await self._store.list_publication_rollbacks(document_id)
+        except StructuredPrototypeStoreError as exc:
+            raise self._service_error(exc.code, str(exc), None) from exc
+        events = [
+            PublicationTimelineEvent(
+                kind="publish",
+                revision_no=entry.revision.revision_no,
+                occurred_at=entry.artifact.created_at,
+                summary=entry.revision.summary,
+            )
+            for entry in entries
+        ]
+        events.extend(
+            PublicationTimelineEvent(
+                kind="rollback",
+                revision_no=rollback.target_revision_no,
+                occurred_at=rollback.occurred_at,
+                summary=None,
+            )
+            for rollback in rollbacks
+        )
+        events.sort(
+            key=lambda event: (event.occurred_at, event.revision_no, event.kind == "rollback"),
+            reverse=True,
+        )
+        return PublishedPrototypeHistory(
+            document_id=document.id,
+            current_revision_no=document.published_revision_no,
+            revisions=tuple(
+                PublishedPrototypeRevision(
+                    publication=self._published_snapshot(
+                        document,
+                        entry.revision,
+                        entry.render_run,
+                        entry.artifact,
+                    ),
+                    summary=entry.revision.summary,
+                    source=entry.revision.source,
+                    is_current=entry.revision.revision_no == document.published_revision_no,
+                )
+                for entry in entries
+            ),
+            events=tuple(events),
+        )
+
+    async def diff_published_revisions(
+        self,
+        *,
+        document_id: str,
+        target_revision_no: int,
+        base_revision_no: int | None = None,
+    ) -> PublishedRevisionDiffResult:
+        try:
+            document = await self._store.load_document(document_id)
+            if document is None:
+                raise StructuredPrototypeServiceError(
+                    "document_missing",
+                    "prototype document does not exist",
+                )
+            target = await self._store.load_revision_by_no(document_id, target_revision_no)
+            if target is None:
+                raise StructuredPrototypeServiceError(
+                    "revision_missing",
+                    "prototype diff target revision does not exist",
+                )
+            if base_revision_no is None:
+                entries = await self._store.list_published_revisions(document_id)
+                base = next(
+                    (
+                        entry.revision
+                        for entry in entries
+                        if entry.revision.revision_no < target_revision_no
+                    ),
+                    None,
+                )
+                if base is None:
+                    raise StructuredPrototypeServiceError(
+                        "revision_missing",
+                        "prototype diff has no earlier published revision to compare against",
+                    )
+            else:
+                base = await self._store.load_revision_by_no(document_id, base_revision_no)
+                if base is None:
+                    raise StructuredPrototypeServiceError(
+                        "revision_missing",
+                        "prototype diff base revision does not exist",
+                    )
+            base_payload = await self._load_revision_document_payload(
+                document.project_id,
+                base,
+            )
+            target_payload = await self._load_revision_document_payload(
+                document.project_id,
+                target,
+            )
+        except PrototypeObjectStoreError as exc:
+            raise self._service_error(exc.code, str(exc), None) from exc
+        except StructuredPrototypeStoreError as exc:
+            raise self._service_error(exc.code, str(exc), None) from exc
+        return PublishedRevisionDiffResult(
+            document_id=document.id,
+            base_revision_no=base.revision_no,
+            target_revision_no=target.revision_no,
+            diff=diff_prototype_documents(base_payload, target_payload),
+        )
+
+    async def _load_revision_document_payload(
+        self,
+        project_id: str,
+        revision: PrototypeRevisionRecord,
+    ) -> dict[str, object]:
+        descriptor = await self._store.load_object(project_id, revision.document_object_hash)
+        if descriptor is None:
+            raise StructuredPrototypeServiceError(
+                "object_missing",
+                "prototype revision document object is missing",
+            )
+        canonical_bytes = await asyncio.to_thread(
+            self._object_store.read_canonical_bytes,
+            descriptor,
+        )
+        payload = json.loads(canonical_bytes)
+        if not isinstance(payload, dict):
+            raise StructuredPrototypeServiceError(
+                "object_missing",
+                "prototype revision document payload is not an object",
+            )
+        return payload
+
+    async def rollback_publication(
+        self,
+        *,
+        document_id: str,
+        client_request_id: str,
+        target_revision_no: int,
+        expected_current_revision_no: int,
+    ) -> RollbackStructuredPrototypeResult:
+        _require_client_request_id(client_request_id)
+        document = await self._store.load_document(document_id)
+        if document is None:
+            raise StructuredPrototypeServiceError(
+                "document_missing",
+                "prototype document does not exist",
+            )
+        request_hash = _manifest_hash(
+            {
+                "kind": "rollback_publication",
+                "documentId": document_id,
+                "targetRevisionNo": target_revision_no,
+                "expectedCurrentRevisionNo": expected_current_revision_no,
+                "clientRequestId": client_request_id,
+            }
+        )
+        operation = self._queued_operation(
+            operation_kind="rollback_publication",
+            project_id=document.project_id,
+            resource_kind="publication",
+            resource_id=document_id,
+            client_request_id=client_request_id,
+            request_manifest_hash=request_hash,
+        )
+        created = await self._create_operation(operation)
+        if not created.created:
+            if created.operation.status == "succeeded":
+                replayed = await self._store.load_ready_revision_publication(
+                    document_id,
+                    target_revision_no,
+                )
+                if replayed is None:
+                    raise StructuredPrototypeServiceError(
+                        "revision_missing",
+                        "prototype rollback target revision has no ready publication",
+                        operation_id=created.operation.id,
+                    )
+                return RollbackStructuredPrototypeResult(
+                    operation_id=created.operation.id,
+                    correlation_id=created.operation.correlation_id,
+                    publication=self._published_snapshot(
+                        replayed.document,
+                        replayed.revision,
+                        replayed.render_run,
+                        replayed.artifact,
+                    ),
+                )
+            raise self._existing_operation_error(created.operation)
+
+        running, step = await self._start_operation(operation, "rollback_publication")
+        try:
+            if document.published_revision_no != expected_current_revision_no:
+                raise StructuredPrototypeServiceError(
+                    "publication_state_conflict",
+                    "prototype publication pointer changed before rollback",
+                )
+            if target_revision_no == expected_current_revision_no:
+                raise StructuredPrototypeServiceError(
+                    "rollback_target_current",
+                    "prototype rollback target is already the current publication",
+                )
+            target = await self._store.load_ready_revision_publication(
+                document_id,
+                target_revision_no,
+            )
+            if target is None:
+                raise StructuredPrototypeServiceError(
+                    "revision_missing",
+                    "prototype rollback target revision has no ready publication",
+                )
+            replay_artifact = await self._write_replay_manifest(
+                operation=operation,
+                created_at=self._now(),
+                ordered_input_object_hashes=(target.revision.document_object_hash,),
+            )
+            completed, completed_step, event = self._succeed_operation(
+                running,
+                step,
+                result_hash=replay_artifact.descriptor.content_hash,
+                evidence_kind="publication_rolled_back",
+                evidence_ref=f"{document_id}:{target_revision_no}",
+            )
+            record = await self._store.rollback_publication(
+                document_id=document_id,
+                target_revision_no=target_revision_no,
+                expected_current_revision_no=expected_current_revision_no,
+                rolled_back_at=self._now(),
+                completed_operation=completed,
+                completed_step=completed_step,
+                completion_event=event,
+                replay_descriptor=replay_artifact.descriptor,
+                replay_reference=replay_artifact.reference,
+            )
+        except PrototypeObjectStoreError as exc:
+            await self._fail_operation(running, step, exc.code)
+            raise self._service_error(exc.code, str(exc), operation.id) from exc
+        except StructuredPrototypeStoreError as exc:
+            await self._fail_operation(running, step, exc.code)
+            raise self._service_error(exc.code, str(exc), operation.id) from exc
+        except StructuredPrototypeServiceError as exc:
+            await self._fail_operation(running, step, exc.code)
+            raise
+        return RollbackStructuredPrototypeResult(
+            operation_id=operation.id,
+            correlation_id=operation.correlation_id,
+            publication=self._published_snapshot(
+                record.document,
+                record.revision,
+                record.render_run,
+                record.artifact,
+            ),
         )
 
     async def read_published_file(

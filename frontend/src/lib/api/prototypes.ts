@@ -19,11 +19,15 @@ import type {
   PrototypeAiThreadSnapshot,
   PublishStructuredPrototypeRequest,
   ResetStructuredPrototypeRuntimeSessionRequest,
+  RollbackStructuredPrototypeRequest,
+  RolledBackStructuredPrototype,
   StructuredPrototypeDraft,
   StructuredPrototypeGenerationAcceptResult,
   StructuredPrototypeGenerationConfirmResult,
   StructuredPrototypeGenerationJob,
   StructuredPrototypePublication,
+  StructuredPrototypeRevisionDiff,
+  StructuredPrototypeRevisionHistory,
   StructuredPrototypeRuntimeSession,
   SendPrototypeAiMessageRequest,
 } from "../../features/prototype/structured/types";
@@ -1475,6 +1479,37 @@ export async function getStructuredPrototypePublication(
 ): Promise<StructuredPrototypePublication | null> {
   return structuredPrototypeRequest<StructuredPrototypePublication | null>(
     `${API_BASE}/structured-prototype-documents/${encodeURIComponent(documentId)}/published`,
+  );
+}
+
+export async function listStructuredPrototypeRevisions(
+  documentId: string,
+): Promise<StructuredPrototypeRevisionHistory> {
+  return structuredPrototypeRequest<StructuredPrototypeRevisionHistory>(
+    `${API_BASE}/structured-prototype-documents/${encodeURIComponent(documentId)}/revisions`,
+  );
+}
+
+export async function diffStructuredPrototypeRevisions(
+  documentId: string,
+  revisionNo: number,
+  against?: number,
+): Promise<StructuredPrototypeRevisionDiff> {
+  const query = against !== undefined ? `?against=${encodeURIComponent(against)}` : "";
+  return structuredPrototypeRequest<StructuredPrototypeRevisionDiff>(
+    `${API_BASE}/structured-prototype-documents/${encodeURIComponent(documentId)}` +
+      `/revisions/${encodeURIComponent(revisionNo)}/diff${query}`,
+  );
+}
+
+export async function rollbackStructuredPrototypePublication(
+  documentId: string,
+  body: RollbackStructuredPrototypeRequest,
+): Promise<RolledBackStructuredPrototype> {
+  return structuredPrototypeJsonRequest<RolledBackStructuredPrototype>(
+    `${API_BASE}/structured-prototype-documents/${encodeURIComponent(documentId)}/rollback`,
+    "POST",
+    body,
   );
 }
 

@@ -22,6 +22,9 @@ backend/codex.db-wal
 backend/*.db
 backend/*.db-shm
 backend/*.db-wal
+backend/tests/*.db
+backend/tests/*.db-shm
+backend/tests/*.db-wal
 /benchmark.db
 /backend/agent_collab_backend.egg-info/
 /backend/structured-prototype-data/

@@ -278,6 +278,7 @@ class PrototypeReplayManifestV1:
             "semantic_repair",
             "render_preview",
             "publish",
+            "rollback_publication",
             "create_runtime_session",
             "apply_runtime_event",
             "replay_runtime_session",
@@ -427,6 +428,7 @@ PrototypeOperationKind = Literal[
     "semantic_repair",
     "render_preview",
     "publish",
+    "rollback_publication",
     "create_runtime_session",
     "apply_runtime_event",
     "replay_runtime_session",
@@ -865,6 +867,20 @@ class PrototypePublishedRecord:
     revision: PrototypeRevisionRecord
     render_run: PrototypeRenderRunRecord
     artifact: PrototypeRenderArtifactRecord
+
+
+@dataclass(frozen=True, slots=True)
+class PrototypeRevisionHistoryEntry:
+    revision: PrototypeRevisionRecord
+    render_run: PrototypeRenderRunRecord
+    artifact: PrototypeRenderArtifactRecord
+
+
+@dataclass(frozen=True, slots=True)
+class PrototypeRollbackEventRecord:
+    operation_id: str
+    target_revision_no: int
+    occurred_at: datetime
 
 
 @dataclass(frozen=True, slots=True)

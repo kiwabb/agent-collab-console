@@ -691,6 +691,7 @@ export interface PublishStructuredPrototypeRequest {
   clientRequestId: string;
   expectedHeadSequenceNo: number;
   expectedDocumentHash: string;
+  summary: string | null;
 }
 
 export interface StructuredPrototypePublication {
@@ -714,6 +715,88 @@ export interface PublishedStructuredPrototype extends StructuredPrototypePublica
   operationId: string;
   correlationId: string;
   activeDraft: StructuredPrototypeDraft;
+}
+
+export type StructuredPrototypeRevisionSource = "user" | "ai" | "initial_generation";
+
+export interface StructuredPrototypePublishedRevision {
+  revisionId: string;
+  revisionNo: number;
+  summary: string;
+  source: StructuredPrototypeRevisionSource;
+  isCurrent: boolean;
+  renderRunId: string;
+  artifactId: string;
+  rendererVersion: string;
+  documentHash: string;
+  outputHash: string;
+  publishedAt: string;
+  artifactPath: string;
+}
+
+export interface StructuredPrototypePublicationEvent {
+  kind: "publish" | "rollback";
+  revisionNo: number;
+  occurredAt: string;
+  summary: string | null;
+}
+
+export interface StructuredPrototypeRevisionHistory {
+  contractVersion: 1;
+  documentId: string;
+  currentRevisionNo: number | null;
+  revisions: StructuredPrototypePublishedRevision[];
+  events: StructuredPrototypePublicationEvent[];
+}
+
+export interface StructuredPrototypeRevisionDiffPage {
+  id: string;
+  title: string;
+  route: string;
+}
+
+export interface StructuredPrototypeRevisionDiffPageChange
+  extends StructuredPrototypeRevisionDiffPage {
+  titleChanged: boolean;
+  routeChanged: boolean;
+  nodesAdded: number;
+  nodesRemoved: number;
+  nodesModified: number;
+}
+
+export interface StructuredPrototypeRevisionDiff {
+  contractVersion: 1;
+  documentId: string;
+  baseRevisionNo: number;
+  targetRevisionNo: number;
+  identical: boolean;
+  titleFrom: string | null;
+  titleTo: string | null;
+  pagesAdded: StructuredPrototypeRevisionDiffPage[];
+  pagesRemoved: StructuredPrototypeRevisionDiffPage[];
+  pagesModified: StructuredPrototypeRevisionDiffPageChange[];
+  flowsAdded: number;
+  flowsRemoved: number;
+  flowsModified: number;
+  componentDefinitionsChanged: boolean;
+  settingsChanged: boolean;
+  tokensChanged: boolean;
+  navigationChanged: boolean;
+  runtimeChanged: boolean;
+  assetRefsAdded: number;
+  assetRefsRemoved: number;
+}
+
+export interface RollbackStructuredPrototypeRequest {
+  contractVersion: 1;
+  clientRequestId: string;
+  targetRevisionNo: number;
+  expectedCurrentRevisionNo: number;
+}
+
+export interface RolledBackStructuredPrototype extends StructuredPrototypePublication {
+  operationId: string;
+  correlationId: string;
 }
 
 export type StructuredPrototypeGenerationJobStatus =
