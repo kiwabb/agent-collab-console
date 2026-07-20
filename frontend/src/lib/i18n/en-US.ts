@@ -2268,6 +2268,14 @@ const enUS = {
   "prototype.structured.share.versionLabel": "Version",
   "prototype.structured.share.viewingArchived": "Viewing archived revision v{no}",
   "prototype.structured.share.backToCurrent": "Back to current",
+  "prototype.structured.publishDialog.title": "Publish prototype",
+  "prototype.structured.publishDialog.description":
+    "Publishing archives a new revision you can replay or restore from the release history.",
+  "prototype.structured.publishDialog.summaryLabel": "Release note (optional)",
+  "prototype.structured.publishDialog.summaryPlaceholder":
+    "What changed in this release? Leave empty for an automatic note.",
+  "prototype.structured.publishDialog.confirm": "Publish",
+  "prototype.structured.publishDialog.cancel": "Cancel",
   "prototype.structured.delete": "Delete entire prototype",
   "prototype.structured.deleteTitle": "Delete the entire prototype?",
   "prototype.structured.deleteDescription":

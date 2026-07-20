@@ -58,6 +58,12 @@ test("release history keys exist in both locales", () => {
     "prototype.structured.share.versionLabel",
     "prototype.structured.share.viewingArchived",
     "prototype.structured.share.backToCurrent",
+    "prototype.structured.publishDialog.title",
+    "prototype.structured.publishDialog.description",
+    "prototype.structured.publishDialog.summaryLabel",
+    "prototype.structured.publishDialog.summaryPlaceholder",
+    "prototype.structured.publishDialog.confirm",
+    "prototype.structured.publishDialog.cancel",
   ] as const;
   for (const key of keys) {
     for (const locale of ["zh-CN", "en-US"] as const) {
@@ -99,6 +105,21 @@ test("share page renders the version-aware viewer with a sandboxed iframe", () =
   assert.match(page, /<StructuredPrototypeShareViewer documentId=\{documentId\} \/>/);
   assert.match(shareViewer, /sandbox="allow-scripts allow-same-origin"/);
   assert.match(shareViewer, /structured-prototype-public\/\$\{encodeURIComponent\(documentId\)\}\/current\/index\.html/);
+});
+
+test("publish flow carries an optional release note into the revision summary", () => {
+  const publishDialog = readSource(
+    "features/prototype/structured/StructuredPrototypePublishDialog.tsx",
+  );
+  const studio = readSource("features/prototype/structured/StructuredPrototypeStudioPage.tsx");
+  const hook = readSource("features/prototype/structured/useStructuredPrototypeStudio.ts");
+
+  assert.match(publishDialog, /t\("prototype\.structured\.publishDialog\.summaryLabel"\)/);
+  assert.match(publishDialog, /maxLength=\{200\}/);
+  assert.match(studio, /<StructuredPrototypePublishDialog/);
+  assert.match(studio, /controller\.publish\(summary\)/);
+  assert.match(hook, /publish: \(summary\?: string \| null\) => Promise<boolean>/);
+  assert.match(hook, /summary: releaseNote/);
 });
 
 test("prototypes api exposes revision history surface", () => {

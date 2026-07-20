@@ -229,6 +229,7 @@ class PublishStructuredPrototypeRequestV1(StrictRequestModel):
     client_request_id: Annotated[str, Field(min_length=36, max_length=36)]
     expected_head_sequence_no: Annotated[int, Field(ge=0)]
     expected_document_hash: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    summary: Annotated[str, Field(min_length=1, max_length=200)] | None = None
 
 
 class RollbackStructuredPrototypeRequestV1(StrictRequestModel):
@@ -1268,6 +1269,7 @@ async def publish_structured_prototype_draft(
             client_request_id=body.client_request_id,
             expected_head_sequence_no=body.expected_head_sequence_no,
             expected_document_hash=body.expected_document_hash,
+            summary=body.summary,
         )
     except StructuredPrototypeServiceError as exc:
         return _service_failure(exc)

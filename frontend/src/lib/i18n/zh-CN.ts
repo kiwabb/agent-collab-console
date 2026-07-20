@@ -2164,6 +2164,13 @@ const zhCN = {
   "prototype.structured.share.versionLabel": "版本",
   "prototype.structured.share.viewingArchived": "正在回看历史版本 v{no}",
   "prototype.structured.share.backToCurrent": "返回当前版本",
+  "prototype.structured.publishDialog.title": "发布原型",
+  "prototype.structured.publishDialog.description": "发布后会归档为新版本，可在发布历史中回看或恢复。",
+  "prototype.structured.publishDialog.summaryLabel": "发布说明（可选）",
+  "prototype.structured.publishDialog.summaryPlaceholder":
+    "这次发布改了什么？留空则自动生成说明。",
+  "prototype.structured.publishDialog.confirm": "发布",
+  "prototype.structured.publishDialog.cancel": "取消",
   "prototype.structured.delete": "删除整个原型",
   "prototype.structured.deleteTitle": "删除整个原型？",
   "prototype.structured.deleteDescription":

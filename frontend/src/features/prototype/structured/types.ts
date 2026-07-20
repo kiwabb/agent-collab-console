@@ -691,6 +691,7 @@ export interface PublishStructuredPrototypeRequest {
   clientRequestId: string;
   expectedHeadSequenceNo: number;
   expectedDocumentHash: string;
+  summary: string | null;
 }
 
 export interface StructuredPrototypePublication {

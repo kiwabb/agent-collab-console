@@ -1035,6 +1035,7 @@ def test_revision_history_lists_published_revisions_and_keeps_old_artifacts_view
                 "clientRequestId": fixture_id("api-revision-history-publish-2"),
                 "expectedHeadSequenceNo": edited["headSequenceNo"],
                 "expectedDocumentHash": edited["documentHash"],
+                "summary": "  添加审批说明区块  ",
             },
         )
         assert second_publish.status_code == 201
@@ -1057,10 +1058,12 @@ def test_revision_history_lists_published_revisions_and_keeps_old_artifacts_view
         assert latest["artifactId"] == second_published["artifactId"]
         assert latest["artifactPath"] == second_published["artifactPath"]
         assert latest["documentHash"] == edited["documentHash"]
+        assert latest["summary"] == "添加审批说明区块"
         assert oldest["revisionId"] == first_published["revisionId"]
         assert oldest["artifactId"] == first_published["artifactId"]
         assert oldest["artifactPath"] == first_published["artifactPath"]
         assert oldest["documentHash"] == created["documentHash"]
+        assert oldest["summary"] == "Publish draft sequence 0"
         for entry in history["revisions"]:
             assert entry["source"] == "user"
             assert entry["summary"]

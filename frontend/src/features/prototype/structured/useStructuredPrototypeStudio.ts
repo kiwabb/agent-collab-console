@@ -100,7 +100,7 @@ interface StructuredPrototypeStudioController extends StudioState {
   redo: () => Promise<boolean>;
   sendRuntimeEvents: (events: RuntimeEvent[]) => Promise<boolean>;
   checkpointRuntime: () => Promise<boolean>;
-  publish: () => Promise<boolean>;
+  publish: (summary?: string | null) => Promise<boolean>;
   deletePrototype: () => Promise<boolean>;
   adoptAiDraft: (draft: StructuredPrototypeDraft) => Promise<boolean>;
   resetRuntimePreview: () => Promise<boolean>;
@@ -1235,9 +1235,10 @@ export function useStructuredPrototypeStudio(
     studio.saving,
   ]);
 
-  const publish = useCallback(async (): Promise<boolean> => {
+  const publish = useCallback(async (summary?: string | null): Promise<boolean> => {
     const currentDraft = studio.draft;
     if (!currentDraft || studio.saving || studio.runtimeRecovery !== null) return false;
+    const releaseNote = summary?.trim().slice(0, 200) || null;
     setStudio((current) => ({ ...current, saving: true, error: null }));
     const requestKey = structuredPrototypePublishRequestKey(
       currentDraft.draftId,
@@ -1263,6 +1264,7 @@ export function useStructuredPrototypeStudio(
         clientRequestId: descriptor.clientRequestId,
         expectedHeadSequenceNo: currentDraft.headSequenceNo,
         expectedDocumentHash: currentDraft.documentHash,
+        summary: releaseNote,
       });
       activeDraft = published.activeDraft;
       publication = published;

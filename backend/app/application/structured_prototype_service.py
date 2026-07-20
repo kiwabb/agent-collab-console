@@ -2584,8 +2584,13 @@ class StructuredPrototypeService:
         client_request_id: str,
         expected_head_sequence_no: int,
         expected_document_hash: str,
+        summary: str | None = None,
     ) -> PublishStructuredPrototypeResult:
         _require_client_request_id(client_request_id)
+        # Release-note metadata: intentionally excluded from the request manifest
+        # hash so a crash retry replays the original outcome even if the note text
+        # differs — the first successful attempt's note wins.
+        release_note = summary.strip() if summary is not None else None
         draft = await self._store.load_draft(draft_id)
         if draft is None:
             raise StructuredPrototypeServiceError("draft_missing", "prototype draft does not exist")
@@ -2705,7 +2710,7 @@ class StructuredPrototypeService:
                 checkpoint_id=revision_checkpoint_id,
                 document_object_hash=expected_document_hash,
                 document_hash=expected_document_hash,
-                summary=f"Publish draft sequence {expected_head_sequence_no}",
+                summary=release_note or f"Publish draft sequence {expected_head_sequence_no}",
                 source="user",
                 created_at=now,
             )

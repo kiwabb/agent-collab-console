@@ -115,6 +115,7 @@ import {
   type StructuredPrototypeMutationOperation,
 } from "./structuredPrototypeInteraction";
 import { StructuredPrototypeAiPanel } from "./StructuredPrototypeAiPanel";
+import { StructuredPrototypePublishDialog } from "./StructuredPrototypePublishDialog";
 import { StructuredPrototypeReleaseHistoryDialog } from "./StructuredPrototypeReleaseHistory";
 import {
   StructuredPrototypeNodeDragOverlay,
@@ -321,6 +322,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
   const desktopLayout = useStructuredPrototypeDesktopLayout();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [aiMutating, setAiMutating] = useState(false);
@@ -2018,7 +2020,13 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
 
   const publishPrototype = (): void => {
     if (interactionRef.current.kind !== "idle") return;
-    void runLockedMutation("publish", controller.publish);
+    setPublishDialogOpen(true);
+  };
+
+  const confirmPublish = (summary: string | null): void => {
+    setPublishDialogOpen(false);
+    if (interactionRef.current.kind !== "idle") return;
+    void runLockedMutation("publish", () => controller.publish(summary));
   };
 
   const applyInspectorCommands = (
@@ -2955,6 +2963,11 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
           })}
         </nav>
       </div>
+      <StructuredPrototypePublishDialog
+        open={publishDialogOpen}
+        onOpenChange={setPublishDialogOpen}
+        onConfirm={confirmPublish}
+      />
       <StructuredPrototypeReleaseHistoryDialog
         open={historyDialogOpen}
         onOpenChange={setHistoryDialogOpen}
