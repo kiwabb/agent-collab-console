@@ -81,6 +81,9 @@ test("release history keys exist in both locales", () => {
     "prototype.structured.history.diff.section.navigation",
     "prototype.structured.history.diff.section.runtime",
     "prototype.structured.history.diff.section.components",
+    "prototype.structured.history.timeline",
+    "prototype.structured.history.timeline.publish",
+    "prototype.structured.history.timeline.rollback",
   ] as const;
   for (const key of keys) {
     for (const locale of ["zh-CN", "en-US"] as const) {
@@ -137,6 +140,14 @@ test("publish flow carries an optional release note into the revision summary", 
   assert.match(studio, /controller\.publish\(summary\)/);
   assert.match(hook, /publish: \(summary\?: string \| null\) => Promise<boolean>/);
   assert.match(hook, /summary: releaseNote/);
+});
+
+test("history dialog renders the publication timeline with rollback entries", () => {
+  const dialog = readSource("features/prototype/structured/StructuredPrototypeReleaseHistory.tsx");
+  assert.match(dialog, /t\("prototype\.structured\.history\.timeline"\)/);
+  assert.match(dialog, /"prototype\.structured\.history\.timeline\.publish"/);
+  assert.match(dialog, /"prototype\.structured\.history\.timeline\.rollback"/);
+  assert.match(dialog, /fetchState\.history\.events/);
 });
 
 test("history dialog lazily fetches the diff against the previous listed revision", () => {

@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 
 import type {
+  StructuredPrototypePublicationEvent,
   StructuredPrototypePublishedRevision,
   StructuredPrototypeRevisionDiff,
   StructuredPrototypeRevisionHistory,
@@ -276,8 +277,9 @@ export function StructuredPrototypeReleaseHistoryDialog({
           </div>
         ) : (
           <div className="grid min-h-0 grid-cols-1 gap-3 sm:grid-cols-[16rem_minmax(0,1fr)]">
+            <div className="flex min-h-0 flex-col gap-2">
             <ol
-              className="flex min-h-0 flex-col gap-2 overflow-y-auto pr-1"
+              className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1"
               aria-label={t("prototype.structured.history.title")}
             >
               {revisions.map((entry) => {
@@ -319,6 +321,39 @@ export function StructuredPrototypeReleaseHistoryDialog({
                 );
               })}
             </ol>
+            {fetchState.kind === "ready" && fetchState.history.events.length > 0 && (
+              <div className="max-h-36 shrink-0 overflow-y-auto rounded-md border border-border-muted bg-surface-raised p-2 text-xs">
+                <p className="mb-1 font-bold uppercase tracking-wide text-text-muted">
+                  {t("prototype.structured.history.timeline")}
+                </p>
+                <ol className="grid gap-1">
+                  {fetchState.history.events.map(
+                    (event: StructuredPrototypePublicationEvent, index: number) => (
+                      <li
+                        key={`${event.kind}-${event.revisionNo}-${event.occurredAt}-${index}`}
+                        className="flex items-baseline justify-between gap-2"
+                      >
+                        <span
+                          className={cn(event.kind === "rollback" && "text-amber-600")}
+                          title={event.summary ?? undefined}
+                        >
+                          {t(
+                            event.kind === "publish"
+                              ? "prototype.structured.history.timeline.publish"
+                              : "prototype.structured.history.timeline.rollback",
+                            { no: event.revisionNo },
+                          )}
+                        </span>
+                        <span className="shrink-0 text-text-muted">
+                          {formatPublishedAt(locale, event.occurredAt)}
+                        </span>
+                      </li>
+                    ),
+                  )}
+                </ol>
+              </div>
+            )}
+            </div>
             {selected && (
               <div className="flex min-h-0 flex-col gap-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">

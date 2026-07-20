@@ -1000,6 +1000,7 @@ def test_revision_history_lists_published_revisions_and_keeps_old_artifacts_view
             "documentId": created["documentId"],
             "currentRevisionNo": None,
             "revisions": [],
+            "events": [],
         }
 
         first_publish = client.post(
@@ -1203,6 +1204,12 @@ def test_rollback_repoints_publication_to_archived_revision_and_replays_idempote
         ).json()
         assert history["currentRevisionNo"] == 1
         assert [entry["isCurrent"] for entry in history["revisions"]] == [False, True]
+        assert sorted(
+            (event["kind"], event["revisionNo"]) for event in history["events"]
+        ) == [("publish", 1), ("publish", 2), ("rollback", 1)]
+        rollback_events = [event for event in history["events"] if event["kind"] == "rollback"]
+        assert all(event["summary"] is None for event in rollback_events)
+        assert all(event["occurredAt"] for event in history["events"])
 
         replay_response = client.post(
             f"/api/structured-prototype-documents/{created['documentId']}/rollback",

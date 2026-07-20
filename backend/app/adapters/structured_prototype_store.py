@@ -44,6 +44,7 @@ from app.domain.structured_prototype import (
     PrototypeRenderRunRecord,
     PrototypeRevisionHistoryEntry,
     PrototypeRevisionRecord,
+    PrototypeRollbackEventRecord,
     PrototypeRuntimeCheckpointRecord,
     PrototypeRuntimeEventAppendResult,
     PrototypeRuntimeEventBatchRecord,
@@ -4809,6 +4810,50 @@ class AsyncStructuredPrototypeStore:
                 )
             )
         return tuple(entries)
+
+    async def list_publication_rollbacks(
+        self,
+        document_id: str,
+    ) -> tuple[PrototypeRollbackEventRecord, ...]:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with conn.execute(
+            """
+            SELECT step.completion_evidence_ref, operation.completed_at, operation.id
+            FROM prototype_operations AS operation
+            JOIN prototype_operation_steps AS step
+                ON step.operation_id = operation.id
+                AND step.status = 'succeeded'
+                AND step.completion_evidence_kind = 'publication_rolled_back'
+            WHERE operation.operation_kind = 'rollback_publication'
+              AND operation.resource_kind = 'publication'
+              AND operation.resource_id = ?
+              AND operation.status = 'succeeded'
+            ORDER BY operation.completed_at DESC, operation.id DESC
+            """,
+            (document_id,),
+        ) as cursor:
+            rows = list(await cursor.fetchall())
+        events: list[PrototypeRollbackEventRecord] = []
+        for row in rows:
+            evidence_ref = _required_str(row[0], "rollback.evidence_ref")
+            prefix, _, revision_part = evidence_ref.rpartition(":")
+            if prefix != document_id or not revision_part.isdigit():
+                raise StructuredPrototypeStoreError(
+                    "rollback_evidence_corrupt",
+                    "prototype rollback evidence reference is malformed",
+                )
+            events.append(
+                PrototypeRollbackEventRecord(
+                    operation_id=_required_str(row[2], "rollback.operation_id"),
+                    target_revision_no=_required_positive_int(
+                        int(revision_part),
+                        "rollback.target_revision_no",
+                    ),
+                    occurred_at=_datetime(row[1], "rollback.completed_at"),
+                )
+            )
+        return tuple(events)
 
     async def load_ready_revision_publication(
         self,

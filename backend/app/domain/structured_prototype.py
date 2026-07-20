@@ -877,6 +877,13 @@ class PrototypeRevisionHistoryEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class PrototypeRollbackEventRecord:
+    operation_id: str
+    target_revision_no: int
+    occurred_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class PrototypeDraftRecoveryBundle:
     document: PrototypeDocumentRecord
     draft: PrototypeDraftRecord

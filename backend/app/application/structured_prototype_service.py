@@ -91,6 +91,7 @@ from app.domain.structured_prototype import (
     PrototypeRevisionHistoryEntry,
     PrototypeRevisionRecord,
     PrototypeRevisionSource,
+    PrototypeRollbackEventRecord,
     PrototypeRuntimeCheckpointRecord,
     PrototypeRuntimeEventAppendResult,
     PrototypeRuntimeEventBatchRecord,
@@ -509,6 +510,11 @@ class StructuredPrototypePersistence(Protocol):
         document_id: str,
     ) -> tuple[PrototypeRevisionHistoryEntry, ...]: ...
 
+    async def list_publication_rollbacks(
+        self,
+        document_id: str,
+    ) -> tuple[PrototypeRollbackEventRecord, ...]: ...
+
     async def load_ready_revision_publication(
         self,
         document_id: str,
@@ -790,11 +796,23 @@ class PublishedPrototypeRevision:
     is_current: bool
 
 
+PublicationTimelineEventKind = Literal["publish", "rollback"]
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationTimelineEvent:
+    kind: PublicationTimelineEventKind
+    revision_no: int
+    occurred_at: datetime
+    summary: str | None
+
+
 @dataclass(frozen=True, slots=True)
 class PublishedPrototypeHistory:
     document_id: str
     current_revision_no: int | None
     revisions: tuple[PublishedPrototypeRevision, ...]
+    events: tuple[PublicationTimelineEvent, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -3199,8 +3217,31 @@ class StructuredPrototypeService:
                     "prototype document does not exist",
                 )
             entries = await self._store.list_published_revisions(document_id)
+            rollbacks = await self._store.list_publication_rollbacks(document_id)
         except StructuredPrototypeStoreError as exc:
             raise self._service_error(exc.code, str(exc), None) from exc
+        events = [
+            PublicationTimelineEvent(
+                kind="publish",
+                revision_no=entry.revision.revision_no,
+                occurred_at=entry.artifact.created_at,
+                summary=entry.revision.summary,
+            )
+            for entry in entries
+        ]
+        events.extend(
+            PublicationTimelineEvent(
+                kind="rollback",
+                revision_no=rollback.target_revision_no,
+                occurred_at=rollback.occurred_at,
+                summary=None,
+            )
+            for rollback in rollbacks
+        )
+        events.sort(
+            key=lambda event: (event.occurred_at, event.revision_no, event.kind == "rollback"),
+            reverse=True,
+        )
         return PublishedPrototypeHistory(
             document_id=document.id,
             current_revision_no=document.published_revision_no,
@@ -3218,6 +3259,7 @@ class StructuredPrototypeService:
                 )
                 for entry in entries
             ),
+            events=tuple(events),
         )
 
     async def diff_published_revisions(

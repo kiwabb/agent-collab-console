@@ -59,39 +59,46 @@ export function StructuredPrototypeShareViewer({ documentId }: { documentId: str
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-white">
       {revisions.length > 1 && (
-        <div className="absolute top-3 right-3 z-10 flex items-center gap-2 rounded-lg border border-black/10 bg-white/95 px-3 py-2 text-xs text-neutral-700 shadow-lg backdrop-blur">
-          {viewingArchived && (
-            <>
-              <span className="font-semibold text-amber-700">
-                {t("prototype.structured.share.viewingArchived", { no: selected.revisionNo })}
-              </span>
-              <button
-                type="button"
-                className="cursor-pointer rounded-md border border-black/15 bg-white px-2 py-1 font-semibold hover:bg-neutral-100"
-                onClick={() => setSelectedRevisionNo(currentRevisionNo)}
+        <div className="absolute top-3 right-3 z-10 grid max-w-[min(92vw,26rem)] gap-1.5 rounded-lg border border-black/10 bg-white/95 px-3 py-2 text-xs text-neutral-700 shadow-lg backdrop-blur">
+          <div className="flex items-center justify-end gap-2">
+            {viewingArchived && (
+              <>
+                <span className="font-semibold text-amber-700">
+                  {t("prototype.structured.share.viewingArchived", { no: selected.revisionNo })}
+                </span>
+                <button
+                  type="button"
+                  className="cursor-pointer rounded-md border border-black/15 bg-white px-2 py-1 font-semibold hover:bg-neutral-100"
+                  onClick={() => setSelectedRevisionNo(currentRevisionNo)}
+                >
+                  {t("prototype.structured.share.backToCurrent")}
+                </button>
+              </>
+            )}
+            <label className="flex items-center gap-1.5">
+              <span className="font-semibold">{t("prototype.structured.share.versionLabel")}</span>
+              <select
+                className="cursor-pointer rounded-md border border-black/15 bg-white px-1.5 py-1"
+                value={selectedRevisionNo ?? ""}
+                onChange={(event) => setSelectedRevisionNo(Number(event.target.value))}
               >
-                {t("prototype.structured.share.backToCurrent")}
-              </button>
-            </>
+                {revisions.map((entry) => (
+                  <option key={entry.revisionId} value={entry.revisionNo} title={entry.summary}>
+                    {shareRevisionOptionLabel(
+                      locale,
+                      entry,
+                      t("prototype.structured.history.current"),
+                    )}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {viewingArchived && selected.summary.length > 0 && (
+            <p className="truncate text-right text-[11px] text-neutral-500" title={selected.summary}>
+              {selected.summary}
+            </p>
           )}
-          <label className="flex items-center gap-1.5">
-            <span className="font-semibold">{t("prototype.structured.share.versionLabel")}</span>
-            <select
-              className="cursor-pointer rounded-md border border-black/15 bg-white px-1.5 py-1"
-              value={selectedRevisionNo ?? ""}
-              onChange={(event) => setSelectedRevisionNo(Number(event.target.value))}
-            >
-              {revisions.map((entry) => (
-                <option key={entry.revisionId} value={entry.revisionNo}>
-                  {shareRevisionOptionLabel(
-                    locale,
-                    entry,
-                    t("prototype.structured.history.current"),
-                  )}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
       )}
       <iframe

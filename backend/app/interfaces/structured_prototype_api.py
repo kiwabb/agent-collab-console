@@ -345,11 +345,19 @@ class PublishedPrototypeRevisionResponseV1(StrictResponseModel):
     artifact_path: str
 
 
+class PublicationTimelineEventResponseV1(StrictResponseModel):
+    kind: Literal["publish", "rollback"]
+    revision_no: int
+    occurred_at: str
+    summary: str | None
+
+
 class StructuredPrototypeRevisionHistoryResponseV1(StrictResponseModel):
     contract_version: Literal[1]
     document_id: str
     current_revision_no: int | None
     revisions: list[PublishedPrototypeRevisionResponseV1]
+    events: list[PublicationTimelineEventResponseV1]
 
 
 class PrototypeRevisionDiffPageResponseV1(StrictResponseModel):
@@ -1024,6 +1032,15 @@ def _revision_history_response(
                 ),
             )
             for entry in history.revisions
+        ],
+        events=[
+            PublicationTimelineEventResponseV1(
+                kind=event.kind,
+                revision_no=event.revision_no,
+                occurred_at=event.occurred_at.isoformat(),
+                summary=event.summary,
+            )
+            for event in history.events
         ],
     )
 

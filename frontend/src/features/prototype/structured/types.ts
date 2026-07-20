@@ -734,11 +734,19 @@ export interface StructuredPrototypePublishedRevision {
   artifactPath: string;
 }
 
+export interface StructuredPrototypePublicationEvent {
+  kind: "publish" | "rollback";
+  revisionNo: number;
+  occurredAt: string;
+  summary: string | null;
+}
+
 export interface StructuredPrototypeRevisionHistory {
   contractVersion: 1;
   documentId: string;
   currentRevisionNo: number | null;
   revisions: StructuredPrototypePublishedRevision[];
+  events: StructuredPrototypePublicationEvent[];
 }
 
 export interface StructuredPrototypeRevisionDiffPage {
