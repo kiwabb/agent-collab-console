@@ -151,6 +151,8 @@ Project prototype routes open the structured Studio. The source of truth is a ty
 
 HTML is a disposable renderer output for published previews. It is regenerated from a structured document and is never accepted as editable prototype state. Claude tasks run in isolated worktrees, cannot modify project source, and fail closed when the configured Claude executor or MCP result is unavailable.
 
+Every publish archives an immutable revision with an optional release note. The Studio's release history browser replays any archived revision in a sandboxed preview, shows a deterministic structural diff against the previous release, tracks a publication timeline including rollbacks, and can restore an older revision as the current publication by re-pointing the publish pointer — reusing the archived artifact without re-rendering. The public share page offers the same read-only revision replay.
+
 ## Important Environment Variables
 
 | Variable | Default | Purpose |
