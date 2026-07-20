@@ -51,6 +51,10 @@ from app.application.structured_prototype_contracts import (
     parse_prototype_document_json,
     validate_command_batch_evidence_context,
 )
+from app.application.structured_prototype_revision_diff import (
+    PrototypeRevisionDiff,
+    diff_prototype_documents,
+)
 from app.domain.structured_prototype import (
     PROTOTYPE_FORWARD_COMMAND_BATCH_MAX_BYTES,
     REPLAY_MANIFEST_SCHEMA_VERSION,
@@ -418,6 +422,12 @@ class StructuredPrototypePersistence(Protocol):
     async def next_revision_no(self, document_id: str) -> int: ...
 
     async def load_revision(self, revision_id: str) -> PrototypeRevisionRecord | None: ...
+
+    async def load_revision_by_no(
+        self,
+        document_id: str,
+        revision_no: int,
+    ) -> PrototypeRevisionRecord | None: ...
 
     async def load_render_run_by_operation(
         self,
@@ -800,6 +810,14 @@ class RollbackStructuredPrototypeResult:
     operation_id: str
     correlation_id: str
     publication: PublishedPrototypeSnapshot
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedRevisionDiffResult:
+    document_id: str
+    base_revision_no: int
+    target_revision_no: int
+    diff: PrototypeRevisionDiff
 
 
 @dataclass(frozen=True, slots=True)
@@ -3201,6 +3219,90 @@ class StructuredPrototypeService:
                 for entry in entries
             ),
         )
+
+    async def diff_published_revisions(
+        self,
+        *,
+        document_id: str,
+        target_revision_no: int,
+        base_revision_no: int | None = None,
+    ) -> PublishedRevisionDiffResult:
+        try:
+            document = await self._store.load_document(document_id)
+            if document is None:
+                raise StructuredPrototypeServiceError(
+                    "document_missing",
+                    "prototype document does not exist",
+                )
+            target = await self._store.load_revision_by_no(document_id, target_revision_no)
+            if target is None:
+                raise StructuredPrototypeServiceError(
+                    "revision_missing",
+                    "prototype diff target revision does not exist",
+                )
+            if base_revision_no is None:
+                entries = await self._store.list_published_revisions(document_id)
+                base = next(
+                    (
+                        entry.revision
+                        for entry in entries
+                        if entry.revision.revision_no < target_revision_no
+                    ),
+                    None,
+                )
+                if base is None:
+                    raise StructuredPrototypeServiceError(
+                        "revision_missing",
+                        "prototype diff has no earlier published revision to compare against",
+                    )
+            else:
+                base = await self._store.load_revision_by_no(document_id, base_revision_no)
+                if base is None:
+                    raise StructuredPrototypeServiceError(
+                        "revision_missing",
+                        "prototype diff base revision does not exist",
+                    )
+            base_payload = await self._load_revision_document_payload(
+                document.project_id,
+                base,
+            )
+            target_payload = await self._load_revision_document_payload(
+                document.project_id,
+                target,
+            )
+        except PrototypeObjectStoreError as exc:
+            raise self._service_error(exc.code, str(exc), None) from exc
+        except StructuredPrototypeStoreError as exc:
+            raise self._service_error(exc.code, str(exc), None) from exc
+        return PublishedRevisionDiffResult(
+            document_id=document.id,
+            base_revision_no=base.revision_no,
+            target_revision_no=target.revision_no,
+            diff=diff_prototype_documents(base_payload, target_payload),
+        )
+
+    async def _load_revision_document_payload(
+        self,
+        project_id: str,
+        revision: PrototypeRevisionRecord,
+    ) -> dict[str, object]:
+        descriptor = await self._store.load_object(project_id, revision.document_object_hash)
+        if descriptor is None:
+            raise StructuredPrototypeServiceError(
+                "object_missing",
+                "prototype revision document object is missing",
+            )
+        canonical_bytes = await asyncio.to_thread(
+            self._object_store.read_canonical_bytes,
+            descriptor,
+        )
+        payload = json.loads(canonical_bytes)
+        if not isinstance(payload, dict):
+            raise StructuredPrototypeServiceError(
+                "object_missing",
+                "prototype revision document payload is not an object",
+            )
+        return payload
 
     async def rollback_publication(
         self,

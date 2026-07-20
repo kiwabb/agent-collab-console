@@ -1079,6 +1079,39 @@ def test_revision_history_lists_published_revisions_and_keeps_old_artifacts_view
         assert missing_history.status_code == 404
         assert missing_history.json()["error"]["code"] == "document_missing"
 
+        diff_response = client.get(
+            f"/api/structured-prototype-documents/{created['documentId']}/revisions/2/diff"
+        )
+        assert diff_response.status_code == 200, diff_response.text
+        diff = diff_response.json()
+        assert diff["contractVersion"] == 1
+        assert diff["baseRevisionNo"] == 1
+        assert diff["targetRevisionNo"] == 2
+        assert diff["identical"] is False
+        assert diff["titleFrom"] is None and diff["titleTo"] is None
+        assert diff["pagesAdded"] == [] and diff["pagesRemoved"] == []
+        assert len(diff["pagesModified"]) == 1
+        changed_page = diff["pagesModified"][0]
+        assert changed_page["titleChanged"] is False
+        assert changed_page["nodesAdded"] == 1
+        assert changed_page["nodesRemoved"] == 0
+        assert changed_page["nodesModified"] == 1
+        assert diff["tokensChanged"] is False
+        assert diff["settingsChanged"] is False
+
+        explicit_diff = client.get(
+            f"/api/structured-prototype-documents/{created['documentId']}"
+            "/revisions/2/diff?against=2"
+        )
+        assert explicit_diff.status_code == 200
+        assert explicit_diff.json()["identical"] is True
+
+        no_base = client.get(
+            f"/api/structured-prototype-documents/{created['documentId']}/revisions/1/diff"
+        )
+        assert no_base.status_code == 404
+        assert no_base.json()["error"]["code"] == "revision_missing"
+
         assert client.portal is not None
         client.portal.call(store.close)
 

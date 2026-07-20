@@ -741,6 +741,44 @@ export interface StructuredPrototypeRevisionHistory {
   revisions: StructuredPrototypePublishedRevision[];
 }
 
+export interface StructuredPrototypeRevisionDiffPage {
+  id: string;
+  title: string;
+  route: string;
+}
+
+export interface StructuredPrototypeRevisionDiffPageChange
+  extends StructuredPrototypeRevisionDiffPage {
+  titleChanged: boolean;
+  routeChanged: boolean;
+  nodesAdded: number;
+  nodesRemoved: number;
+  nodesModified: number;
+}
+
+export interface StructuredPrototypeRevisionDiff {
+  contractVersion: 1;
+  documentId: string;
+  baseRevisionNo: number;
+  targetRevisionNo: number;
+  identical: boolean;
+  titleFrom: string | null;
+  titleTo: string | null;
+  pagesAdded: StructuredPrototypeRevisionDiffPage[];
+  pagesRemoved: StructuredPrototypeRevisionDiffPage[];
+  pagesModified: StructuredPrototypeRevisionDiffPageChange[];
+  flowsAdded: number;
+  flowsRemoved: number;
+  flowsModified: number;
+  componentDefinitionsChanged: boolean;
+  settingsChanged: boolean;
+  tokensChanged: boolean;
+  navigationChanged: boolean;
+  runtimeChanged: boolean;
+  assetRefsAdded: number;
+  assetRefsRemoved: number;
+}
+
 export interface RollbackStructuredPrototypeRequest {
   contractVersion: 1;
   clientRequestId: string;

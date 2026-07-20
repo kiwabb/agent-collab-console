@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ExternalLink, History, RotateCcw } from "lucide-react";
+import { Diff, ExternalLink, History, RotateCcw } from "lucide-react";
 
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  diffStructuredPrototypeRevisions,
   listStructuredPrototypeRevisions,
   rollbackStructuredPrototypePublication,
 } from "@/lib/api/prototypes";
@@ -20,6 +21,7 @@ import { useI18n } from "@/providers/I18nProvider";
 
 import type {
   StructuredPrototypePublishedRevision,
+  StructuredPrototypeRevisionDiff,
   StructuredPrototypeRevisionHistory,
   StructuredPrototypeRevisionSource,
 } from "./types";
@@ -29,11 +31,99 @@ type ReleaseHistoryFetchState =
   | { kind: "failed"; message: string }
   | { kind: "ready"; history: StructuredPrototypeRevisionHistory };
 
+type RevisionDiffFetchState =
+  | { kind: "loading" }
+  | { kind: "failed"; message: string }
+  | { kind: "ready"; diff: StructuredPrototypeRevisionDiff };
+
 const SOURCE_LABEL_KEYS: Record<StructuredPrototypeRevisionSource, string> = {
   user: "prototype.structured.history.source.user",
   ai: "prototype.structured.history.source.ai",
   initial_generation: "prototype.structured.history.source.initial_generation",
 };
+
+function RevisionDiffSummary({ state }: { state: RevisionDiffFetchState | undefined }) {
+  const { t } = useI18n();
+  if (state === undefined || state.kind === "loading") {
+    return <p className="text-text-muted">{t("prototype.structured.history.diff.loading")}</p>;
+  }
+  if (state.kind === "failed") {
+    return (
+      <p className="text-error">
+        {t("prototype.structured.history.diff.failed", { message: state.message })}
+      </p>
+    );
+  }
+  const diff = state.diff;
+  if (diff.identical) {
+    return <p className="text-text-muted">{t("prototype.structured.history.diff.identical")}</p>;
+  }
+  const changedSections = [
+    diff.tokensChanged ? t("prototype.structured.history.diff.section.tokens") : null,
+    diff.settingsChanged ? t("prototype.structured.history.diff.section.settings") : null,
+    diff.navigationChanged ? t("prototype.structured.history.diff.section.navigation") : null,
+    diff.runtimeChanged ? t("prototype.structured.history.diff.section.runtime") : null,
+    diff.componentDefinitionsChanged
+      ? t("prototype.structured.history.diff.section.components")
+      : null,
+  ].filter((section): section is string => section !== null);
+  return (
+    <ul className="grid gap-1">
+      {diff.titleFrom !== null && diff.titleTo !== null && (
+        <li>
+          {t("prototype.structured.history.diff.titleChanged", {
+            from: diff.titleFrom,
+            to: diff.titleTo,
+          })}
+        </li>
+      )}
+      {diff.pagesAdded.map((page) => (
+        <li key={`added-${page.id}`} className="text-success">
+          {t("prototype.structured.history.diff.pageAdded", { title: page.title })}
+        </li>
+      ))}
+      {diff.pagesRemoved.map((page) => (
+        <li key={`removed-${page.id}`} className="text-error">
+          {t("prototype.structured.history.diff.pageRemoved", { title: page.title })}
+        </li>
+      ))}
+      {diff.pagesModified.map((page) => (
+        <li key={`modified-${page.id}`}>
+          {t("prototype.structured.history.diff.pageModified", {
+            title: page.title,
+            added: page.nodesAdded,
+            removed: page.nodesRemoved,
+            modified: page.nodesModified,
+          })}
+        </li>
+      ))}
+      {(diff.flowsAdded > 0 || diff.flowsRemoved > 0 || diff.flowsModified > 0) && (
+        <li>
+          {t("prototype.structured.history.diff.flows", {
+            added: diff.flowsAdded,
+            removed: diff.flowsRemoved,
+            modified: diff.flowsModified,
+          })}
+        </li>
+      )}
+      {(diff.assetRefsAdded > 0 || diff.assetRefsRemoved > 0) && (
+        <li>
+          {t("prototype.structured.history.diff.assets", {
+            added: diff.assetRefsAdded,
+            removed: diff.assetRefsRemoved,
+          })}
+        </li>
+      )}
+      {changedSections.length > 0 && (
+        <li>
+          {t("prototype.structured.history.diff.sections", {
+            sections: changedSections.join(" / "),
+          })}
+        </li>
+      )}
+    </ul>
+  );
+}
 
 function formatPublishedAt(locale: string, publishedAt: string): string {
   const parsed = new Date(publishedAt);
@@ -62,6 +152,8 @@ export function StructuredPrototypeReleaseHistoryDialog({
   const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [diffs, setDiffs] = useState<Record<number, RevisionDiffFetchState>>({});
 
   const loadHistory = useCallback(async (): Promise<void> => {
     setFetchState({ kind: "loading" });
@@ -85,6 +177,8 @@ export function StructuredPrototypeReleaseHistoryDialog({
   useEffect(() => {
     if (!open) return;
     setRestoreError(null);
+    setDiffOpen(false);
+    setDiffs({});
     void loadHistory();
   }, [open, loadHistory]);
 
@@ -93,6 +187,35 @@ export function StructuredPrototypeReleaseHistoryDialog({
   const currentRevisionNo = fetchState.kind === "ready" ? fetchState.history.currentRevisionNo : null;
   const selected =
     revisions.find((entry) => entry.revisionNo === selectedRevisionNo) ?? revisions[0] ?? null;
+
+  const selectedIndex =
+    selected === null
+      ? -1
+      : revisions.findIndex((entry) => entry.revisionNo === selected.revisionNo);
+  const previousRevisionNo =
+    selectedIndex >= 0 && selectedIndex < revisions.length - 1
+      ? (revisions[selectedIndex + 1]?.revisionNo ?? null)
+      : null;
+
+  useEffect(() => {
+    if (!diffOpen || selected === null || previousRevisionNo === null) return;
+    if (diffs[selected.revisionNo] !== undefined) return;
+    const targetRevisionNo = selected.revisionNo;
+    setDiffs((current) => ({ ...current, [targetRevisionNo]: { kind: "loading" } }));
+    void diffStructuredPrototypeRevisions(documentId, targetRevisionNo, previousRevisionNo)
+      .then((diff) => {
+        setDiffs((current) => ({ ...current, [targetRevisionNo]: { kind: "ready", diff } }));
+      })
+      .catch((error: unknown) => {
+        setDiffs((current) => ({
+          ...current,
+          [targetRevisionNo]: {
+            kind: "failed",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        }));
+      });
+  }, [diffOpen, selected, previousRevisionNo, diffs, documentId]);
 
   const restoreSelected = useCallback(async (): Promise<void> => {
     if (selected === null || currentRevisionNo === null || selected.isCurrent) return;
@@ -204,6 +327,22 @@ export function StructuredPrototypeReleaseHistoryDialog({
                     {formatPublishedAt(locale, selected.publishedAt)}
                   </span>
                   <div className="flex items-center gap-2">
+                    {previousRevisionNo !== null && (
+                      <button
+                        type="button"
+                        className={cn(
+                          "inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold",
+                          diffOpen
+                            ? "border-brand bg-brand-bg text-brand"
+                            : "border-border-muted bg-surface-raised text-brand hover:bg-surface-hover",
+                        )}
+                        aria-pressed={diffOpen}
+                        onClick={() => setDiffOpen((current) => !current)}
+                      >
+                        <Diff size={13} aria-hidden />
+                        {t("prototype.structured.history.diff")}
+                      </button>
+                    )}
                     {!selected.isCurrent && currentRevisionNo !== null && (
                       <button
                         type="button"
@@ -234,6 +373,14 @@ export function StructuredPrototypeReleaseHistoryDialog({
                   <p className="text-xs text-error">
                     {t("prototype.structured.history.restoreFailed", { message: restoreError })}
                   </p>
+                )}
+                {diffOpen && previousRevisionNo !== null && (
+                  <div className="max-h-44 overflow-y-auto rounded-md border border-border-muted bg-surface-raised p-2.5 text-xs text-foreground">
+                    <p className="mb-1.5 font-semibold text-text-muted">
+                      {t("prototype.structured.history.diff.base", { no: previousRevisionNo })}
+                    </p>
+                    <RevisionDiffSummary state={diffs[selected.revisionNo]} />
+                  </div>
                 )}
                 <iframe
                   key={selected.artifactPath}

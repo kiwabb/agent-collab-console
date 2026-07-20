@@ -64,6 +64,23 @@ test("release history keys exist in both locales", () => {
     "prototype.structured.publishDialog.summaryPlaceholder",
     "prototype.structured.publishDialog.confirm",
     "prototype.structured.publishDialog.cancel",
+    "prototype.structured.history.diff",
+    "prototype.structured.history.diff.base",
+    "prototype.structured.history.diff.loading",
+    "prototype.structured.history.diff.failed",
+    "prototype.structured.history.diff.identical",
+    "prototype.structured.history.diff.titleChanged",
+    "prototype.structured.history.diff.pageAdded",
+    "prototype.structured.history.diff.pageRemoved",
+    "prototype.structured.history.diff.pageModified",
+    "prototype.structured.history.diff.flows",
+    "prototype.structured.history.diff.assets",
+    "prototype.structured.history.diff.sections",
+    "prototype.structured.history.diff.section.tokens",
+    "prototype.structured.history.diff.section.settings",
+    "prototype.structured.history.diff.section.navigation",
+    "prototype.structured.history.diff.section.runtime",
+    "prototype.structured.history.diff.section.components",
   ] as const;
   for (const key of keys) {
     for (const locale of ["zh-CN", "en-US"] as const) {
@@ -122,9 +139,20 @@ test("publish flow carries an optional release note into the revision summary", 
   assert.match(hook, /summary: releaseNote/);
 });
 
+test("history dialog lazily fetches the diff against the previous listed revision", () => {
+  const dialog = readSource("features/prototype/structured/StructuredPrototypeReleaseHistory.tsx");
+  assert.match(
+    dialog,
+    /diffStructuredPrototypeRevisions\(documentId, targetRevisionNo, previousRevisionNo\)/,
+  );
+  assert.match(dialog, /t\("prototype\.structured\.history\.diff"\)/);
+  assert.match(dialog, /t\("prototype\.structured\.history\.diff\.identical"\)/);
+});
+
 test("prototypes api exposes revision history surface", () => {
   const api = readSource("lib/api/prototypes.ts");
   assert.match(api, /export async function listStructuredPrototypeRevisions\b/);
+  assert.match(api, /export async function diffStructuredPrototypeRevisions\b/);
   assert.match(api, /export async function rollbackStructuredPrototypePublication\b/);
   assert.match(api, /structured-prototype-documents\/\$\{encodeURIComponent\(documentId\)\}\/revisions/);
   assert.match(api, /structured-prototype-documents\/\$\{encodeURIComponent\(documentId\)\}\/rollback/);

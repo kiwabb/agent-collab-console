@@ -26,6 +26,7 @@ import type {
   StructuredPrototypeGenerationConfirmResult,
   StructuredPrototypeGenerationJob,
   StructuredPrototypePublication,
+  StructuredPrototypeRevisionDiff,
   StructuredPrototypeRevisionHistory,
   StructuredPrototypeRuntimeSession,
   SendPrototypeAiMessageRequest,
@@ -1486,6 +1487,18 @@ export async function listStructuredPrototypeRevisions(
 ): Promise<StructuredPrototypeRevisionHistory> {
   return structuredPrototypeRequest<StructuredPrototypeRevisionHistory>(
     `${API_BASE}/structured-prototype-documents/${encodeURIComponent(documentId)}/revisions`,
+  );
+}
+
+export async function diffStructuredPrototypeRevisions(
+  documentId: string,
+  revisionNo: number,
+  against?: number,
+): Promise<StructuredPrototypeRevisionDiff> {
+  const query = against !== undefined ? `?against=${encodeURIComponent(against)}` : "";
+  return structuredPrototypeRequest<StructuredPrototypeRevisionDiff>(
+    `${API_BASE}/structured-prototype-documents/${encodeURIComponent(documentId)}` +
+      `/revisions/${encodeURIComponent(revisionNo)}/diff${query}`,
   );
 }
 

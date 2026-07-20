@@ -27,6 +27,7 @@ from app.application.structured_prototype_service import (
     PrototypeOperationDetail,
     PublishedPrototypeHistory,
     PublishedPrototypeSnapshot,
+    PublishedRevisionDiffResult,
     PublishStructuredPrototypeResult,
     RecoverStructuredPrototypeResult,
     RollbackStructuredPrototypeResult,
@@ -349,6 +350,43 @@ class StructuredPrototypeRevisionHistoryResponseV1(StrictResponseModel):
     document_id: str
     current_revision_no: int | None
     revisions: list[PublishedPrototypeRevisionResponseV1]
+
+
+class PrototypeRevisionDiffPageResponseV1(StrictResponseModel):
+    id: str
+    title: str
+    route: str
+
+
+class PrototypeRevisionDiffPageChangeResponseV1(PrototypeRevisionDiffPageResponseV1):
+    title_changed: bool
+    route_changed: bool
+    nodes_added: int
+    nodes_removed: int
+    nodes_modified: int
+
+
+class StructuredPrototypeRevisionDiffResponseV1(StrictResponseModel):
+    contract_version: Literal[1]
+    document_id: str
+    base_revision_no: int
+    target_revision_no: int
+    identical: bool
+    title_from: str | None
+    title_to: str | None
+    pages_added: list[PrototypeRevisionDiffPageResponseV1]
+    pages_removed: list[PrototypeRevisionDiffPageResponseV1]
+    pages_modified: list[PrototypeRevisionDiffPageChangeResponseV1]
+    flows_added: int
+    flows_removed: int
+    flows_modified: int
+    component_definitions_changed: bool
+    settings_changed: bool
+    tokens_changed: bool
+    navigation_changed: bool
+    runtime_changed: bool
+    asset_refs_added: int
+    asset_refs_removed: int
 
 
 class StructuredPrototypeOperationOutcomeResponseV1(StrictResponseModel):
@@ -990,6 +1028,52 @@ def _revision_history_response(
     )
 
 
+def _revision_diff_response(
+    result: PublishedRevisionDiffResult,
+) -> StructuredPrototypeRevisionDiffResponseV1:
+    diff = result.diff
+    return StructuredPrototypeRevisionDiffResponseV1(
+        contract_version=HTTP_CONTRACT_VERSION,
+        document_id=result.document_id,
+        base_revision_no=result.base_revision_no,
+        target_revision_no=result.target_revision_no,
+        identical=diff.identical,
+        title_from=diff.title_from,
+        title_to=diff.title_to,
+        pages_added=[
+            PrototypeRevisionDiffPageResponseV1(id=page.id, title=page.title, route=page.route)
+            for page in diff.pages_added
+        ],
+        pages_removed=[
+            PrototypeRevisionDiffPageResponseV1(id=page.id, title=page.title, route=page.route)
+            for page in diff.pages_removed
+        ],
+        pages_modified=[
+            PrototypeRevisionDiffPageChangeResponseV1(
+                id=page.id,
+                title=page.title,
+                route=page.route,
+                title_changed=page.title_changed,
+                route_changed=page.route_changed,
+                nodes_added=page.nodes_added,
+                nodes_removed=page.nodes_removed,
+                nodes_modified=page.nodes_modified,
+            )
+            for page in diff.pages_modified
+        ],
+        flows_added=diff.flows_added,
+        flows_removed=diff.flows_removed,
+        flows_modified=diff.flows_modified,
+        component_definitions_changed=diff.component_definitions_changed,
+        settings_changed=diff.settings_changed,
+        tokens_changed=diff.tokens_changed,
+        navigation_changed=diff.navigation_changed,
+        runtime_changed=diff.runtime_changed,
+        asset_refs_added=diff.asset_refs_added,
+        asset_refs_removed=diff.asset_refs_removed,
+    )
+
+
 def _rollback_response(
     result: RollbackStructuredPrototypeResult,
 ) -> RollbackStructuredPrototypeResponseV1:
@@ -1303,6 +1387,26 @@ async def list_structured_prototype_revisions(
     except StructuredPrototypeServiceError as exc:
         return _service_failure(exc)
     return _revision_history_response(history)
+
+
+@router.get(
+    "/structured-prototype-documents/{document_id}/revisions/{revision_no}/diff",
+    response_model=StructuredPrototypeRevisionDiffResponseV1,
+)
+async def diff_structured_prototype_revisions(
+    document_id: str,
+    revision_no: int,
+    against: Annotated[int | None, Query(alias="against", ge=1)] = None,
+) -> StructuredPrototypeRevisionDiffResponseV1 | JSONResponse:
+    try:
+        result = await _require_service().diff_published_revisions(
+            document_id=document_id,
+            target_revision_no=revision_no,
+            base_revision_no=against,
+        )
+    except StructuredPrototypeServiceError as exc:
+        return _service_failure(exc)
+    return _revision_diff_response(result)
 
 
 @router.post(
