@@ -161,6 +161,23 @@ export function createPaletteNode(
       iconName: null,
     };
   }
+  if (type === "Divider") {
+    return {
+      ...common,
+      type,
+      spacing: 12,
+      tone: "default",
+    };
+  }
+  if (type === "Badge") {
+    return {
+      ...common,
+      type,
+      label: "徽章",
+      tone: "default",
+      iconName: null,
+    };
+  }
   return {
     ...common,
     type,

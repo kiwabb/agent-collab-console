@@ -565,6 +565,19 @@ class TableNodeV1(NodeCommonV1):
         return self
 
 
+class DividerNodeV1(NodeCommonV1):
+    type: Literal["Divider"]
+    spacing: Annotated[int, Field(ge=0, le=64)]
+    tone: Literal["default", "muted"]
+
+
+class BadgeNodeV1(NodeCommonV1):
+    type: Literal["Badge"]
+    label: Annotated[str, Field(min_length=1, max_length=40)]
+    tone: Literal["default", "success", "warning", "danger"]
+    icon_name: Annotated[str, Field(min_length=1, max_length=80)] | None
+
+
 type UINodeV1 = Annotated[
     StackNodeV1
     | GridNodeV1
@@ -573,7 +586,9 @@ type UINodeV1 = Annotated[
     | TextNodeV1
     | InputNodeV1
     | ButtonNodeV1
-    | TableNodeV1,
+    | TableNodeV1
+    | DividerNodeV1
+    | BadgeNodeV1,
     Field(discriminator="type"),
 ]
 
@@ -1839,6 +1854,19 @@ class NewTableNodeV1(NewNodeCommonV1):
         return self
 
 
+class NewDividerNodeV1(NewNodeCommonV1):
+    type: Literal["Divider"]
+    spacing: Annotated[int, Field(ge=0, le=64)]
+    tone: Literal["default", "muted"]
+
+
+class NewBadgeNodeV1(NewNodeCommonV1):
+    type: Literal["Badge"]
+    label: Annotated[str, Field(min_length=1, max_length=40)]
+    tone: Literal["default", "success", "warning", "danger"]
+    icon_name: Annotated[str, Field(min_length=1, max_length=80)] | None
+
+
 type NewUINodeV1 = Annotated[
     NewStackNodeV1
     | NewGridNodeV1
@@ -1847,7 +1875,9 @@ type NewUINodeV1 = Annotated[
     | NewTextNodeV1
     | NewInputNodeV1
     | NewButtonNodeV1
-    | NewTableNodeV1,
+    | NewTableNodeV1
+    | NewDividerNodeV1
+    | NewBadgeNodeV1,
     Field(discriminator="type"),
 ]
 
@@ -1999,6 +2029,23 @@ class VisibilityUpdateV1(StrictPrototypeModel):
     visibility: Literal["visible", "hidden"]
 
 
+class BadgeToneUpdateV1(StrictPrototypeModel):
+    kind: Literal["badgeTone"]
+    tone: Literal["default", "success", "warning", "danger"]
+
+
+class DividerStyleUpdateV1(StrictPrototypeModel):
+    kind: Literal["dividerStyle"]
+    spacing: Annotated[int | None, Field(ge=0, le=64)] = None
+    tone: Literal["default", "muted"] | None = None
+
+    @model_validator(mode="after")
+    def require_update(self) -> DividerStyleUpdateV1:
+        if self.spacing is None and self.tone is None:
+            raise ValueError("divider style update must contain at least one field")
+        return self
+
+
 type NodePropertyUpdateV1 = Annotated[
     TextContentUpdateV1
     | LabelUpdateV1
@@ -2012,7 +2059,9 @@ type NodePropertyUpdateV1 = Annotated[
     | FreeformGridsUpdateV1
     | ResponsiveLayoutUpdateV1
     | TableDataUpdateV1
-    | VisibilityUpdateV1,
+    | VisibilityUpdateV1
+    | BadgeToneUpdateV1
+    | DividerStyleUpdateV1,
     Field(discriminator="kind"),
 ]
 
@@ -3834,6 +3883,10 @@ def _allocate_new_node(
         return InputNodeV1.model_validate(payload, strict=True)
     if isinstance(node, NewButtonNodeV1):
         return ButtonNodeV1.model_validate(payload, strict=True)
+    if isinstance(node, NewDividerNodeV1):
+        return DividerNodeV1.model_validate(payload, strict=True)
+    if isinstance(node, NewBadgeNodeV1):
+        return BadgeNodeV1.model_validate(payload, strict=True)
     return TableNodeV1.model_validate(payload, strict=True)
 
 
@@ -4917,7 +4970,14 @@ def _apply_property_update(
             node.model_copy(update={"content": update.content}),
             TextContentUpdateV1(kind="textContent", content=node.content),
         )
-    if isinstance(update, LabelUpdateV1) and isinstance(node, (InputNodeV1, ButtonNodeV1)):
+    if isinstance(update, LabelUpdateV1) and isinstance(
+        node, (InputNodeV1, ButtonNodeV1, BadgeNodeV1)
+    ):
+        if isinstance(node, BadgeNodeV1) and len(update.label) > 40:
+            raise StructuredPrototypeContractError(
+                "command_property_invalid",
+                "prototype badge label must not exceed 40 characters",
+            )
         return (
             node.model_copy(update={"label": update.label}),
             LabelUpdateV1(kind="label", label=node.label),
@@ -5006,6 +5066,24 @@ def _apply_property_update(
         return (
             node.model_copy(update={"columns": update.columns, "rows": update.rows}),
             TableDataUpdateV1(kind="tableData", columns=node.columns, rows=node.rows),
+        )
+    if isinstance(update, BadgeToneUpdateV1) and isinstance(node, BadgeNodeV1):
+        return (
+            node.model_copy(update={"tone": update.tone}),
+            BadgeToneUpdateV1(kind="badgeTone", tone=node.tone),
+        )
+    if isinstance(update, DividerStyleUpdateV1) and isinstance(node, DividerNodeV1):
+        changes: dict[str, object] = {}
+        inverse: dict[str, object] = {"kind": "dividerStyle"}
+        if update.spacing is not None:
+            changes["spacing"] = update.spacing
+            inverse["spacing"] = node.spacing
+        if update.tone is not None:
+            changes["tone"] = update.tone
+            inverse["tone"] = node.tone
+        return (
+            node.model_copy(update=changes),
+            DividerStyleUpdateV1.model_validate(inverse, strict=True),
         )
     raise StructuredPrototypeContractError(
         "command_property_invalid", "prototype property update is invalid for the node type"

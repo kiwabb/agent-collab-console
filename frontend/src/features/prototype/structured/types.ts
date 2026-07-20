@@ -188,6 +188,19 @@ export interface StructuredPrototypeTableNode extends StructuredPrototypeNodeCom
   density: "compact" | "comfortable";
 }
 
+export interface StructuredPrototypeDividerNode extends StructuredPrototypeNodeCommon {
+  type: "Divider";
+  spacing: number;
+  tone: "default" | "muted";
+}
+
+export interface StructuredPrototypeBadgeNode extends StructuredPrototypeNodeCommon {
+  type: "Badge";
+  label: string;
+  tone: "default" | "success" | "warning" | "danger";
+  iconName: string | null;
+}
+
 export type StructuredPrototypeNode =
   | StructuredPrototypeStackNode
   | StructuredPrototypeGridNode
@@ -196,7 +209,9 @@ export type StructuredPrototypeNode =
   | StructuredPrototypeTextNode
   | StructuredPrototypeInputNode
   | StructuredPrototypeButtonNode
-  | StructuredPrototypeTableNode;
+  | StructuredPrototypeTableNode
+  | StructuredPrototypeDividerNode
+  | StructuredPrototypeBadgeNode;
 
 export interface StructuredPrototypePage {
   id: string;
@@ -345,6 +360,19 @@ export interface NewStructuredPrototypeTableNode extends NewStructuredPrototypeN
   density: "compact" | "comfortable";
 }
 
+export interface NewStructuredPrototypeDividerNode extends NewStructuredPrototypeNodeCommon {
+  type: "Divider";
+  spacing: number;
+  tone: "default" | "muted";
+}
+
+export interface NewStructuredPrototypeBadgeNode extends NewStructuredPrototypeNodeCommon {
+  type: "Badge";
+  label: string;
+  tone: "default" | "success" | "warning" | "danger";
+  iconName: string | null;
+}
+
 export type NewStructuredPrototypeNode =
   | NewStructuredPrototypeStackNode
   | NewStructuredPrototypeGridNode
@@ -353,7 +381,9 @@ export type NewStructuredPrototypeNode =
   | NewStructuredPrototypeTextNode
   | NewStructuredPrototypeInputNode
   | NewStructuredPrototypeButtonNode
-  | NewStructuredPrototypeTableNode;
+  | NewStructuredPrototypeTableNode
+  | NewStructuredPrototypeDividerNode
+  | NewStructuredPrototypeBadgeNode;
 
 export type StructuredPrototypeNodeRef =
   { kind: "existing"; nodeId: string } | { kind: "new"; newNodeKey: string };
@@ -402,6 +432,12 @@ export type StructuredPrototypeNodePropertyUpdate =
   | {
       kind: "responsiveLayout";
       responsive: StructuredPrototypeResponsiveOverride[];
+    }
+  | { kind: "badgeTone"; tone: "default" | "success" | "warning" | "danger" }
+  | {
+      kind: "dividerStyle";
+      spacing?: number | undefined;
+      tone?: "default" | "muted" | undefined;
     }
   | { kind: "visibility"; visibility: "visible" | "hidden" };
 
@@ -691,7 +727,7 @@ export interface PublishStructuredPrototypeRequest {
   clientRequestId: string;
   expectedHeadSequenceNo: number;
   expectedDocumentHash: string;
-  summary: string | null;
+  summary?: string | null;
 }
 
 export interface StructuredPrototypePublication {

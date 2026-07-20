@@ -3,6 +3,7 @@
 import { useDndMonitor, useDraggable, useDroppable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  BadgeCheck,
   Box,
   ChevronDown,
   ChevronRight,
@@ -12,6 +13,7 @@ import {
   Frame,
   GripVertical,
   LayoutGrid,
+  Minus,
   MousePointerClick,
   Pencil,
   Table2,
@@ -78,6 +80,8 @@ const LAYER_ICONS: Record<StructuredPrototypeNode["type"], typeof Box> = {
   Input: TextCursorInput,
   Button: MousePointerClick,
   Table: Table2,
+  Divider: Minus,
+  Badge: BadgeCheck,
 };
 
 function LayerDropZone({

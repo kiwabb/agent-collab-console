@@ -4,7 +4,10 @@ import {
   isStructuredPrototypeContainerNode,
   type StructuredPrototypeContainerNode,
 } from "./structuredPrototypeNodes";
-import type { StructuredPrototypePaletteType } from "./StructuredPrototypePalette";
+import {
+  STRUCTURED_PROTOTYPE_PALETTE_TYPES,
+  type StructuredPrototypePaletteType,
+} from "./structuredPrototypePaletteTypes";
 import type { StructuredPrototypeDragMirrorCapture } from "./structuredPrototypeDragMirror";
 import {
   readStructuredPrototypeLayerDragData,
@@ -103,9 +106,7 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 function isPaletteType(value: unknown): value is StructuredPrototypePaletteType {
-  return ["Freeform", "Stack", "Grid", "Form", "Text", "Input", "Button", "Table"].includes(
-    String(value),
-  );
+  return STRUCTURED_PROTOTYPE_PALETTE_TYPES.includes(value as StructuredPrototypePaletteType);
 }
 
 function readStructuredPrototypeDropTargetMetadata(
@@ -629,6 +630,18 @@ export function materializeStructuredPrototypePalettePreviewNode(
       variant: node.variant,
       size: node.size,
       disabled: node.disabled,
+      iconName: node.iconName,
+    };
+  }
+  if (node.type === "Divider") {
+    return { ...common, type: node.type, spacing: node.spacing, tone: node.tone };
+  }
+  if (node.type === "Badge") {
+    return {
+      ...common,
+      type: node.type,
+      label: node.label,
+      tone: node.tone,
       iconName: node.iconName,
     };
   }

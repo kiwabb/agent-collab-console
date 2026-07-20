@@ -882,6 +882,8 @@ test("palette hover moves one deterministic transient subtree without persisting
     Input: "Input",
     Button: "Button",
     Table: "Table",
+    Divider: "Divider",
+    Badge: "Badge",
   } as const;
   const commandNode = createPaletteNode("Form", "new-form-live", formDefinition, labels);
   const transient = materializeStructuredPrototypePalettePreviewNode(commandNode, 42);
@@ -978,6 +980,8 @@ test("palette preview is the active layout item and preserves the hovered insert
     Input: "Input",
     Button: "Button",
     Table: "Table",
+    Divider: "Divider",
+    Badge: "Badge",
   });
   const transient = materializeStructuredPrototypePalettePreviewNode(commandNode, 43);
   const paletteDrag = { kind: "palette", nodeType: "Text", formDefinitionId: null };

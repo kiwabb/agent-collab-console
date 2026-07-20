@@ -1652,6 +1652,8 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     Input: t("prototype.structured.palette.input"),
     Button: t("prototype.structured.palette.button"),
     Table: t("prototype.structured.palette.table"),
+    Divider: t("prototype.structured.palette.divider"),
+    Badge: t("prototype.structured.palette.badge"),
   };
   const prototypePaletteLabels = {
     Freeform: getDictionaryValue(document.locale, "prototype.structured.palette.freeform"),
@@ -1662,6 +1664,8 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     Input: getDictionaryValue(document.locale, "prototype.structured.palette.input"),
     Button: getDictionaryValue(document.locale, "prototype.structured.palette.button"),
     Table: getDictionaryValue(document.locale, "prototype.structured.palette.table"),
+    Divider: getDictionaryValue(document.locale, "prototype.structured.palette.divider"),
+    Badge: getDictionaryValue(document.locale, "prototype.structured.palette.badge"),
   };
   const layerTreeLabels = {
     tree: t("prototype.structured.layers.tree"),

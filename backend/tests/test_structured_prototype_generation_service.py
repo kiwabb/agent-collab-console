@@ -756,7 +756,7 @@ async def test_plan_first_generation_reaches_replayable_rendered_candidate(
         assert confirm_retried.snapshot == ready
         assert ready.job.candidate_object_hash == ready.job.candidate_document_hash
         assert ready.job.replay_manifest_object_hash is not None
-        assert ready.job.preview_renderer_version == "structured-prototype-renderer/0.1.0"
+        assert ready.job.preview_renderer_version == "structured-prototype-renderer/0.2.0"
         assert ready.latest_run is not None
         assert ready.latest_run.status == "completed"
         assert [item.item_key for item in ready.items] == [
@@ -784,7 +784,7 @@ async def test_plan_first_generation_reaches_replayable_rendered_candidate(
         assert replay_manifest.operation_id == ready.job.operation_id
         assert replay_manifest.operation_kind == "generation_job"
         assert replay_manifest.context_manifest_hash == ready.job.context_manifest_object_hash
-        assert replay_manifest.versions.renderer_version == ("structured-prototype-renderer/0.1.0")
+        assert replay_manifest.versions.renderer_version == ("structured-prototype-renderer/0.2.0")
         assert replay_manifest.renderer_output_hash == ready.job.preview_output_hash
         assert replay_manifest.runtime_final_state_hash is not None
         assert replay_manifest.runtime_final_view_model_hash is not None

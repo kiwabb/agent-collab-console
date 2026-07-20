@@ -2454,6 +2454,8 @@ const enUS = {
   "prototype.structured.palette.input": "Input",
   "prototype.structured.palette.button": "Button",
   "prototype.structured.palette.table": "Table",
+  "prototype.structured.palette.divider": "Divider",
+  "prototype.structured.palette.badge": "Badge",
   "prototype.structured.preview.navigation": "Prototype page navigation",
   "prototype.structured.role.label": "Switch simulated role",
   "prototype.structured.role.simulated": "Simulated role: {role}",
@@ -2463,6 +2465,8 @@ const enUS = {
   "prototype.structured.inspector.properties": "Properties",
   "prototype.structured.inspector.empty": "Select a component on the page to edit its properties",
   "prototype.structured.inspector.content": "Content",
+  "prototype.structured.inspector.dividerSpacing": "Divider spacing",
+  "prototype.structured.inspector.tone": "Tone",
   "prototype.structured.inspector.variant": "Button style",
   "prototype.structured.inspector.readOnly":
     "This component supports common layout and visibility editing.",

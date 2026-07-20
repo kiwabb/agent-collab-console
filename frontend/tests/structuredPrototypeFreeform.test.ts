@@ -33,6 +33,8 @@ const labels = {
   Input: "Input",
   Button: "Button",
   Table: "Table",
+  Divider: "Divider",
+  Badge: "Badge",
 };
 
 function legacyDocument(): StructuredPrototypeDocument {

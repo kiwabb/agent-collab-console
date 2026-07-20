@@ -86,6 +86,9 @@ export interface StructuredPrototypeInspectorDraft {
   responsive: StructuredPrototypeResponsiveOverride[];
   tableColumns: StructuredPrototypeTableColumn[];
   tableRows: StructuredPrototypeTableRow[];
+  badgeTone?: "default" | "success" | "warning" | "danger" | undefined;
+  dividerSpacing?: number | undefined;
+  dividerTone?: "default" | "muted" | undefined;
 }
 
 export type StructuredPrototypeInspectorContainerLayout =
@@ -209,6 +212,7 @@ function editableValue(node: StructuredPrototypeNode): string | null {
   if (node.type === "Text") return node.content;
   if (node.type === "Input") return node.label;
   if (node.type === "Button") return node.label;
+  if (node.type === "Badge") return node.label;
   return null;
 }
 
@@ -217,7 +221,9 @@ function propertyUpdate(
   value: string,
 ): StructuredPrototypeNodePropertyUpdate | null {
   if (node.type === "Text") return { kind: "textContent", content: value };
-  if (node.type === "Input" || node.type === "Button") return { kind: "label", label: value };
+  if (node.type === "Input" || node.type === "Button" || node.type === "Badge") {
+    return { kind: "label", label: value };
+  }
   return null;
 }
 
@@ -406,6 +412,32 @@ export function buildStructuredPrototypeInspectorBatch(
       },
     });
   }
+  if (node.type === "Badge" && draft.badgeTone !== undefined && draft.badgeTone !== node.tone) {
+    commands.push({
+      kind: "setNodeProperty",
+      node: { kind: "existing", nodeId: node.id },
+      update: { kind: "badgeTone", tone: draft.badgeTone },
+    });
+  }
+  if (node.type === "Divider") {
+    const dividerUpdate: Extract<
+      StructuredPrototypeNodePropertyUpdate,
+      { kind: "dividerStyle" }
+    > = { kind: "dividerStyle" };
+    if (draft.dividerSpacing !== undefined && draft.dividerSpacing !== node.spacing) {
+      dividerUpdate.spacing = draft.dividerSpacing;
+    }
+    if (draft.dividerTone !== undefined && draft.dividerTone !== node.tone) {
+      dividerUpdate.tone = draft.dividerTone;
+    }
+    if (dividerUpdate.spacing !== undefined || dividerUpdate.tone !== undefined) {
+      commands.push({
+        kind: "setNodeProperty",
+        node: { kind: "existing", nodeId: node.id },
+        update: dividerUpdate,
+      });
+    }
+  }
   if (commands.length === 0) return null;
   return {
     commandContractVersion: 1,
@@ -431,6 +463,13 @@ function EditableInspector({
   const initialValue = editableValue(node);
   const [value, setValue] = useState(initialValue ?? "");
   const [variant, setVariant] = useState(node.type === "Button" ? node.variant : "primary");
+  const [badgeTone, setBadgeTone] = useState(node.type === "Badge" ? node.tone : "default");
+  const [dividerSpacing, setDividerSpacing] = useState(
+    node.type === "Divider" ? node.spacing : 12,
+  );
+  const [dividerTone, setDividerTone] = useState(
+    node.type === "Divider" ? node.tone : "default",
+  );
   const [visibility, setVisibility] = useState(node.visibility);
   const [width, setWidth] = useState(node.layoutItem.width);
   const [minWidth, setMinWidth] = useState(node.layoutItem.minWidth);
@@ -564,6 +603,9 @@ function EditableInspector({
       responsive,
       tableColumns,
       tableRows,
+      badgeTone,
+      dividerSpacing,
+      dividerTone,
     });
     const runtimeCommands =
       node.type === "Table" && runtimeTable
@@ -600,6 +642,7 @@ function EditableInspector({
           {t("prototype.structured.inspector.content")}
           <textarea
             className="min-h-28 resize-y rounded-lg border border-border-muted bg-surface-input p-3 text-sm font-normal text-foreground outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+            maxLength={node.type === "Badge" ? 40 : undefined}
             value={value}
             onChange={(event) => setValue(event.target.value)}
             disabled={disabled}
@@ -623,6 +666,62 @@ function EditableInspector({
             <option value="ghost">Ghost</option>
           </select>
         </label>
+      )}
+      {node.type === "Badge" && (
+        <label className="grid gap-2 text-xs font-semibold text-text-secondary">
+          {t("prototype.structured.inspector.tone")}
+          <select
+            className="min-h-10 cursor-pointer rounded-md border border-border-muted bg-surface-input px-3 text-sm font-normal text-foreground"
+            value={badgeTone}
+            onChange={(event) =>
+              setBadgeTone(
+                event.target.value as "default" | "success" | "warning" | "danger",
+              )
+            }
+            disabled={disabled}
+          >
+            <option value="default">Default</option>
+            <option value="success">Success</option>
+            <option value="warning">Warning</option>
+            <option value="danger">Danger</option>
+          </select>
+        </label>
+      )}
+      {node.type === "Divider" && (
+        <div className="grid grid-cols-2 gap-3">
+          <label className="grid gap-2 text-xs font-semibold text-text-secondary">
+            {t("prototype.structured.inspector.dividerSpacing")}
+            <input
+              className="min-h-10 rounded-md border border-border-muted bg-surface-input px-3 text-sm font-normal text-foreground"
+              type="number"
+              min={0}
+              max={64}
+              step={1}
+              value={dividerSpacing}
+              onChange={(event) => {
+                const next = Number(event.target.value);
+                if (Number.isSafeInteger(next) && next >= 0 && next <= 64) {
+                  setDividerSpacing(next);
+                }
+              }}
+              disabled={disabled}
+            />
+          </label>
+          <label className="grid gap-2 text-xs font-semibold text-text-secondary">
+            {t("prototype.structured.inspector.tone")}
+            <select
+              className="min-h-10 cursor-pointer rounded-md border border-border-muted bg-surface-input px-3 text-sm font-normal text-foreground"
+              value={dividerTone}
+              onChange={(event) =>
+                setDividerTone(event.target.value as "default" | "muted")
+              }
+              disabled={disabled}
+            >
+              <option value="default">Default</option>
+              <option value="muted">Muted</option>
+            </select>
+          </label>
+        </div>
       )}
       <label className="grid gap-2 text-xs font-semibold text-text-secondary">
         {t("prototype.structured.inspector.visibility")}
