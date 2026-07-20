@@ -19,6 +19,8 @@ import type {
   PrototypeAiThreadSnapshot,
   PublishStructuredPrototypeRequest,
   ResetStructuredPrototypeRuntimeSessionRequest,
+  RollbackStructuredPrototypeRequest,
+  RolledBackStructuredPrototype,
   StructuredPrototypeDraft,
   StructuredPrototypeGenerationAcceptResult,
   StructuredPrototypeGenerationConfirmResult,
@@ -1484,6 +1486,17 @@ export async function listStructuredPrototypeRevisions(
 ): Promise<StructuredPrototypeRevisionHistory> {
   return structuredPrototypeRequest<StructuredPrototypeRevisionHistory>(
     `${API_BASE}/structured-prototype-documents/${encodeURIComponent(documentId)}/revisions`,
+  );
+}
+
+export async function rollbackStructuredPrototypePublication(
+  documentId: string,
+  body: RollbackStructuredPrototypeRequest,
+): Promise<RolledBackStructuredPrototype> {
+  return structuredPrototypeJsonRequest<RolledBackStructuredPrototype>(
+    `${API_BASE}/structured-prototype-documents/${encodeURIComponent(documentId)}/rollback`,
+    "POST",
+    body,
   );
 }
 

@@ -740,6 +740,18 @@ export interface StructuredPrototypeRevisionHistory {
   revisions: StructuredPrototypePublishedRevision[];
 }
 
+export interface RollbackStructuredPrototypeRequest {
+  contractVersion: 1;
+  clientRequestId: string;
+  targetRevisionNo: number;
+  expectedCurrentRevisionNo: number;
+}
+
+export interface RolledBackStructuredPrototype extends StructuredPrototypePublication {
+  operationId: string;
+  correlationId: string;
+}
+
 export type StructuredPrototypeGenerationJobStatus =
   | "queued"
   | "planning"

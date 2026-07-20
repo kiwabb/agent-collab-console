@@ -499,6 +499,26 @@ class StructuredPrototypePersistence(Protocol):
         document_id: str,
     ) -> tuple[PrototypeRevisionHistoryEntry, ...]: ...
 
+    async def load_ready_revision_publication(
+        self,
+        document_id: str,
+        revision_no: int,
+    ) -> PrototypePublishedRecord | None: ...
+
+    async def rollback_publication(
+        self,
+        *,
+        document_id: str,
+        target_revision_no: int,
+        expected_current_revision_no: int,
+        rolled_back_at: datetime,
+        completed_operation: PrototypeOperation,
+        completed_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
+    ) -> PrototypePublishedRecord: ...
+
     async def load_ready_publication(
         self,
         document_id: str,
@@ -773,6 +793,13 @@ class PublishStructuredPrototypeResult:
     correlation_id: str
     publication: PublishedPrototypeSnapshot
     state: ActivePrototypeState
+
+
+@dataclass(frozen=True, slots=True)
+class RollbackStructuredPrototypeResult:
+    operation_id: str
+    correlation_id: str
+    publication: PublishedPrototypeSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -3167,6 +3194,127 @@ class StructuredPrototypeService:
                     is_current=entry.revision.revision_no == document.published_revision_no,
                 )
                 for entry in entries
+            ),
+        )
+
+    async def rollback_publication(
+        self,
+        *,
+        document_id: str,
+        client_request_id: str,
+        target_revision_no: int,
+        expected_current_revision_no: int,
+    ) -> RollbackStructuredPrototypeResult:
+        _require_client_request_id(client_request_id)
+        document = await self._store.load_document(document_id)
+        if document is None:
+            raise StructuredPrototypeServiceError(
+                "document_missing",
+                "prototype document does not exist",
+            )
+        request_hash = _manifest_hash(
+            {
+                "kind": "rollback_publication",
+                "documentId": document_id,
+                "targetRevisionNo": target_revision_no,
+                "expectedCurrentRevisionNo": expected_current_revision_no,
+                "clientRequestId": client_request_id,
+            }
+        )
+        operation = self._queued_operation(
+            operation_kind="rollback_publication",
+            project_id=document.project_id,
+            resource_kind="publication",
+            resource_id=document_id,
+            client_request_id=client_request_id,
+            request_manifest_hash=request_hash,
+        )
+        created = await self._create_operation(operation)
+        if not created.created:
+            if created.operation.status == "succeeded":
+                replayed = await self._store.load_ready_revision_publication(
+                    document_id,
+                    target_revision_no,
+                )
+                if replayed is None:
+                    raise StructuredPrototypeServiceError(
+                        "revision_missing",
+                        "prototype rollback target revision has no ready publication",
+                        operation_id=created.operation.id,
+                    )
+                return RollbackStructuredPrototypeResult(
+                    operation_id=created.operation.id,
+                    correlation_id=created.operation.correlation_id,
+                    publication=self._published_snapshot(
+                        replayed.document,
+                        replayed.revision,
+                        replayed.render_run,
+                        replayed.artifact,
+                    ),
+                )
+            raise self._existing_operation_error(created.operation)
+
+        running, step = await self._start_operation(operation, "rollback_publication")
+        try:
+            if document.published_revision_no != expected_current_revision_no:
+                raise StructuredPrototypeServiceError(
+                    "publication_state_conflict",
+                    "prototype publication pointer changed before rollback",
+                )
+            if target_revision_no == expected_current_revision_no:
+                raise StructuredPrototypeServiceError(
+                    "rollback_target_current",
+                    "prototype rollback target is already the current publication",
+                )
+            target = await self._store.load_ready_revision_publication(
+                document_id,
+                target_revision_no,
+            )
+            if target is None:
+                raise StructuredPrototypeServiceError(
+                    "revision_missing",
+                    "prototype rollback target revision has no ready publication",
+                )
+            replay_artifact = await self._write_replay_manifest(
+                operation=operation,
+                created_at=self._now(),
+                ordered_input_object_hashes=(target.revision.document_object_hash,),
+            )
+            completed, completed_step, event = self._succeed_operation(
+                running,
+                step,
+                result_hash=replay_artifact.descriptor.content_hash,
+                evidence_kind="publication_rolled_back",
+                evidence_ref=f"{document_id}:{target_revision_no}",
+            )
+            record = await self._store.rollback_publication(
+                document_id=document_id,
+                target_revision_no=target_revision_no,
+                expected_current_revision_no=expected_current_revision_no,
+                rolled_back_at=self._now(),
+                completed_operation=completed,
+                completed_step=completed_step,
+                completion_event=event,
+                replay_descriptor=replay_artifact.descriptor,
+                replay_reference=replay_artifact.reference,
+            )
+        except PrototypeObjectStoreError as exc:
+            await self._fail_operation(running, step, exc.code)
+            raise self._service_error(exc.code, str(exc), operation.id) from exc
+        except StructuredPrototypeStoreError as exc:
+            await self._fail_operation(running, step, exc.code)
+            raise self._service_error(exc.code, str(exc), operation.id) from exc
+        except StructuredPrototypeServiceError as exc:
+            await self._fail_operation(running, step, exc.code)
+            raise
+        return RollbackStructuredPrototypeResult(
+            operation_id=operation.id,
+            correlation_id=operation.correlation_id,
+            publication=self._published_snapshot(
+                record.document,
+                record.revision,
+                record.render_run,
+                record.artifact,
             ),
         )
 

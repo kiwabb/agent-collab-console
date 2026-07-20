@@ -4731,25 +4731,7 @@ class AsyncStructuredPrototypeStore:
                 "published_revision_corrupt",
                 "prototype public pointer references a missing revision",
             )
-        async with conn.execute(
-            """
-            SELECT
-                id, document_id, kind, revision_id, ai_edit_run_id, status,
-                renderer_version, renderer_environment_version, runtime_core_version,
-                runtime_core_source_hash, runtime_core_bundle_hash,
-                state_machine_kernel_version, render_runtime_image_hash, browser_version,
-                font_pack_hash, viewport_profile_hash, sandbox_policy_version,
-                input_manifest_hash, document_object_hash, document_hash, operation_id,
-                attempt, artifact_id, output_manifest_hash, error_code, error_message,
-                started_at, completed_at, created_at, updated_at
-            FROM prototype_render_runs
-            WHERE revision_id = ? AND status = 'ready'
-            ORDER BY attempt DESC
-            LIMIT 1
-            """,
-            (revision.id,),
-        ) as cursor:
-            run_row = await cursor.fetchone()
+        run_row = await self._load_ready_publication_run_row(conn, revision.id)
         if run_row is None:
             raise StructuredPrototypeStoreError(
                 "published_render_corrupt",
@@ -4827,6 +4809,164 @@ class AsyncStructuredPrototypeStore:
                 )
             )
         return tuple(entries)
+
+    async def load_ready_revision_publication(
+        self,
+        document_id: str,
+        revision_no: int,
+    ) -> PrototypePublishedRecord | None:
+        await self.initialize()
+        conn = await self._get_conn()
+        document = await self.load_document(document_id)
+        revision = await self.load_revision_by_no(document_id, revision_no)
+        if document is None or revision is None:
+            return None
+        run_row = await self._load_ready_publication_run_row(conn, revision.id)
+        if run_row is None:
+            return None
+        run = self._render_run_from_row(run_row)
+        if run.artifact_id is None:
+            return None
+        artifact = await self.load_render_artifact(run.artifact_id)
+        if artifact is None:
+            return None
+        return PrototypePublishedRecord(
+            document=document,
+            revision=revision,
+            render_run=run,
+            artifact=artifact,
+        )
+
+    async def rollback_publication(
+        self,
+        *,
+        document_id: str,
+        target_revision_no: int,
+        expected_current_revision_no: int,
+        rolled_back_at: datetime,
+        completed_operation: PrototypeOperation,
+        completed_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
+    ) -> PrototypePublishedRecord:
+        self._validate_operation_transition_payload(
+            completed_operation,
+            completed_step,
+            completion_event,
+        )
+        if (
+            completed_operation.operation_kind != "rollback_publication"
+            or completed_operation.resource_kind != "publication"
+            or completed_operation.resource_id != document_id
+            or completed_operation.status != "succeeded"
+            or completed_step.completion_evidence_kind != "publication_rolled_back"
+            or completed_step.completion_evidence_ref != f"{document_id}:{target_revision_no}"
+        ):
+            raise StructuredPrototypeStoreError(
+                "rollback_identity_mismatch",
+                "prototype publication rollback operation identity is inconsistent",
+            )
+        self._validate_replay_manifest_registration(
+            descriptor=replay_descriptor,
+            reference=replay_reference,
+            operation=completed_operation,
+            step=completed_step,
+            event=completion_event,
+        )
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                operation_row = await self._load_operation_row(conn, completed_operation.id)
+                if operation_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "operation_missing",
+                        "prototype publication rollback operation does not exist",
+                    )
+                current_operation = self._operation_from_row(operation_row)
+                if (
+                    current_operation.operation_kind != "rollback_publication"
+                    or current_operation.status != "running"
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "rollback_conflict",
+                        "prototype publication rollback operation is not running",
+                    )
+                document = await self._require_document(conn, document_id)
+                if document.published_revision_no != expected_current_revision_no:
+                    raise StructuredPrototypeStoreError(
+                        "publication_state_conflict",
+                        "prototype publication pointer changed before rollback",
+                    )
+                revision_row = await self._load_revision_by_no_row(
+                    conn,
+                    document_id,
+                    target_revision_no,
+                )
+                if revision_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "revision_missing",
+                        "prototype rollback target revision does not exist",
+                    )
+                revision = self._revision_from_row(revision_row)
+                run_row = await self._load_ready_publication_run_row(conn, revision.id)
+                if run_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "revision_missing",
+                        "prototype rollback target revision has no ready publication",
+                    )
+                run = self._render_run_from_row(run_row)
+                if run.artifact_id is None:
+                    raise StructuredPrototypeStoreError(
+                        "published_render_corrupt",
+                        "prototype ready render run has no artifact",
+                    )
+                artifact_row = await self._load_render_artifact_row(conn, run.artifact_id)
+                if artifact_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "published_artifact_corrupt",
+                        "prototype rollback target render artifact is missing",
+                    )
+                artifact = self._render_artifact_from_row(artifact_row)
+                cursor = await conn.execute(
+                    """
+                    UPDATE prototype_documents
+                    SET published_revision_no = ?, updated_at = ?
+                    WHERE id = ? AND published_revision_no = ?
+                    """,
+                    (
+                        target_revision_no,
+                        rolled_back_at.isoformat(),
+                        document_id,
+                        expected_current_revision_no,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise StructuredPrototypeStoreError(
+                        "publication_state_conflict",
+                        "prototype publication pointer changed before rollback",
+                    )
+                await self._register_object_tx(conn, replay_descriptor)
+                await self._insert_object_reference(conn, replay_reference)
+                await self._apply_operation_transition(
+                    conn,
+                    completed_operation,
+                    completed_step,
+                    completion_event,
+                )
+                updated_document = await self._require_document(conn, document_id)
+            except (aiosqlite.Error, StructuredPrototypeStoreError):
+                await conn.rollback()
+                raise
+            await conn.commit()
+        return PrototypePublishedRecord(
+            document=updated_document,
+            revision=revision,
+            render_run=run,
+            artifact=artifact,
+        )
 
     async def load_ready_publication(
         self,
@@ -8132,6 +8272,31 @@ class AsyncStructuredPrototypeStore:
             return await cursor.fetchone()
 
     @staticmethod
+    async def _load_ready_publication_run_row(
+        conn: aiosqlite.Connection,
+        revision_id: str,
+    ) -> aiosqlite.Row | None:
+        async with conn.execute(
+            """
+            SELECT
+                id, document_id, kind, revision_id, ai_edit_run_id, status,
+                renderer_version, renderer_environment_version, runtime_core_version,
+                runtime_core_source_hash, runtime_core_bundle_hash,
+                state_machine_kernel_version, render_runtime_image_hash, browser_version,
+                font_pack_hash, viewport_profile_hash, sandbox_policy_version,
+                input_manifest_hash, document_object_hash, document_hash, operation_id,
+                attempt, artifact_id, output_manifest_hash, error_code, error_message,
+                started_at, completed_at, created_at, updated_at
+            FROM prototype_render_runs
+            WHERE revision_id = ? AND status = 'ready'
+            ORDER BY attempt DESC
+            LIMIT 1
+            """,
+            (revision_id,),
+        ) as cursor:
+            return await cursor.fetchone()
+
+    @staticmethod
     async def _load_render_artifact_row(
         conn: aiosqlite.Connection,
         artifact_id: str,
@@ -9103,6 +9268,7 @@ class AsyncStructuredPrototypeStore:
                     "semantic_repair",
                     "render_preview",
                     "publish",
+                    "rollback_publication",
                     "create_runtime_session",
                     "apply_runtime_event",
                     "replay_runtime_session",

@@ -2256,6 +2256,14 @@ const enUS = {
   "prototype.structured.history.source.initial_generation": "Initial generation",
   "prototype.structured.history.open": "Open in new tab",
   "prototype.structured.history.preview": "Published revision preview",
+  "prototype.structured.history.restore": "Restore as current",
+  "prototype.structured.history.restoring": "Restoring…",
+  "prototype.structured.history.restoreTitle": "Restore this revision?",
+  "prototype.structured.history.restoreDescription":
+    "Revision v{no} will become the live published version and the share link switches to it immediately. Drafts are not affected.",
+  "prototype.structured.history.restoreConfirm": "Restore",
+  "prototype.structured.history.restoreCancel": "Cancel",
+  "prototype.structured.history.restoreFailed": "Restore failed: {message}",
   "prototype.structured.delete": "Delete entire prototype",
   "prototype.structured.deleteTitle": "Delete the entire prototype?",
   "prototype.structured.deleteDescription":

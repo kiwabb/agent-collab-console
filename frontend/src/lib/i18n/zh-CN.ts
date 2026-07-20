@@ -2152,6 +2152,14 @@ const zhCN = {
   "prototype.structured.history.source.initial_generation": "初始生成",
   "prototype.structured.history.open": "在新窗口打开",
   "prototype.structured.history.preview": "发布版本预览",
+  "prototype.structured.history.restore": "恢复为当前版本",
+  "prototype.structured.history.restoring": "正在恢复…",
+  "prototype.structured.history.restoreTitle": "恢复历史版本？",
+  "prototype.structured.history.restoreDescription":
+    "将把版本 v{no} 重新设为对外发布的当前版本，分享链接会立即指向该版本。设计草稿不受影响。",
+  "prototype.structured.history.restoreConfirm": "确认恢复",
+  "prototype.structured.history.restoreCancel": "取消",
+  "prototype.structured.history.restoreFailed": "恢复失败：{message}",
   "prototype.structured.delete": "删除整个原型",
   "prototype.structured.deleteTitle": "删除整个原型？",
   "prototype.structured.deleteDescription":

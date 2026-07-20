@@ -29,6 +29,7 @@ from app.application.structured_prototype_service import (
     PublishedPrototypeSnapshot,
     PublishStructuredPrototypeResult,
     RecoverStructuredPrototypeResult,
+    RollbackStructuredPrototypeResult,
     StructuredPrototypeService,
     StructuredPrototypeServiceError,
 )
@@ -230,6 +231,13 @@ class PublishStructuredPrototypeRequestV1(StrictRequestModel):
     expected_document_hash: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
 
 
+class RollbackStructuredPrototypeRequestV1(StrictRequestModel):
+    contract_version: Literal[1]
+    client_request_id: Annotated[str, Field(min_length=36, max_length=36)]
+    target_revision_no: Annotated[int, Field(ge=1)]
+    expected_current_revision_no: Annotated[int, Field(ge=1)]
+
+
 class AllocatedEntityIdResponseV1(StrictResponseModel):
     new_node_key: str
     entity_id: str
@@ -313,6 +321,11 @@ class PublishStructuredPrototypeResponseV1(PublishedPrototypeResponseV1):
     operation_id: str
     correlation_id: str
     active_draft: StructuredPrototypeDraftResponseV1
+
+
+class RollbackStructuredPrototypeResponseV1(PublishedPrototypeResponseV1):
+    operation_id: str
+    correlation_id: str
 
 
 class PublishedPrototypeRevisionResponseV1(StrictResponseModel):
@@ -526,6 +539,8 @@ def _status_for_error(code: str) -> int:
         "publication_state_conflict",
         "revision_sequence_conflict",
         "render_run_conflict",
+        "rollback_target_current",
+        "rollback_conflict",
         "undo_unavailable",
         "redo_unavailable",
     }:
@@ -974,6 +989,17 @@ def _revision_history_response(
     )
 
 
+def _rollback_response(
+    result: RollbackStructuredPrototypeResult,
+) -> RollbackStructuredPrototypeResponseV1:
+    published = _published_response(result.publication)
+    return RollbackStructuredPrototypeResponseV1(
+        **published.model_dump(),
+        operation_id=result.operation_id,
+        correlation_id=result.correlation_id,
+    )
+
+
 def _publish_response(
     result: PublishStructuredPrototypeResult,
 ) -> PublishStructuredPrototypeResponseV1:
@@ -1275,6 +1301,26 @@ async def list_structured_prototype_revisions(
     except StructuredPrototypeServiceError as exc:
         return _service_failure(exc)
     return _revision_history_response(history)
+
+
+@router.post(
+    "/structured-prototype-documents/{document_id}/rollback",
+    response_model=RollbackStructuredPrototypeResponseV1,
+)
+async def rollback_structured_prototype_publication(
+    document_id: str,
+    body: RollbackStructuredPrototypeRequestV1,
+) -> RollbackStructuredPrototypeResponseV1 | JSONResponse:
+    try:
+        result = await _require_service().rollback_publication(
+            document_id=document_id,
+            client_request_id=body.client_request_id,
+            target_revision_no=body.target_revision_no,
+            expected_current_revision_no=body.expected_current_revision_no,
+        )
+    except StructuredPrototypeServiceError as exc:
+        return _service_failure(exc)
+    return _rollback_response(result)
 
 
 @router.get(

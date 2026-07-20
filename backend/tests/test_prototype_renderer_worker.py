@@ -6,11 +6,11 @@ from pathlib import Path
 import pytest
 from structured_prototype_fixtures import fixture_id, procurement_document
 
+from app.adapters.prototype_object_store import canonical_json_bytes
 from app.adapters.prototype_renderer_worker import (
     PrototypeRendererWorker,
     PrototypeRendererWorkerError,
 )
-from app.adapters.prototype_object_store import canonical_json_bytes
 from app.application.structured_prototype_contracts import document_hash, document_payload
 
 

@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ExternalLink, History } from "lucide-react";
+import { ExternalLink, History, RotateCcw } from "lucide-react";
 
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
   DialogContent,
@@ -10,7 +11,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { listStructuredPrototypeRevisions } from "@/lib/api/prototypes";
+import {
+  listStructuredPrototypeRevisions,
+  rollbackStructuredPrototypePublication,
+} from "@/lib/api/prototypes";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
 
@@ -55,6 +59,9 @@ export function StructuredPrototypeReleaseHistoryDialog({
   const { locale, t } = useI18n();
   const [fetchState, setFetchState] = useState<ReleaseHistoryFetchState>({ kind: "loading" });
   const [selectedRevisionNo, setSelectedRevisionNo] = useState<number | null>(null);
+  const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
 
   const loadHistory = useCallback(async (): Promise<void> => {
     setFetchState({ kind: "loading" });
@@ -77,13 +84,36 @@ export function StructuredPrototypeReleaseHistoryDialog({
 
   useEffect(() => {
     if (!open) return;
+    setRestoreError(null);
     void loadHistory();
   }, [open, loadHistory]);
 
   const revisions: StructuredPrototypePublishedRevision[] =
     fetchState.kind === "ready" ? fetchState.history.revisions : [];
+  const currentRevisionNo = fetchState.kind === "ready" ? fetchState.history.currentRevisionNo : null;
   const selected =
     revisions.find((entry) => entry.revisionNo === selectedRevisionNo) ?? revisions[0] ?? null;
+
+  const restoreSelected = useCallback(async (): Promise<void> => {
+    if (selected === null || currentRevisionNo === null || selected.isCurrent) return;
+    setRestoring(true);
+    setRestoreError(null);
+    try {
+      await rollbackStructuredPrototypePublication(documentId, {
+        contractVersion: 1,
+        clientRequestId: crypto.randomUUID(),
+        targetRevisionNo: selected.revisionNo,
+        expectedCurrentRevisionNo: currentRevisionNo,
+      });
+      setRestoreConfirmOpen(false);
+      await loadHistory();
+    } catch (error) {
+      setRestoreConfirmOpen(false);
+      setRestoreError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRestoring(false);
+    }
+  }, [selected, currentRevisionNo, documentId, loadHistory]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -167,25 +197,47 @@ export function StructuredPrototypeReleaseHistoryDialog({
               })}
             </ol>
             {selected && (
-              <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2">
-                <div className="flex items-center justify-between gap-2">
+              <div className="flex min-h-0 flex-col gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-text-muted">
                     {t("prototype.structured.history.revision", { no: selected.revisionNo })} ·{" "}
                     {formatPublishedAt(locale, selected.publishedAt)}
                   </span>
-                  <a
-                    href={selected.artifactPath}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border-muted bg-surface-raised px-2.5 text-xs font-semibold text-brand hover:bg-surface-hover"
-                  >
-                    <ExternalLink size={13} aria-hidden />
-                    {t("prototype.structured.history.open")}
-                  </a>
+                  <div className="flex items-center gap-2">
+                    {!selected.isCurrent && currentRevisionNo !== null && (
+                      <button
+                        type="button"
+                        className="inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-md bg-brand px-2.5 text-xs font-semibold text-black hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-45"
+                        onClick={() => setRestoreConfirmOpen(true)}
+                        disabled={restoring}
+                      >
+                        <RotateCcw size={13} aria-hidden />
+                        {t(
+                          restoring
+                            ? "prototype.structured.history.restoring"
+                            : "prototype.structured.history.restore",
+                        )}
+                      </button>
+                    )}
+                    <a
+                      href={selected.artifactPath}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border-muted bg-surface-raised px-2.5 text-xs font-semibold text-brand hover:bg-surface-hover"
+                    >
+                      <ExternalLink size={13} aria-hidden />
+                      {t("prototype.structured.history.open")}
+                    </a>
+                  </div>
                 </div>
+                {restoreError !== null && (
+                  <p className="text-xs text-error">
+                    {t("prototype.structured.history.restoreFailed", { message: restoreError })}
+                  </p>
+                )}
                 <iframe
                   key={selected.artifactPath}
-                  className="h-full w-full rounded-md border border-border-muted bg-white"
+                  className="min-h-0 w-full flex-1 rounded-md border border-border-muted bg-white"
                   src={selected.artifactPath}
                   title={t("prototype.structured.history.preview")}
                   sandbox="allow-scripts allow-same-origin"
@@ -194,6 +246,21 @@ export function StructuredPrototypeReleaseHistoryDialog({
             )}
           </div>
         )}
+        <ConfirmDialog
+          open={restoreConfirmOpen}
+          onOpenChange={(nextOpen) => {
+            if (!restoring) setRestoreConfirmOpen(nextOpen);
+          }}
+          title={t("prototype.structured.history.restoreTitle")}
+          description={t("prototype.structured.history.restoreDescription", {
+            no: selected?.revisionNo ?? 0,
+          })}
+          confirmText={t("prototype.structured.history.restoreConfirm")}
+          cancelText={t("prototype.structured.history.restoreCancel")}
+          onConfirm={() => void restoreSelected()}
+          isLoading={restoring}
+          variant="default"
+        />
       </DialogContent>
     </Dialog>
   );
