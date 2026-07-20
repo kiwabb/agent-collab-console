@@ -767,7 +767,9 @@ function LeafNodeRenderer({
         aria-label={node.name}
         onClick={select}
       >
-        <div className={cn("h-px w-full", node.tone === "muted" ? "bg-[#e6eae8]" : "bg-[#c9d2ce]")} />
+        <div
+          className={cn("h-px w-full", node.tone === "muted" ? "bg-[#e6eae8]" : "bg-[#c9d2ce]")}
+        />
       </div>
     );
   }
@@ -775,10 +777,10 @@ function LeafNodeRenderer({
     return (
       <span
         className={cn(
-          "inline-flex w-fit items-center gap-1 px-2 py-0.5 text-[11px] font-bold leading-normal",
+          "inline-flex w-fit items-center gap-1 border border-transparent px-2 py-0.5 text-[11px] font-bold leading-normal",
           node.tone === "success" && "bg-[#e9f4ec] text-[#237a45]",
-          node.tone === "warning" && "bg-[#fff2d8] text-[#9a5b13]",
-          node.tone === "danger" && "bg-[#fff1f3] text-[#b4233a]",
+          node.tone === "warning" && "bg-[#fff2d8] text-[#936221]",
+          node.tone === "danger" && "bg-[#fff1f3] text-[#8c1d31]",
           node.tone === "default" && "bg-[#eef1ef] text-[#39443f]",
         )}
         onClick={select}
@@ -3672,7 +3674,7 @@ export function StructuredPrototypeNodeDragOverlay({
   formValues,
   previewScale,
 }: {
-  kind: "node" | "palette";
+  kind: "node" | "palette" | "component";
   document: StructuredPrototypeDocument;
   node: StructuredPrototypeNode;
   runtimeState: PrototypeRuntimeState | null;

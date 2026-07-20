@@ -243,6 +243,12 @@ export interface StructuredPrototypeTopbarShell extends StructuredPrototypeShell
 export type StructuredPrototypeShell =
   StructuredPrototypeSidebarShell | StructuredPrototypeTopbarShell;
 
+export interface StructuredPrototypeComponentDefinition {
+  id: string;
+  key: string;
+  root: StructuredPrototypeNode;
+}
+
 export interface StructuredPrototypeDocument {
   schemaVersion: 1;
   id: string;
@@ -257,11 +263,7 @@ export interface StructuredPrototypeDocument {
     colors: Array<{ key: string; value: string }>;
     spacing: Array<{ key: string; value: string }>;
   };
-  componentDefinitions: Array<{
-    id: string;
-    key: string;
-    root: StructuredPrototypeNode;
-  }>;
+  componentDefinitions: StructuredPrototypeComponentDefinition[];
   pages: StructuredPrototypePage[];
   navigation: {
     items: Array<{ id: string; key: string; label: string; targetPageId: string }>;
@@ -505,7 +507,16 @@ export type StructuredPrototypeCommand =
       ruleId: string;
       definition: StructuredPrototypeBehaviorRuleDefinition;
     }
-  | { kind: "removeBehaviorRule"; ruleId: string };
+  | { kind: "removeBehaviorRule"; ruleId: string }
+  | { kind: "defineComponent"; key: string; sourceNode: StructuredPrototypeNodeRef }
+  | { kind: "removeComponentDefinition"; componentId: string }
+  | {
+      kind: "instantiateComponent";
+      componentId: string;
+      parent: StructuredPrototypeNodeRef;
+      index: number;
+      targetPosition?: StructuredPrototypeFreeformPosition | null;
+    };
 
 export type StructuredPrototypeFreeformMoveEvidenceAxis = "x" | "y";
 export type StructuredPrototypeFreeformMoveEvidenceWinner =
@@ -791,8 +802,7 @@ export interface StructuredPrototypeRevisionDiffPage {
   route: string;
 }
 
-export interface StructuredPrototypeRevisionDiffPageChange
-  extends StructuredPrototypeRevisionDiffPage {
+export interface StructuredPrototypeRevisionDiffPageChange extends StructuredPrototypeRevisionDiffPage {
   titleChanged: boolean;
   routeChanged: boolean;
   nodesAdded: number;

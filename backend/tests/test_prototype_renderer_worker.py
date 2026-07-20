@@ -173,9 +173,7 @@ def test_renderer_refuses_a_tampered_bundle_manifest(tmp_path: Path) -> None:
     bundle.write_bytes(bundle.read_bytes() + b"\n// tampered")
 
     with pytest.raises(PrototypeRendererWorkerError) as error:
-        PrototypeRendererWorker(
-            manifest_path=target / "prototype_renderer_worker.manifest.json"
-        )
+        PrototypeRendererWorker(manifest_path=target / "prototype_renderer_worker.manifest.json")
 
     assert error.value.code == "renderer_worker_asset_hash_mismatch"
 
@@ -269,14 +267,19 @@ async def test_renderer_renders_divider_and_badge_nodes() -> None:
     assert (
         f'data-prototype-node-id="{allocated["render-divider"]}" '
         'data-prototype-node-type="Divider" '
-        'class="prototype-divider prototype-divider-muted" role="separator"'
-    ).encode("utf-8") in index
+        'class="prototype-divider" role="separator">'
+        '<span class="prototype-divider-line prototype-divider-line-muted"></span>'
+    ).encode() in index
     assert (
         f'data-prototype-node-id="{allocated["render-badge"]}" '
         'data-prototype-node-type="Badge" '
         'class="prototype-badge prototype-badge-warning">待审批</span>'
-    ).encode("utf-8") in index
-    assert f'[data-prototype-node-id="{allocated["render-divider"]}"]'.encode("utf-8") in styles
-    assert b"margin:20px 0" in styles
-    assert b".prototype-divider{height:1px;background:#c9d2ce}" in styles
+    ).encode() in index
+    assert f'[data-prototype-node-id="{allocated["render-divider"]}"]'.encode() in styles
+    assert b"padding:20px 0" in styles
+    assert b".prototype-divider{width:100%}" in styles
+    assert (
+        b".prototype-divider-line{display:block;width:100%;height:1px;background:#c9d2ce}" in styles
+    )
+    assert b".prototype-divider-line-muted{background:#e6eae8}" in styles
     assert b".prototype-badge-warning{background:#fff2d8;color:#936221}" in styles

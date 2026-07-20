@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Save, Trash2 } from "lucide-react";
+import { Package, Plus, Save, Trash2 } from "lucide-react";
 
 import { useI18n } from "@/providers/I18nProvider";
 
@@ -59,12 +59,14 @@ interface Props {
   selectedCount: number;
   disabled: boolean;
   canDelete: boolean;
+  canSaveAsComponent: boolean;
   placementModeAvailable: boolean;
   isRuntimeBoundTable: boolean;
   runtimeTable: StructuredPrototypeInspectorRuntimeTable | null;
   onCapturePlacementFrame: () => StructuredPrototypePlacementFrame | null;
   onApply: (batch: StructuredPrototypeCommandBatch) => Promise<boolean>;
   onDelete: () => void;
+  onSaveAsComponent: (nodeId: string) => void;
 }
 
 export interface StructuredPrototypeInspectorDraft {
@@ -420,10 +422,8 @@ export function buildStructuredPrototypeInspectorBatch(
     });
   }
   if (node.type === "Divider") {
-    const dividerUpdate: Extract<
-      StructuredPrototypeNodePropertyUpdate,
-      { kind: "dividerStyle" }
-    > = { kind: "dividerStyle" };
+    const dividerUpdate: Extract<StructuredPrototypeNodePropertyUpdate, { kind: "dividerStyle" }> =
+      { kind: "dividerStyle" };
     if (draft.dividerSpacing !== undefined && draft.dividerSpacing !== node.spacing) {
       dividerUpdate.spacing = draft.dividerSpacing;
     }
@@ -452,24 +452,22 @@ function EditableInspector({
   selectedCount,
   disabled,
   canDelete,
+  canSaveAsComponent,
   placementModeAvailable,
   isRuntimeBoundTable,
   runtimeTable,
   onCapturePlacementFrame,
   onApply,
   onDelete,
+  onSaveAsComponent,
 }: Props & { node: StructuredPrototypeNode }) {
   const { t } = useI18n();
   const initialValue = editableValue(node);
   const [value, setValue] = useState(initialValue ?? "");
   const [variant, setVariant] = useState(node.type === "Button" ? node.variant : "primary");
   const [badgeTone, setBadgeTone] = useState(node.type === "Badge" ? node.tone : "default");
-  const [dividerSpacing, setDividerSpacing] = useState(
-    node.type === "Divider" ? node.spacing : 12,
-  );
-  const [dividerTone, setDividerTone] = useState(
-    node.type === "Divider" ? node.tone : "default",
-  );
+  const [dividerSpacing, setDividerSpacing] = useState(node.type === "Divider" ? node.spacing : 12);
+  const [dividerTone, setDividerTone] = useState(node.type === "Divider" ? node.tone : "default");
   const [visibility, setVisibility] = useState(node.visibility);
   const [width, setWidth] = useState(node.layoutItem.width);
   const [minWidth, setMinWidth] = useState(node.layoutItem.minWidth);
@@ -674,9 +672,7 @@ function EditableInspector({
             className="min-h-10 cursor-pointer rounded-md border border-border-muted bg-surface-input px-3 text-sm font-normal text-foreground"
             value={badgeTone}
             onChange={(event) =>
-              setBadgeTone(
-                event.target.value as "default" | "success" | "warning" | "danger",
-              )
+              setBadgeTone(event.target.value as "default" | "success" | "warning" | "danger")
             }
             disabled={disabled}
           >
@@ -712,9 +708,7 @@ function EditableInspector({
             <select
               className="min-h-10 cursor-pointer rounded-md border border-border-muted bg-surface-input px-3 text-sm font-normal text-foreground"
               value={dividerTone}
-              onChange={(event) =>
-                setDividerTone(event.target.value as "default" | "muted")
-              }
+              onChange={(event) => setDividerTone(event.target.value as "default" | "muted")}
               disabled={disabled}
             >
               <option value="default">Default</option>
@@ -1340,6 +1334,20 @@ function EditableInspector({
       >
         <Save size={15} aria-hidden />
         {t("prototype.structured.inspector.save")}
+      </button>
+      <button
+        type="button"
+        className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-border-muted bg-surface-raised px-4 text-sm font-semibold text-foreground hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-45"
+        onClick={() => onSaveAsComponent(node.id)}
+        disabled={disabled || !canSaveAsComponent}
+        title={
+          canSaveAsComponent
+            ? t("prototype.structured.inspector.saveAsComponent")
+            : t("prototype.structured.inspector.saveAsComponent.disabled")
+        }
+      >
+        <Package size={15} aria-hidden />
+        {t("prototype.structured.inspector.saveAsComponent")}
       </button>
       <button
         type="button"

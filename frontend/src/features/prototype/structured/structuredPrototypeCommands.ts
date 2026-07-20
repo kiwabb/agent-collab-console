@@ -544,3 +544,54 @@ export function removeBehaviorRuleBatch(ruleId: string): StructuredPrototypeComm
     commands: [{ kind: "removeBehaviorRule", ruleId }],
   };
 }
+
+/**
+ * Snapshot an existing page subtree as a reusable component definition. The
+ * backend clones the subtree with fresh deterministic ids; the definition is a
+ * detached template with no live link back to the source node.
+ */
+export function defineComponentBatch(key: string, nodeId: string): StructuredPrototypeCommandBatch {
+  return {
+    commandContractVersion: 1,
+    summary: "Define component",
+    commands: [{ kind: "defineComponent", key, sourceNode: { kind: "existing", nodeId } }],
+  };
+}
+
+export function removeComponentDefinitionBatch(
+  componentId: string,
+): StructuredPrototypeCommandBatch {
+  return {
+    commandContractVersion: 1,
+    summary: "Remove component definition",
+    commands: [{ kind: "removeComponentDefinition", componentId }],
+  };
+}
+
+/**
+ * Insert a DETACHED clone of a component definition into a container. The
+ * instance gets fresh server-allocated ids and never syncs with its definition.
+ */
+export function instantiateComponentBatch(
+  componentId: string,
+  parent: StructuredPrototypeContainerNode,
+  index: number,
+  targetPosition?: StructuredPrototypeFreeformPosition | null,
+): StructuredPrototypeCommandBatch {
+  if (parent.type === "Freeform" && (targetPosition === undefined || targetPosition === null)) {
+    throw new Error("a position is required to insert a component into a Freeform container");
+  }
+  return {
+    commandContractVersion: 1,
+    summary: "Instantiate component",
+    commands: [
+      {
+        kind: "instantiateComponent",
+        componentId,
+        parent: { kind: "existing", nodeId: parent.id },
+        index,
+        ...(targetPosition === undefined ? {} : { targetPosition }),
+      },
+    ],
+  };
+}

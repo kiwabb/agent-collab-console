@@ -13,6 +13,7 @@ import {
 import {
   findStructuredPrototypeNodeLocation,
   isStructuredPrototypePalettePreviewNodeId,
+  materializeStructuredPrototypeComponentPreviewNode,
   materializeStructuredPrototypePalettePreviewNode,
   projectStructuredPrototypeNodeInsert,
   projectStructuredPrototypeNodeMove,
@@ -20,6 +21,7 @@ import {
   projectStructuredPrototypePageReorder,
   projectStructuredPrototypePageReorderByTargetPageId,
   readStructuredPrototypeDropTarget,
+  readStructuredPrototypeComponentDefinitionDragData,
   readStructuredPrototypeNodeDragData,
   readStructuredPrototypePageDragData,
   readStructuredPrototypePaletteDragData,
@@ -30,6 +32,7 @@ import {
   structuredPrototypeNodeDragMatchesSelection,
 } from "../src/features/prototype/structured/structuredPrototypeDrag";
 import { createPaletteNode } from "../src/features/prototype/structured/structuredPrototypeCommands";
+import { structuredPrototypeSubtreeHasRuntimeReferences } from "../src/features/prototype/structured/structuredPrototypeDerived";
 import { resolveStructuredPrototypeMeasuredDropAreas } from "../src/features/prototype/structured/structuredPrototypeDropAreas";
 import { resolveStructuredPrototypePageDropIndicator } from "../src/features/prototype/structured/StructuredPrototypePageRail";
 import {
@@ -1474,10 +1477,25 @@ test("Studio recursively registers sortable children and faithful drag mirrors",
   assert.doesNotMatch(canvasDragOverlaySource, /\.slice\(0, 6\)/);
   assert.doesNotMatch(canvasDragOverlaySource, /\.slice\(0, 3\)/);
   assert.match(studio, /<DragOverlay/);
-  assert.match(studio, /collisionDetection=\{structuredPrototypeCollisionDetection\}/);
+  assert.match(studio, /collisionDetection=\{captureStructuredPrototypeDragPointer\}/);
+  assert.match(
+    studio,
+    /args\.pointerCoordinates === null.*kind: "keyboard".*kind: "pointer".*structuredPrototypeCollisionDetection\(args\)/,
+  );
   assert.match(studio, /MeasuringStrategy\.Always/);
   assert.match(studio, /onDragStart=\{handleDragStart\}/);
+  assert.match(studio, /onDragMove=\{handleDragMove\}/);
   assert.match(studio, /onDragOver=\{handleDragOver\}/);
+  assert.match(studio, /findPersistentFreeformDropGeometry\(/);
+  assert.match(studio, /node\.offsetParent !== container/);
+  assert.match(studio, /resolveStructuredPrototypeFreeformPointerPlacement\(\{/);
+  assert.match(
+    studio,
+    /placement\.remeasureAfterProjection.*currentLocation\?\.parentId !== targetParent\.id.*scheduleActiveMoveProjection\(session\)/,
+  );
+  assert.match(studio, /projectActiveMove\(session, "drop"\)/);
+  assert.match(studio, /phase === "drop" \? null : deterministicFallback/);
+  assert.match(studio, /setInteractionError\(t\("prototype\.structured\.canvas\.invalidDrop"\)\)/);
   assert.match(studio, /projectStructuredPrototypeNodeMoveToDropTarget/);
   assert.match(studio, /requestAnimationFrame/);
   assert.match(studio, /clearActiveMoveProjection\(\)/);
@@ -1634,6 +1652,111 @@ test("Studio recursively registers sortable children and faithful drag mirrors",
   assert.match(preview, /transform: `scale\(\$\{previewScale\}\)`/);
   assert.match(preview, /transformOrigin: "top left"/);
   assert.doesNotMatch(preview, /maxWidth: "100%"/);
+});
+
+test("component library drag uses the real recursive preview and inspector root gate", () => {
+  const document = rendererDocument();
+  const root = firstPage(document).root;
+  assert.equal(structuredPrototypeSubtreeHasRuntimeReferences(document, root), true);
+  if (root.type === "Stack" || root.type === "Grid" || root.type === "Form") {
+    const firstChild = root.children[0];
+    assert.ok(firstChild);
+    assert.equal(structuredPrototypeSubtreeHasRuntimeReferences(document, firstChild), false);
+  }
+  const dragData = readStructuredPrototypeComponentDefinitionDragData({
+    kind: "componentDef",
+    componentId: "component-1",
+  });
+  assert.deepEqual(dragData, { kind: "componentDef", componentId: "component-1" });
+  assert.equal(readStructuredPrototypeComponentDefinitionDragData({ kind: "node" }), null);
+
+  const preview = materializeStructuredPrototypeComponentPreviewNode(root, 42);
+  assert.equal(preview.id, "prototype-component-preview:42:" + root.id);
+  if (preview.type === "Stack" || preview.type === "Grid" || preview.type === "Form") {
+    assert.ok(
+      preview.children.every((child) => child.id.startsWith("prototype-component-preview:42:")),
+    );
+  }
+
+  const studio = readCompactSource(
+    "features/prototype/structured/StructuredPrototypeStudioPage.tsx",
+  );
+  const library = readCompactSource(
+    "features/prototype/structured/StructuredPrototypeComponentLibrary.tsx",
+  );
+  const inspector = readCompactSource(
+    "features/prototype/structured/StructuredPrototypeInspector.tsx",
+  );
+  const drag = readCompactSource("features/prototype/structured/structuredPrototypeDrag.ts");
+  assert.match(library, /useDraggable/);
+  assert.match(library, /kind: "componentDef"/);
+  assert.match(studio, /activeComponentDragNode/);
+  assert.match(studio, /materializeStructuredPrototypeComponentPreviewNode/);
+  assert.match(studio, /instantiateComponentBatch\(/);
+  assert.match(studio, /removeComponentDefinitionBatch\(/);
+  assert.match(studio, /defineComponentBatch\(/);
+  assert.match(studio, /selectedNode\.id !== activePage\.root\.id/);
+  assert.match(inspector, /canSaveAsComponent/);
+  assert.match(inspector, /saveAsComponent\.disabled/);
+  assert.match(drag, /COMPONENT_PREVIEW_NODE_ID_PREFIX/);
+  assert.match(drag, /targetBelongsToTransientPreview/);
+  assert.doesNotMatch(studio, /component type\/name card/u);
+});
+
+test("component preview is the active Stack and Grid layout child during drop measurement", () => {
+  const source = firstPage(rendererDocument()).root;
+  const preview = materializeStructuredPrototypeComponentPreviewNode(source, 43);
+  const componentDrag = { kind: "componentDef", componentId: "component-1" };
+  const projectedChildren = [
+    { ...preview, id: "existing-a" },
+    preview,
+    { ...preview, id: "existing-b" },
+  ];
+
+  const activeNodeId = resolveStructuredPrototypeActiveLayoutNodeId(
+    componentDrag,
+    "real-parent",
+    projectedChildren,
+  );
+  assert.equal(activeNodeId, preview.id);
+  assert.equal(
+    resolveStructuredPrototypeActiveLayoutNodeId(componentDrag, preview.id, projectedChildren),
+    null,
+  );
+  const activeIndex = projectedChildren.findIndex((child) => child.id === activeNodeId);
+  assert.equal(activeIndex, 1);
+
+  const parentRect = collisionRect(0, 0, 300, 220);
+  const measurements = [
+    {
+      layout: "vertical" as const,
+      children: [
+        { nodeId: "existing-a", index: 0, rect: collisionRect(0, 20, 300, 40) },
+        { nodeId: "existing-b", index: 2, rect: collisionRect(0, 120, 300, 40) },
+      ],
+    },
+    {
+      layout: "grid" as const,
+      children: [
+        { nodeId: "existing-a", index: 0, rect: collisionRect(0, 20, 140, 40) },
+        { nodeId: "existing-b", index: 2, rect: collisionRect(160, 20, 140, 40) },
+      ],
+    },
+  ];
+  for (const measurement of measurements) {
+    const areas = resolveStructuredPrototypeMeasuredDropAreas({
+      parentRect,
+      children: measurement.children,
+      childCount: projectedChildren.length,
+      activeIndex,
+      layout: measurement.layout,
+    });
+    assert.deepEqual(
+      areas.map((area) => area.targetIndex),
+      [0, 2, 3],
+      `${measurement.layout} drop areas should preserve the active component preview slot`,
+    );
+  }
 });
 
 test("renderer accepts injection-safe CSS color literals and rejects CSS escapes", () => {

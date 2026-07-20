@@ -2394,6 +2394,10 @@ const enUS = {
   "prototype.structured.layers.visibilityFailed": "Layer visibility could not be saved.",
   "prototype.structured.layers.moveFailed": "The layer move could not be saved.",
   "prototype.structured.components": "Components",
+  "prototype.structured.library": "Component library",
+  "prototype.structured.library.empty": "No reusable components yet.",
+  "prototype.structured.library.insert": "Insert component",
+  "prototype.structured.library.delete": "Delete component definition",
   "prototype.structured.canvas": "Canvas",
   "prototype.structured.canvas.drag": "Drag {name}",
   "prototype.structured.canvas.dragSelection": "Drag {count} selected components",
@@ -2468,6 +2472,9 @@ const enUS = {
   "prototype.structured.inspector.dividerSpacing": "Divider spacing",
   "prototype.structured.inspector.tone": "Tone",
   "prototype.structured.inspector.variant": "Button style",
+  "prototype.structured.inspector.saveAsComponent": "Save as component",
+  "prototype.structured.inspector.saveAsComponent.disabled":
+    "Select one non-root component that is not referenced by runtime behavior.",
   "prototype.structured.inspector.readOnly":
     "This component supports common layout and visibility editing.",
   "prototype.structured.inspector.visibility": "Visibility",

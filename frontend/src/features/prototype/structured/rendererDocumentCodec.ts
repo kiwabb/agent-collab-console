@@ -447,7 +447,18 @@ function validateNode(
   const item = record(value, path);
   const type = literal(
     item["type"],
-    ["Freeform", "Stack", "Grid", "Form", "Text", "Input", "Button", "Table", "Divider", "Badge"] as const,
+    [
+      "Freeform",
+      "Stack",
+      "Grid",
+      "Form",
+      "Text",
+      "Input",
+      "Button",
+      "Table",
+      "Divider",
+      "Badge",
+    ] as const,
     `${path}.type`,
   );
   const common = ["id", "name", "visibility", "layoutItem", "responsive", "type"];
@@ -634,11 +645,7 @@ function validateNode(
       if (String(item["label"]).length > 40) {
         throw new RendererDocumentCodecError(`${path}.label must be at most 40 characters`);
       }
-      literal(
-        item["tone"],
-        ["default", "success", "warning", "danger"] as const,
-        `${path}.tone`,
-      );
+      literal(item["tone"], ["default", "success", "warning", "danger"] as const, `${path}.tone`);
       if (item["iconName"] !== null) nonEmptyString(item["iconName"], `${path}.iconName`);
       return;
     case "Table":

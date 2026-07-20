@@ -6,6 +6,7 @@ import {
   canonicalStructuredPrototypeFreeformValue,
   normalizeStructuredPrototypeFreeformValue,
   resolveStructuredPrototypeFreeformMove,
+  resolveStructuredPrototypeFreeformPointerPlacement,
   resolveStructuredPrototypeFreeformResize,
   resolveStructuredPrototypeResizeBounds,
   structuredPrototypeCanStartTransform,
@@ -60,6 +61,93 @@ test("Freeform move preserves continuous canvas coordinates before canonical per
       containerHeight: 200,
     }),
     { x: 100.75, y: 80.25 },
+  );
+});
+
+test("Freeform pointer placement converts the scaled, bordered canvas origin once", () => {
+  assert.deepEqual(
+    resolveStructuredPrototypeFreeformPointerPlacement({
+      pointerClientX: 204,
+      pointerClientY: 153,
+      containerRect: { left: 100, top: 50 },
+      containerClientLeft: 2,
+      containerClientTop: 3,
+      previewScale: 2,
+      nodeWidth: 80,
+      nodeHeight: 40,
+      containerWidth: 300,
+      containerHeight: 200,
+    }),
+    { x: 50, y: 48.5 },
+  );
+});
+
+test("Freeform pointer placement clamps the requested top-left to keep the node in bounds", () => {
+  assert.deepEqual(
+    resolveStructuredPrototypeFreeformPointerPlacement({
+      pointerClientX: 1000,
+      pointerClientY: -100,
+      containerRect: { left: 100, top: 100 },
+      containerClientLeft: 0,
+      containerClientTop: 0,
+      previewScale: 1,
+      nodeWidth: 80,
+      nodeHeight: 40,
+      containerWidth: 300,
+      containerHeight: 200,
+    }),
+    { x: 220, y: 0 },
+  );
+});
+
+test("Freeform pointer placement uses each nested container's own client origin", () => {
+  const pointer = { pointerClientX: 360, pointerClientY: 260 };
+  assert.deepEqual(
+    resolveStructuredPrototypeFreeformPointerPlacement({
+      ...pointer,
+      containerRect: { left: 40, top: 20 },
+      containerClientLeft: 0,
+      containerClientTop: 0,
+      previewScale: 0.5,
+      nodeWidth: 80,
+      nodeHeight: 40,
+      containerWidth: 1000,
+      containerHeight: 800,
+    }),
+    { x: 640, y: 480 },
+  );
+  assert.deepEqual(
+    resolveStructuredPrototypeFreeformPointerPlacement({
+      ...pointer,
+      containerRect: { left: 260, top: 160 },
+      containerClientLeft: 2,
+      containerClientTop: 2,
+      previewScale: 0.5,
+      nodeWidth: 80,
+      nodeHeight: 40,
+      containerWidth: 400,
+      containerHeight: 300,
+    }),
+    { x: 198, y: 198 },
+  );
+});
+
+test("Freeform pointer placement rejects unavailable geometry", () => {
+  assert.throws(
+    () =>
+      resolveStructuredPrototypeFreeformPointerPlacement({
+        pointerClientX: 0,
+        pointerClientY: 0,
+        containerRect: { left: 0, top: 0 },
+        containerClientLeft: 0,
+        containerClientTop: 0,
+        previewScale: 0,
+        nodeWidth: 80,
+        nodeHeight: 40,
+        containerWidth: 300,
+        containerHeight: 200,
+      }),
+    /scale must be positive/,
   );
 });
 

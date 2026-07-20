@@ -221,6 +221,9 @@ async def test_external_proposal_uses_the_studio_preview_and_apply_pipeline(
             "replaceBehaviorRule",
             "removeBehaviorRule",
             "updateNodeName",
+            "defineComponent",
+            "removeComponentDefinition",
+            "instantiateComponent",
         } <= set(context.supported_command_kinds)
         assert context.context["selectedNodes"]
         command_schema = context.context["commandBatchSchema"]

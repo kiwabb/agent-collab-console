@@ -3,10 +3,10 @@
   "protocolVersion": "prototype-renderer-worker/v1",
   "rendererVersion": "structured-prototype-renderer/0.2.0",
   "rendererEnvironmentVersion": "node20-static-bundle/1",
-  "rendererSourceHash": "sha256:d7b92d3f471b64a3082c6ed89e442a99a876773fc4492b81c033765db34c21fe",
+  "rendererSourceHash": "sha256:aae41910899c03c7c6290492c3bf582fb6e9335ef1f13f4bc61ac8d9ff1a5d1b",
   "runtimeCoreVersion": "0.2.0-spike",
   "runtimeCoreSourceHash": "sha256:2ea354a6f2e11b0511fffb3da8ac434cd5ea4d5a70c77546ec5daf2d19f5097a",
-  "runtimeCoreBundleHash": "sha256:3e56877d652420ad8046dfbe9336272d999e6a4d6be438619062d0863bbf5f70",
+  "runtimeCoreBundleHash": "sha256:748e6bc7763f07498872f4500091cc18766ac23be581e8b6a763dbfc2e18df84",
   "stateMachineKernelVersion": "5.32.4",
   "renderRuntimeImageHash": "sha256:95bad67800f8e650fde9f4da6624cbf0ca96df0348132a518e3e1a30d1f3a99b",
   "browserVersion": "web-platform-es2022/1",
@@ -14,11 +14,11 @@
   "viewportProfileHash": "sha256:e4c0596cc935cd3728e5434442ab8e9d42aa649694d4cd9e969c1b95c3f09fc8",
   "sandboxPolicyVersion": "prototype-static-csp/1",
   "publicRuntimeFile": "prototype_public_runtime.js",
-  "publicRuntimeHash": "sha256:3e56877d652420ad8046dfbe9336272d999e6a4d6be438619062d0863bbf5f70",
+  "publicRuntimeHash": "sha256:748e6bc7763f07498872f4500091cc18766ac23be581e8b6a763dbfc2e18df84",
   "publicRuntimeByteSize": 100062,
   "bundleFile": "prototype_renderer_worker.mjs",
-  "bundleHash": "sha256:56fd802235cf3274caaabf4bf82a323e5b7980c1b274adbd5d04922c3f31486d",
-  "bundleByteSize": 324088,
+  "bundleHash": "sha256:b788a1026bc815c1204c771883358247cd812f219232f6ac67b51484b80c34de",
+  "bundleByteSize": 324144,
   "buildTool": "esbuild@0.28.1",
   "target": "node20",
   "sources": [
@@ -49,18 +49,18 @@
     },
     {
       "path": "src/features/prototype/structured/prototypeRendererCore.ts",
-      "hash": "sha256:ff889f9b0052bc4ad72e508dd6917b690c5660f2139cbb4707340701e536ef5d",
-      "byteSize": 29284
+      "hash": "sha256:10eb4b1c552c3aa11b6165b27cd5576a5accd5c9d996828f179eae844fa52d17",
+      "byteSize": 29305
     },
     {
       "path": "src/features/prototype/structured/rendererDocumentCodec.ts",
-      "hash": "sha256:6eb38d5d67c87379d363a7d43baf19b167c8364c2fd8244fb697b981fd15100a",
-      "byteSize": 37738
+      "hash": "sha256:4e57036d5db3c6162df9e822e04722842e8a05beaf20f12330fa9f49081f9d53",
+      "byteSize": 37772
     },
     {
       "path": "src/features/prototype/structured/structuredPrototypeDerived.ts",
-      "hash": "sha256:e8049df9f343e0c93288399ea836b1144a089be2e31872002560424725b86f93",
-      "byteSize": 5469
+      "hash": "sha256:fa69b81fd906d2faa24c0eba667dd32b7aa7213ba5f1f5915e3ebb61c6ec2d99",
+      "byteSize": 6141
     },
     {
       "path": "src/features/prototype/structured/structuredPrototypeNodes.ts",
@@ -69,8 +69,8 @@
     },
     {
       "path": "src/features/prototype/structured/types.ts",
-      "hash": "sha256:c92a4617d7055535cf07095a688870e00522ad16094dff3917f8c2e836a54367",
-      "byteSize": 35939
+      "hash": "sha256:0a0d11cdee144ba4ecca542852ec61a717a20d5f6bae0109ae95ec2839d4ce65",
+      "byteSize": 36373
     },
     {
       "path": "src/lib/utils.tsx",

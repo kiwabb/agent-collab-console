@@ -109,6 +109,25 @@ export function findStructuredPrototypeNode(
   return null;
 }
 
+export function structuredPrototypeSubtreeHasRuntimeReferences(
+  document: StructuredPrototypeDocument,
+  node: StructuredPrototypeNode,
+): boolean {
+  const nodeIds = new Set<string>();
+  const visit = (candidate: StructuredPrototypeNode): void => {
+    nodeIds.add(candidate.id);
+    if (isStructuredPrototypeContainerNode(candidate)) {
+      for (const child of candidate.children) visit(child);
+    }
+  };
+  visit(node);
+  return (
+    document.runtime.viewBindings.some((binding) => nodeIds.has(binding.nodeId)) ||
+    document.runtime.rules.some((rule) => nodeIds.has(rule.trigger.nodeId)) ||
+    document.flows.some((flow) => nodeIds.has(flow.fromNodeId))
+  );
+}
+
 export function runtimeViewProperties(
   viewModel: RuntimeViewModel | null,
   nodeId: string,

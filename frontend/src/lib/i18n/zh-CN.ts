@@ -2190,10 +2190,10 @@ const zhCN = {
   "prototype.structured.share.emptyDescription":
     "这个分享链接是有效的，但作者还没有发布任何版本。发布后刷新本页即可查看。",
   "prototype.structured.publishDialog.title": "发布原型",
-  "prototype.structured.publishDialog.description": "发布后会归档为新版本，可在发布历史中回看或恢复。",
+  "prototype.structured.publishDialog.description":
+    "发布后会归档为新版本，可在发布历史中回看或恢复。",
   "prototype.structured.publishDialog.summaryLabel": "发布说明（可选）",
-  "prototype.structured.publishDialog.summaryPlaceholder":
-    "这次发布改了什么？留空则自动生成说明。",
+  "prototype.structured.publishDialog.summaryPlaceholder": "这次发布改了什么？留空则自动生成说明。",
   "prototype.structured.publishDialog.confirm": "发布",
   "prototype.structured.publishDialog.cancel": "取消",
   "prototype.structured.delete": "删除整个原型",
@@ -2286,6 +2286,10 @@ const zhCN = {
   "prototype.structured.layers.visibilityFailed": "图层可见性保存失败。",
   "prototype.structured.layers.moveFailed": "图层移动保存失败。",
   "prototype.structured.components": "组件",
+  "prototype.structured.library": "组件库",
+  "prototype.structured.library.empty": "还没有可复用的组件。",
+  "prototype.structured.library.insert": "插入组件",
+  "prototype.structured.library.delete": "删除组件定义",
   "prototype.structured.canvas": "画布",
   "prototype.structured.canvas.drag": "拖动 {name}",
   "prototype.structured.canvas.dragSelection": "拖动已选择的 {count} 个组件",
@@ -2354,6 +2358,9 @@ const zhCN = {
   "prototype.structured.inspector.dividerSpacing": "分隔间距",
   "prototype.structured.inspector.tone": "色调",
   "prototype.structured.inspector.variant": "按钮样式",
+  "prototype.structured.inspector.saveAsComponent": "保存为组件",
+  "prototype.structured.inspector.saveAsComponent.disabled":
+    "请选择一个非页面根节点、且未被运行时行为引用的组件。",
   "prototype.structured.inspector.readOnly": "该组件支持通用布局和可见性编辑。",
   "prototype.structured.inspector.visibility": "可见性",
   "prototype.structured.inspector.visible": "显示",

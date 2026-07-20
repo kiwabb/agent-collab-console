@@ -26,6 +26,7 @@ from app.application.structured_prototype_contracts import (
     PrototypeDocumentV1,
     StackNodeV1,
     StructuredPrototypeContractError,
+    TableNodeV1,
     advance_journal_prefix_hash,
     apply_inverse_commands,
     canonical_command_history_checkpoint_json,
@@ -5409,3 +5410,551 @@ def test_runtime_page_order_is_exact_and_reorder_updates_it() -> None:
         client_request_id=fixture_id("runtime-page-order-request"),
     )
     assert result.document.runtime.page_ids == [page.id for page in result.document.pages]
+
+
+def _define_component_batch(key: str, source_node_id: str) -> DomainCommandBatchV1:
+    return _parse_batch(
+        {
+            "commandContractVersion": 1,
+            "summary": "Define reusable component",
+            "commands": [
+                {
+                    "kind": "defineComponent",
+                    "key": key,
+                    "sourceNode": {"kind": "existing", "nodeId": source_node_id},
+                }
+            ],
+        }
+    )
+
+
+def _instantiate_component_batch(
+    component_id: str,
+    parent_node_id: str,
+    index: int,
+    *,
+    target_position: dict[str, str] | None = None,
+) -> DomainCommandBatchV1:
+    command: dict[str, object] = {
+        "kind": "instantiateComponent",
+        "componentId": component_id,
+        "parent": {"kind": "existing", "nodeId": parent_node_id},
+        "index": index,
+    }
+    if target_position is not None:
+        command["targetPosition"] = target_position
+    return _parse_batch(
+        {
+            "commandContractVersion": 1,
+            "summary": "Instantiate reusable component",
+            "commands": [command],
+        }
+    )
+
+
+def _remove_component_definition_batch(component_id: str) -> DomainCommandBatchV1:
+    return _parse_batch(
+        {
+            "commandContractVersion": 1,
+            "summary": "Remove reusable component",
+            "commands": [{"kind": "removeComponentDefinition", "componentId": component_id}],
+        }
+    )
+
+
+def _nested_component_document() -> PrototypeDocumentV1:
+    payload = procurement_document_payload()
+    pages = payload["pages"]
+    assert isinstance(pages, list)
+    detail_page = pages[2]
+    assert isinstance(detail_page, dict)
+    detail_root = detail_page["root"]
+    assert isinstance(detail_root, dict)
+    detail_children = detail_root["children"]
+    assert isinstance(detail_children, list)
+
+    freeform_layout = _layout()
+    freeform_layout["width"] = {"unit": "px", "value": "640"}
+    freeform_layout["height"] = {"unit": "px", "value": "480"}
+    table_layout = _layout()
+    table_layout["position"] = {"x": "24", "y": "32"}
+    detail_children.append(
+        {
+            "id": fixture_id("component-source-stack"),
+            "type": "Stack",
+            "name": "Reusable stack",
+            "visibility": "visible",
+            "layoutItem": _layout(),
+            "responsive": [],
+            "direction": "column",
+            "gap": 12,
+            "align": "stretch",
+            "justify": "start",
+            "padding": {"top": 8, "right": 8, "bottom": 8, "left": 8},
+            "children": [
+                {
+                    "id": fixture_id("component-source-grid"),
+                    "type": "Grid",
+                    "name": "Reusable grid",
+                    "visibility": "visible",
+                    "layoutItem": _layout(),
+                    "responsive": [],
+                    "columns": 2,
+                    "gap": 8,
+                    "padding": {"top": 4, "right": 4, "bottom": 4, "left": 4},
+                    "columnOverrides": [{"minWidth": 768, "columns": 3}],
+                    "children": [
+                        {
+                            "id": fixture_id("component-source-form"),
+                            "type": "Form",
+                            "name": "Reusable form",
+                            "visibility": "visible",
+                            "layoutItem": _layout(),
+                            "responsive": [],
+                            "formDefinitionId": fixture_id("form-create"),
+                            "gap": 10,
+                            "padding": {
+                                "top": 4,
+                                "right": 4,
+                                "bottom": 4,
+                                "left": 4,
+                            },
+                            "children": [
+                                {
+                                    "id": fixture_id("component-source-freeform"),
+                                    "type": "Freeform",
+                                    "name": "Reusable freeform",
+                                    "visibility": "visible",
+                                    "layoutItem": freeform_layout,
+                                    "responsive": [],
+                                    "grids": [
+                                        _square_freeform_grid("component-source-freeform-grid")
+                                    ],
+                                    "children": [
+                                        {
+                                            "id": fixture_id("component-source-table"),
+                                            "type": "Table",
+                                            "name": "Reusable table",
+                                            "visibility": "visible",
+                                            "layoutItem": table_layout,
+                                            "responsive": [],
+                                            "columns": [
+                                                {"key": "name", "label": "Name"},
+                                                {"key": "state", "label": "State"},
+                                            ],
+                                            "rows": [
+                                                {
+                                                    "id": fixture_id("component-source-table-row"),
+                                                    "cells": [
+                                                        {
+                                                            "columnKey": "name",
+                                                            "value": "Laptop",
+                                                        },
+                                                        {
+                                                            "columnKey": "state",
+                                                            "value": "pending",
+                                                        },
+                                                    ],
+                                                }
+                                            ],
+                                            "density": "compact",
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    return PrototypeDocumentV1.model_validate(
+        payload,
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+
+
+def _nested_component_nodes(
+    root: object,
+) -> tuple[StackNodeV1, GridNodeV1, FormNodeV1, FreeformNodeV1, TableNodeV1]:
+    assert isinstance(root, StackNodeV1)
+    assert len(root.children) == 1
+    grid = root.children[0]
+    assert isinstance(grid, GridNodeV1)
+    assert len(grid.children) == 1
+    form = grid.children[0]
+    assert isinstance(form, FormNodeV1)
+    assert len(form.children) == 1
+    freeform = form.children[0]
+    assert isinstance(freeform, FreeformNodeV1)
+    assert len(freeform.children) == 1
+    table = freeform.children[0]
+    assert isinstance(table, TableNodeV1)
+    return root, grid, form, freeform, table
+
+
+def _stack_page_root(document: PrototypeDocumentV1, page_index: int) -> StackNodeV1:
+    root = document.pages[page_index].root
+    assert isinstance(root, StackNodeV1)
+    return root
+
+
+def _assert_component_command_undo_redo(
+    base_document: PrototypeDocumentV1,
+    result: prototype_contracts.CommandExecutionResultV1,
+) -> None:
+    undone = execute_inverse_command_batch(result.document, result.inverse_commands)
+    redone = execute_inverse_command_batch(undone.document, undone.inverse_commands)
+    assert document_hash(undone.document) == document_hash(base_document)
+    assert document_hash(redone.document) == result.result_document_hash
+
+
+def test_component_nested_clone_ids_are_deep_fresh_and_deterministic() -> None:
+    document = _nested_component_document()
+    source_root = _stack_page_root(document, 2).children[1]
+    _, _, source_form, source_freeform, source_table = _nested_component_nodes(source_root)
+    assert source_form.form_definition_id == fixture_id("form-create")
+
+    define_batch = _define_component_batch("nested-card", source_root.id)
+    define_kwargs = {
+        "draft_id": fixture_id("component-nested-define-draft"),
+        "client_request_id": fixture_id("component-nested-define-request"),
+    }
+    first_definition = execute_command_batch(document, define_batch, **define_kwargs)
+    second_definition = execute_command_batch(document, define_batch, **define_kwargs)
+    assert first_definition.document == second_definition.document
+    assert first_definition.allocated_entity_ids == second_definition.allocated_entity_ids
+
+    definition = first_definition.document.component_definitions[0]
+    _, _, definition_form, definition_freeform, definition_table = _nested_component_nodes(
+        definition.root
+    )
+    assert definition_form.form_definition_id == source_form.form_definition_id
+    definition_allocations = dict(first_definition.allocated_entity_ids)
+    assert definition.id == definition_allocations["component:nested-card"]
+    definition_seed = (
+        f"{define_kwargs['draft_id']}:{define_kwargs['client_request_id']}:component:nested-card"
+    )
+    assert definition.id == str(
+        uuid5(prototype_contracts.PROTOTYPE_ENTITY_NAMESPACE, definition_seed)
+    )
+    assert definition.root.id == str(
+        uuid5(
+            prototype_contracts.PROTOTYPE_ENTITY_NAMESPACE,
+            f"{definition_seed}:{source_root.id}",
+        )
+    )
+    source_owned_ids = prototype_contracts._page_owned_entity_ids(source_root)
+    definition_owned_ids = prototype_contracts._page_owned_entity_ids(definition.root)
+    assert source_owned_ids.isdisjoint(definition_owned_ids)
+    for source_id in source_owned_ids:
+        assert definition_allocations[f"component:nested-card:{source_id}"] in definition_owned_ids
+    assert (
+        definition_freeform.grids[0].id
+        == definition_allocations[f"component:nested-card:{source_freeform.grids[0].id}"]
+    )
+    assert (
+        definition_table.rows[0].id
+        == definition_allocations[f"component:nested-card:{source_table.rows[0].id}"]
+    )
+
+    instantiate_batch = _instantiate_component_batch(
+        definition.id,
+        fixture_id("root-detail"),
+        2,
+    )
+    instantiate_kwargs = {
+        "draft_id": fixture_id("component-nested-instance-draft"),
+        "client_request_id": fixture_id("component-nested-instance-request"),
+    }
+    first_instance = execute_command_batch(
+        first_definition.document,
+        instantiate_batch,
+        **instantiate_kwargs,
+    )
+    second_instance = execute_command_batch(
+        first_definition.document,
+        instantiate_batch,
+        **instantiate_kwargs,
+    )
+    assert first_instance.document == second_instance.document
+    assert first_instance.allocated_entity_ids == second_instance.allocated_entity_ids
+
+    instance_root = _stack_page_root(first_instance.document, 2).children[2]
+    _, _, instance_form, instance_freeform, instance_table = _nested_component_nodes(instance_root)
+    assert instance_form.form_definition_id == source_form.form_definition_id
+    instance_owned_ids = prototype_contracts._page_owned_entity_ids(instance_root)
+    assert instance_owned_ids.isdisjoint(source_owned_ids | definition_owned_ids)
+    instance_allocations = dict(first_instance.allocated_entity_ids)
+    instance_prefix = f"instance:{definition.id}:0"
+    instance_seed = (
+        f"{instantiate_kwargs['draft_id']}:{instantiate_kwargs['client_request_id']}"
+        f":{instance_prefix}"
+    )
+    assert instance_root.id == str(
+        uuid5(
+            prototype_contracts.PROTOTYPE_ENTITY_NAMESPACE,
+            f"{instance_seed}:{definition.root.id}",
+        )
+    )
+    for definition_id in definition_owned_ids:
+        assert instance_allocations[f"{instance_prefix}:{definition_id}"] in instance_owned_ids
+    assert (
+        instance_freeform.grids[0].id
+        == instance_allocations[f"{instance_prefix}:{definition_freeform.grids[0].id}"]
+    )
+    assert (
+        instance_table.rows[0].id
+        == instance_allocations[f"{instance_prefix}:{definition_table.rows[0].id}"]
+    )
+
+
+def test_each_component_command_undoes_and_redoes_exactly() -> None:
+    document = procurement_document()
+    defined = execute_command_batch(
+        document,
+        _define_component_batch("detail-title", fixture_id("title-detail")),
+        draft_id=fixture_id("component-round-trip-define-draft"),
+        client_request_id=fixture_id("component-round-trip-define-request"),
+    )
+    _assert_component_command_undo_redo(document, defined)
+
+    component_id = dict(defined.allocated_entity_ids)["component:detail-title"]
+    instantiated = execute_command_batch(
+        defined.document,
+        _instantiate_component_batch(component_id, fixture_id("root-list"), 1),
+        draft_id=fixture_id("component-round-trip-instance-draft"),
+        client_request_id=fixture_id("component-round-trip-instance-request"),
+    )
+    instance_id = _stack_page_root(instantiated.document, 0).children[1].id
+    _assert_component_command_undo_redo(defined.document, instantiated)
+
+    removed = execute_command_batch(
+        instantiated.document,
+        _remove_component_definition_batch(component_id),
+        draft_id=fixture_id("component-round-trip-remove-draft"),
+        client_request_id=fixture_id("component-round-trip-remove-request"),
+    )
+    assert removed.document.component_definitions == []
+    assert _stack_page_root(removed.document, 0).children[1].id == instance_id
+    _assert_component_command_undo_redo(instantiated.document, removed)
+
+
+def test_define_component_refuses_duplicate_key_and_missing_source() -> None:
+    document = procurement_document()
+    defined = execute_command_batch(
+        document,
+        _define_component_batch("duplicate-card", fixture_id("title-detail")),
+        draft_id=fixture_id("component-duplicate-draft"),
+        client_request_id=fixture_id("component-duplicate-request"),
+    )
+    with pytest.raises(StructuredPrototypeContractError) as duplicate_error:
+        execute_command_batch(
+            defined.document,
+            _define_component_batch("duplicate-card", fixture_id("title-list")),
+            draft_id=fixture_id("component-duplicate-second-draft"),
+            client_request_id=fixture_id("component-duplicate-second-request"),
+        )
+    assert duplicate_error.value.code == "command_target_invalid"
+
+    with pytest.raises(StructuredPrototypeContractError) as missing_source_error:
+        execute_command_batch(
+            document,
+            _define_component_batch("missing-source", fixture_id("missing-source-node")),
+            draft_id=fixture_id("component-missing-source-draft"),
+            client_request_id=fixture_id("component-missing-source-request"),
+        )
+    assert missing_source_error.value.code == "command_target_missing"
+
+
+def test_instantiate_component_refuses_missing_targets_and_invalid_index() -> None:
+    document = procurement_document()
+    defined = execute_command_batch(
+        document,
+        _define_component_batch("target-card", fixture_id("title-detail")),
+        draft_id=fixture_id("component-target-define-draft"),
+        client_request_id=fixture_id("component-target-define-request"),
+    )
+    component_id = dict(defined.allocated_entity_ids)["component:target-card"]
+
+    with pytest.raises(StructuredPrototypeContractError) as missing_parent_error:
+        execute_command_batch(
+            defined.document,
+            _instantiate_component_batch(
+                component_id,
+                fixture_id("missing-component-parent"),
+                0,
+            ),
+            draft_id=fixture_id("component-missing-parent-draft"),
+            client_request_id=fixture_id("component-missing-parent-request"),
+        )
+    assert missing_parent_error.value.code == "command_target_missing"
+
+    with pytest.raises(StructuredPrototypeContractError) as missing_definition_error:
+        execute_command_batch(
+            defined.document,
+            _instantiate_component_batch(
+                fixture_id("missing-component-definition"),
+                fixture_id("root-list"),
+                0,
+            ),
+            draft_id=fixture_id("component-missing-definition-draft"),
+            client_request_id=fixture_id("component-missing-definition-request"),
+        )
+    assert missing_definition_error.value.code == "command_target_missing"
+
+    with pytest.raises(StructuredPrototypeContractError) as invalid_index_error:
+        execute_command_batch(
+            defined.document,
+            _instantiate_component_batch(component_id, fixture_id("root-list"), 99),
+            draft_id=fixture_id("component-invalid-index-draft"),
+            client_request_id=fixture_id("component-invalid-index-request"),
+        )
+    assert invalid_index_error.value.code == "command_index_invalid"
+
+
+def test_remove_component_definition_refuses_missing_definition() -> None:
+    with pytest.raises(StructuredPrototypeContractError) as error:
+        execute_command_batch(
+            procurement_document(),
+            _remove_component_definition_batch(fixture_id("missing-component-definition")),
+            draft_id=fixture_id("component-remove-missing-draft"),
+            client_request_id=fixture_id("component-remove-missing-request"),
+        )
+    assert error.value.code == "command_target_missing"
+
+
+def test_component_instantiation_into_freeform_requires_target_position() -> None:
+    document = _nested_component_document()
+    source_table_id = fixture_id("component-source-table")
+    defined = execute_command_batch(
+        document,
+        _define_component_batch("positioned-table", source_table_id),
+        draft_id=fixture_id("component-freeform-define-draft"),
+        client_request_id=fixture_id("component-freeform-define-request"),
+    )
+    definition = defined.document.component_definitions[0]
+    assert isinstance(definition.root, TableNodeV1)
+    assert definition.root.layout_item.position is None
+
+    component_id = definition.id
+    freeform_id = fixture_id("component-source-freeform")
+    omitted_position = _instantiate_component_batch(component_id, freeform_id, 1)
+    serialized_command = omitted_position.model_dump(mode="json", by_alias=True)["commands"][0]
+    assert "targetPosition" not in serialized_command
+    with pytest.raises(StructuredPrototypeContractError) as position_error:
+        execute_command_batch(
+            defined.document,
+            omitted_position,
+            draft_id=fixture_id("component-freeform-missing-position-draft"),
+            client_request_id=fixture_id("component-freeform-missing-position-request"),
+        )
+    assert position_error.value.code == "command_target_invalid"
+
+    positioned = execute_command_batch(
+        defined.document,
+        _instantiate_component_batch(
+            component_id,
+            freeform_id,
+            1,
+            target_position={"x": "240", "y": "64"},
+        ),
+        draft_id=fixture_id("component-freeform-positioned-draft"),
+        client_request_id=fixture_id("component-freeform-positioned-request"),
+    )
+    freeform = prototype_contracts._require_node(positioned.document, freeform_id)
+    assert isinstance(freeform, FreeformNodeV1)
+    instance = freeform.children[1]
+    assert isinstance(instance, TableNodeV1)
+    assert instance.layout_item.position is not None
+    assert (instance.layout_item.position.x, instance.layout_item.position.y) == ("240", "64")
+    _assert_component_command_undo_redo(defined.document, positioned)
+
+
+@pytest.mark.parametrize(
+    ("reference_kind", "message"),
+    [
+        ("runtime-rule", "runtime rule .* references an unknown node"),
+        ("view-binding", "runtime view binding .* references an unknown node"),
+        ("flow", "flow .* references an unknown rule or node"),
+    ],
+)
+def test_component_definition_internal_nodes_cannot_enter_runtime_graph(
+    reference_kind: str,
+    message: str,
+) -> None:
+    defined = execute_command_batch(
+        procurement_document(),
+        _define_component_batch("runtime-isolated-title", fixture_id("title-detail")),
+        draft_id=fixture_id(f"component-runtime-{reference_kind}-draft"),
+        client_request_id=fixture_id(f"component-runtime-{reference_kind}-request"),
+    )
+    internal_node_id = defined.document.component_definitions[0].root.id
+    payload = defined.document.model_dump(mode="json", by_alias=True)
+    runtime = payload["runtime"]
+    assert isinstance(runtime, dict)
+
+    if reference_kind == "runtime-rule":
+        runtime["rules"] = [
+            {
+                "id": fixture_id("component-internal-runtime-rule"),
+                "key": "component-internal-runtime-rule",
+                "enabled": True,
+                "trigger": {
+                    "kind": "nodeEvent",
+                    "nodeId": internal_node_id,
+                    "event": "click",
+                },
+                "guard": None,
+                "effects": [{"kind": "notify", "level": "info", "message": "blocked"}],
+                "guardFalseEffects": [],
+            }
+        ]
+    elif reference_kind == "view-binding":
+        runtime["viewBindings"] = [
+            {
+                "id": fixture_id("component-internal-view-binding"),
+                "nodeId": internal_node_id,
+                "target": "textContent",
+                "value": {
+                    "kind": "literal",
+                    "value": {"type": "string", "value": "blocked"},
+                },
+            }
+        ]
+    else:
+        rule_id = fixture_id("component-internal-flow-rule")
+        runtime["rules"] = [
+            {
+                "id": rule_id,
+                "key": "component-internal-flow-rule",
+                "enabled": True,
+                "trigger": {
+                    "kind": "nodeEvent",
+                    "nodeId": fixture_id("button-submit"),
+                    "event": "click",
+                },
+                "guard": None,
+                "effects": [{"kind": "navigate", "targetPageId": fixture_id("page-detail")}],
+                "guardFalseEffects": [],
+            }
+        ]
+        payload["flows"] = [
+            {
+                "id": fixture_id("component-internal-flow"),
+                "key": "component-internal-flow",
+                "ruleId": rule_id,
+                "fromNodeId": internal_node_id,
+                "toPageId": fixture_id("page-detail"),
+            }
+        ]
+
+    with pytest.raises(ValidationError, match=message):
+        PrototypeDocumentV1.model_validate(
+            payload,
+            strict=True,
+            by_alias=True,
+            by_name=False,
+        )

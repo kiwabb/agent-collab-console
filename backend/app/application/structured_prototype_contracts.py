@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Annotated, Literal, cast
@@ -1053,16 +1053,25 @@ class PrototypeDocumentV1(StrictPrototypeModel):
         page_ids = _unique((page.id for page in self.pages), "page ID")
         _unique((page.key for page in self.pages), "page key")
         _unique((page.route for page in self.pages), "page route")
-        nodes_by_id: dict[str, UINodeV1] = {}
+        page_nodes_by_id: dict[str, UINodeV1] = {}
+        definition_nodes_by_id: dict[str, UINodeV1] = {}
         form_submit_button_ids: set[str] = set()
         for page in self.pages:
             _validate_layout_tree(page.root)
-            _collect_nodes(page.root, nodes_by_id)
+            _collect_nodes(page.root, page_nodes_by_id)
             _collect_form_submit_button_ids(page.root, form_submit_button_ids)
+        _unique(
+            (definition.key for definition in self.component_definitions),
+            "component definition key",
+        )
         for definition in self.component_definitions:
             _validate_layout_tree(definition.root)
-            _collect_nodes(definition.root, nodes_by_id)
-            _collect_form_submit_button_ids(definition.root, form_submit_button_ids)
+            _collect_nodes(definition.root, definition_nodes_by_id)
+        duplicate_node_ids = set(page_nodes_by_id).intersection(definition_nodes_by_id)
+        if duplicate_node_ids:
+            duplicate_node_id = min(duplicate_node_ids)
+            raise ValueError(f"duplicate node ID: {duplicate_node_id}")
+        nodes_by_id = {**page_nodes_by_id, **definition_nodes_by_id}
         node_ids = set(nodes_by_id)
         freeform_grid_ids = _validate_freeform_grid_references(nodes_by_id, color_token_keys)
         _unique((item.id for item in self.navigation.items), "navigation item ID")
@@ -1079,11 +1088,11 @@ class PrototypeDocumentV1(StrictPrototypeModel):
         _validate_runtime_semantics(
             self.runtime,
             page_ids=page_ids,
-            nodes_by_id=nodes_by_id,
+            nodes_by_id=page_nodes_by_id,
             form_submit_button_ids=form_submit_button_ids,
         )
         _validate_runtime_flow_layout(self.runtime, page_ids)
-        _validate_table_view_bindings(self.runtime, nodes_by_id)
+        _validate_table_view_bindings(self.runtime, page_nodes_by_id)
         for page in self.pages:
             _validate_node_references(page.root, forms_by_id)
         for definition in self.component_definitions:
@@ -1092,7 +1101,7 @@ class PrototypeDocumentV1(StrictPrototypeModel):
             self.flows,
             rules_by_id=rules_by_id,
             page_ids=page_ids,
-            node_ids=node_ids,
+            node_ids=set(page_nodes_by_id),
         )
         entity_ids = [self.id]
         entity_ids.extend(page_ids)
@@ -2155,6 +2164,36 @@ class RemoveBehaviorRuleCommandV1(StrictPrototypeModel):
     rule_id: EntityId
 
 
+class DefineComponentCommandV1(StrictPrototypeModel):
+    kind: Literal["defineComponent"]
+    key: TechnicalKey
+    source_node: NodeRefV1
+
+
+class RemoveComponentDefinitionCommandV1(StrictPrototypeModel):
+    kind: Literal["removeComponentDefinition"]
+    component_id: EntityId
+
+
+class InstantiateComponentCommandV1(StrictPrototypeModel):
+    kind: Literal["instantiateComponent"]
+    component_id: EntityId
+    parent: NodeRefV1
+    index: Annotated[int, Field(ge=0)]
+    target_position: FreeformPositionV1 | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_explicit_target_position(
+        self,
+        handler: SerializerFunctionWrapHandler,
+    ) -> dict[str, object]:
+        serialized = cast(dict[str, object], handler(self))
+        if "target_position" not in self.model_fields_set:
+            serialized.pop("target_position", None)
+            serialized.pop("targetPosition", None)
+        return serialized
+
+
 type DomainCommandV1 = Annotated[
     InsertNodeCommandV1
     | MoveNodeCommandV1
@@ -2172,7 +2211,10 @@ type DomainCommandV1 = Annotated[
     | SetRuntimeFlowNodePositionCommandV1
     | AddBehaviorRuleCommandV1
     | ReplaceBehaviorRuleCommandV1
-    | RemoveBehaviorRuleCommandV1,
+    | RemoveBehaviorRuleCommandV1
+    | DefineComponentCommandV1
+    | RemoveComponentDefinitionCommandV1
+    | InstantiateComponentCommandV1,
     Field(discriminator="kind"),
 ]
 
@@ -2670,6 +2712,12 @@ class RestoreBehaviorRuleProjectionCommandV1(StrictPrototypeModel):
         return self
 
 
+class RestoreComponentDefinitionCommandV1(StrictPrototypeModel):
+    kind: Literal["restoreComponentDefinition"]
+    index: Annotated[int, Field(ge=0)]
+    definition: ComponentDefinitionV1
+
+
 type InverseCommandV1 = Annotated[
     MoveNodeCommandV1
     | RemoveNodeCommandV1
@@ -2684,7 +2732,9 @@ type InverseCommandV1 = Annotated[
     | RemoveRuntimeFlowNodePositionCommandV1
     | RestoreBehaviorRuleProjectionCommandV1
     | RestorePageTitleProjectionCommandV1
-    | RestorePageProjectionCommandV1,
+    | RestorePageProjectionCommandV1
+    | RemoveComponentDefinitionCommandV1
+    | RestoreComponentDefinitionCommandV1,
     Field(discriminator="kind"),
 ]
 
@@ -3590,6 +3640,56 @@ def _execute_command(
             ),
             {command.item_id},
         )
+    if isinstance(command, DefineComponentCommandV1):
+        updated, definition, source_node_id = _define_component(
+            document,
+            command,
+            draft_id=draft_id,
+            client_request_id=client_request_id,
+            allocated=allocated,
+        )
+        return (
+            updated,
+            RemoveComponentDefinitionCommandV1(
+                kind="removeComponentDefinition", component_id=definition.id
+            ),
+            _page_owned_entity_ids(definition.root) | {definition.id, source_node_id},
+        )
+    if isinstance(command, RemoveComponentDefinitionCommandV1):
+        updated, removed_definition, definition_index = _remove_component_definition(
+            document, command.component_id
+        )
+        return (
+            updated,
+            RestoreComponentDefinitionCommandV1(
+                kind="restoreComponentDefinition",
+                index=definition_index,
+                definition=removed_definition,
+            ),
+            _page_owned_entity_ids(removed_definition.root) | {removed_definition.id},
+        )
+    if isinstance(command, InstantiateComponentCommandV1):
+        parent_id = _resolve_node_ref(command.parent, allocated)
+        instance = _instantiate_component(
+            document,
+            command.component_id,
+            draft_id=draft_id,
+            client_request_id=client_request_id,
+            allocated=allocated,
+        )
+        parent = _require_node(document, parent_id)
+        positioned_instance = _position_node_for_parent(
+            instance,
+            parent,
+            command.target_position,
+            target_position_is_set="target_position" in command.model_fields_set,
+        )
+        updated = _insert_node(document, parent_id, command.index, positioned_instance)
+        return (
+            updated,
+            RemoveNodeCommandV1(kind="removeNode", node_id=positioned_instance.id),
+            _page_owned_entity_ids(positioned_instance) | {parent_id},
+        )
     raise AssertionError("unreachable domain command variant")
 
 
@@ -3608,6 +3708,24 @@ def _execute_inverse_command(
                 name=node.name,
             ),
             {command.node_id},
+        )
+    if isinstance(command, RemoveComponentDefinitionCommandV1):
+        updated, removed, index = _remove_component_definition(document, command.component_id)
+        return (
+            updated,
+            RestoreComponentDefinitionCommandV1(
+                kind="restoreComponentDefinition", index=index, definition=removed
+            ),
+            _page_owned_entity_ids(removed.root) | {removed.id},
+        )
+    if isinstance(command, RestoreComponentDefinitionCommandV1):
+        updated = _insert_component_definition(document, command.index, command.definition)
+        return (
+            updated,
+            RemoveComponentDefinitionCommandV1(
+                kind="removeComponentDefinition", component_id=command.definition.id
+            ),
+            _page_owned_entity_ids(command.definition.root) | {command.definition.id},
         )
     if isinstance(command, RestoreNodeCommandV1):
         updated = _insert_node(document, command.parent_id, command.index, command.node)
@@ -3638,14 +3756,16 @@ def _execute_inverse_command(
             )
         return updated, inverse, {command.flow_node_id}
     if isinstance(command, RemoveRuntimeFlowNodePositionCommandV1):
-        updated, removed = _remove_runtime_flow_node_position(document, command.flow_node_id)
+        updated, removed_position = _remove_runtime_flow_node_position(
+            document, command.flow_node_id
+        )
         return (
             updated,
             RestoreRuntimeFlowNodePositionCommandV1(
                 kind="restoreRuntimeFlowNodePosition",
-                flow_node_id=removed.node_id,
-                x=removed.x,
-                y=removed.y,
+                flow_node_id=removed_position.node_id,
+                x=removed_position.x,
+                y=removed_position.y,
             ),
             {command.flow_node_id},
         )
@@ -3726,6 +3846,10 @@ def _apply_inverse_command(
     document: PrototypeDocumentV1,
     command: InverseCommandV1,
 ) -> PrototypeDocumentV1:
+    if isinstance(command, RemoveComponentDefinitionCommandV1):
+        return _remove_component_definition(document, command.component_id)[0]
+    if isinstance(command, RestoreComponentDefinitionCommandV1):
+        return _insert_component_definition(document, command.index, command.definition)
     if isinstance(command, RestoreNodeCommandV1):
         return _insert_node(document, command.parent_id, command.index, command.node)
     if isinstance(command, RemoveNodeCommandV1):
@@ -4698,6 +4822,159 @@ def _node_id_set(node: UINodeV1) -> set[str]:
         for child in node.children:
             result.update(_node_id_set(child))
     return result
+
+
+def _clone_subtree_with_fresh_ids(
+    node: UINodeV1,
+    entity_id_for: Callable[[str], str],
+) -> UINodeV1:
+    payload = node.model_dump(mode="python", by_alias=True)
+    payload["id"] = entity_id_for(node.id)
+    children = _node_children(node)
+    if children is not None:
+        payload["children"] = [
+            _clone_subtree_with_fresh_ids(child, entity_id_for) for child in children
+        ]
+    if isinstance(node, FreeformNodeV1):
+        payload["grids"] = [
+            {**grid.model_dump(mode="python", by_alias=True), "id": entity_id_for(grid.id)}
+            for grid in node.grids
+        ]
+    if isinstance(node, TableNodeV1):
+        payload["rows"] = [
+            {**row.model_dump(mode="python", by_alias=True), "id": entity_id_for(row.id)}
+            for row in node.rows
+        ]
+    return type(node).model_validate(
+        payload,
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+
+
+def _define_component(
+    document: PrototypeDocumentV1,
+    command: DefineComponentCommandV1,
+    *,
+    draft_id: str,
+    client_request_id: str,
+    allocated: dict[str, str],
+) -> tuple[PrototypeDocumentV1, ComponentDefinitionV1, str]:
+    if any(definition.key == command.key for definition in document.component_definitions):
+        raise StructuredPrototypeContractError(
+            "command_target_invalid", "prototype component key already exists"
+        )
+    source_node_id = _resolve_node_ref(command.source_node, allocated)
+    source = _require_node(document, source_node_id)
+    _require_node_subtree_unreferenced(document, source)
+    seed_prefix = f"{draft_id}:{client_request_id}:component:{command.key}"
+    definition_id = str(uuid5(PROTOTYPE_ENTITY_NAMESPACE, seed_prefix))
+    allocation_key = f"component:{command.key}"
+    if allocation_key in allocated:
+        raise StructuredPrototypeContractError(
+            "command_new_key_duplicate", "prototype component key is duplicated in the batch"
+        )
+    allocated[allocation_key] = definition_id
+
+    def clone_id(source_entity_id: str) -> str:
+        fresh = str(uuid5(PROTOTYPE_ENTITY_NAMESPACE, f"{seed_prefix}:{source_entity_id}"))
+        allocated[f"{allocation_key}:{source_entity_id}"] = fresh
+        return fresh
+
+    root = _clone_subtree_with_fresh_ids(source, clone_id)
+    if root.layout_item.position is not None:
+        root = root.model_copy(
+            update={
+                "layout_item": root.layout_item.model_copy(update={"position": None})
+            }
+        )
+    definition = ComponentDefinitionV1(id=definition_id, key=command.key, root=root)
+    updated = _insert_component_definition(
+        document, len(document.component_definitions), definition
+    )
+    return updated, definition, source_node_id
+
+
+def _insert_component_definition(
+    document: PrototypeDocumentV1,
+    index: int,
+    definition: ComponentDefinitionV1,
+) -> PrototypeDocumentV1:
+    definitions = list(document.component_definitions)
+    if index > len(definitions):
+        raise StructuredPrototypeContractError(
+            "command_index_invalid", "prototype component definition index is out of range"
+        )
+    definitions.insert(index, definition)
+    try:
+        return PrototypeDocumentV1.model_validate(
+            document.model_copy(update={"component_definitions": definitions}).model_dump(
+                mode="json", by_alias=True
+            ),
+            strict=True,
+            by_alias=True,
+            by_name=False,
+        )
+    except ValidationError as exc:
+        raise StructuredPrototypeContractError(
+            "command_target_invalid",
+            "prototype component definition does not produce a valid document",
+        ) from exc
+
+
+def _remove_component_definition(
+    document: PrototypeDocumentV1,
+    component_id: str,
+) -> tuple[PrototypeDocumentV1, ComponentDefinitionV1, int]:
+    definitions = list(document.component_definitions)
+    index = next(
+        (candidate for candidate, item in enumerate(definitions) if item.id == component_id),
+        None,
+    )
+    if index is None:
+        raise StructuredPrototypeContractError(
+            "command_target_missing", "prototype component definition does not exist"
+        )
+    removed = definitions.pop(index)
+    updated = PrototypeDocumentV1.model_validate(
+        document.model_copy(update={"component_definitions": definitions}).model_dump(
+            mode="json", by_alias=True
+        ),
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+    return updated, removed, index
+
+
+def _instantiate_component(
+    document: PrototypeDocumentV1,
+    component_id: str,
+    *,
+    draft_id: str,
+    client_request_id: str,
+    allocated: dict[str, str],
+) -> UINodeV1:
+    definition = next(
+        (item for item in document.component_definitions if item.id == component_id),
+        None,
+    )
+    if definition is None:
+        raise StructuredPrototypeContractError(
+            "command_target_missing", "prototype component definition does not exist"
+        )
+    ordinal = 0
+    while f"instance:{component_id}:{ordinal}:{definition.root.id}" in allocated:
+        ordinal += 1
+    seed_prefix = f"{draft_id}:{client_request_id}:instance:{component_id}:{ordinal}"
+
+    def clone_id(source_entity_id: str) -> str:
+        fresh = str(uuid5(PROTOTYPE_ENTITY_NAMESPACE, f"{seed_prefix}:{source_entity_id}"))
+        allocated[f"instance:{component_id}:{ordinal}:{source_entity_id}"] = fresh
+        return fresh
+
+    return _clone_subtree_with_fresh_ids(definition.root, clone_id)
 
 
 def _require_node_subtree_unreferenced(

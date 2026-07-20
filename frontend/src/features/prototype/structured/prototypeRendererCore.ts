@@ -245,11 +245,7 @@ function layoutRules(node: StructuredPrototypeNode): string[] {
     );
   }
   if (node.type === "Divider") {
-    rules.push(
-      "height:1px",
-      `margin:${node.spacing}px 0`,
-      `background:${node.tone === "muted" ? "#e6eae8" : "#c9d2ce"}`,
-    );
+    rules.push(`padding:${node.spacing}px 0`);
   }
   if (node.type === "Badge") {
     const tones = {
@@ -433,7 +429,7 @@ function renderNode(
       return `<button ${common} type="button" class="prototype-button prototype-button-${node.variant} prototype-button-${node.size}"${node.disabled ? " disabled" : ""}${trigger}>${escapeHtml(node.label)}</button>`;
     }
     case "Divider":
-      return `<div ${common} class="prototype-divider prototype-divider-${node.tone}" role="separator"></div>`;
+      return `<div ${common} class="prototype-divider" role="separator"><span class="prototype-divider-line prototype-divider-line-${node.tone}"></span></div>`;
     case "Badge":
       return `<span ${common} class="prototype-badge prototype-badge-${node.tone}">${escapeHtml(node.label)}</span>`;
     case "Table":
@@ -469,8 +465,9 @@ function renderStyles(document: StructuredPrototypeDocument): string {
     ),
   ];
   const nodeRules: string[] = [
-    ".prototype-divider{height:1px;background:#c9d2ce}",
-    ".prototype-divider-muted{background:#e6eae8}",
+    ".prototype-divider{width:100%}",
+    ".prototype-divider-line{display:block;width:100%;height:1px;background:#c9d2ce}",
+    ".prototype-divider-line-muted{background:#e6eae8}",
     ".prototype-badge{display:inline-flex;width:fit-content;align-items:center;gap:4px;border:1px solid transparent;padding:2px 8px;font-size:11px;font-weight:700;line-height:1.5}",
     ".prototype-badge-default{background:#eef1ef;color:#39443f}",
     ".prototype-badge-success{background:#e9f4ec;color:#237a45}",

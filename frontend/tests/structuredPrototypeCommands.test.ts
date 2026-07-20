@@ -9,14 +9,17 @@ import type {
 import {
   addPageBatch,
   createPaletteNode,
+  defineComponentBatch,
   deletePageBatch,
   duplicatePageBatch,
   insertPaletteNodeBatch,
+  instantiateComponentBatch,
   moveFreeformSelectionBatch,
   moveNodeBatch,
   movePositionedSelectionBatch,
   removeNodeBatch,
   removeNodesBatch,
+  removeComponentDefinitionBatch,
   reorderPageBatch,
   resolveStructuredPrototypeNavigationReorderCommands,
   resolvePaletteFormDefinition,
@@ -191,6 +194,74 @@ test("palette insert and component move preserve, clear, or set target position"
   assert.throws(() => insertPaletteNodeBatch(freeform, 0, text, null), /position is required/u);
   assert.throws(() => moveNodeBatch("node", freeform, 0), /target position is required/u);
   assert.throws(() => moveNodeBatch("node", freeform, 0, null), /target position is required/u);
+});
+
+test("component command builders preserve typed definition and instance targets", () => {
+  const document = commandDocument();
+  const root = document.pages[0]?.root;
+  assert.ok(root && isStructuredPrototypeContainerNode(root));
+
+  assert.deepEqual(defineComponentBatch("summary-card", "source-node"), {
+    commandContractVersion: 1,
+    summary: "Define component",
+    commands: [
+      {
+        kind: "defineComponent",
+        key: "summary-card",
+        sourceNode: { kind: "existing", nodeId: "source-node" },
+      },
+    ],
+  });
+  assert.deepEqual(removeComponentDefinitionBatch("component-1"), {
+    commandContractVersion: 1,
+    summary: "Remove component definition",
+    commands: [{ kind: "removeComponentDefinition", componentId: "component-1" }],
+  });
+  assert.deepEqual(instantiateComponentBatch("component-1", root, 2), {
+    commandContractVersion: 1,
+    summary: "Instantiate component",
+    commands: [
+      {
+        kind: "instantiateComponent",
+        componentId: "component-1",
+        parent: { kind: "existing", nodeId: root.id },
+        index: 2,
+      },
+    ],
+  });
+});
+
+test("component instances require and preserve an explicit Freeform target position", () => {
+  const document = commandDocument();
+  const sourceRoot = document.pages[0]?.root;
+  assert.ok(sourceRoot && isStructuredPrototypeContainerNode(sourceRoot));
+  const freeform: StructuredPrototypeFreeformNode = {
+    id: "00000000-0000-4000-8000-000000000301",
+    type: "Freeform",
+    name: "Freeform",
+    visibility: "visible",
+    layoutItem: sourceRoot.layoutItem,
+    responsive: [],
+    children: [],
+  };
+  assert.throws(
+    () => instantiateComponentBatch("component-1", freeform, 0),
+    /position is required to insert a component/u,
+  );
+  assert.throws(
+    () => instantiateComponentBatch("component-1", freeform, 0, null),
+    /position is required to insert a component/u,
+  );
+  assert.deepEqual(
+    instantiateComponentBatch("component-1", freeform, 0, { x: "48", y: "72" }).commands[0],
+    {
+      kind: "instantiateComponent",
+      componentId: "component-1",
+      parent: { kind: "existing", nodeId: freeform.id },
+      index: 0,
+      targetPosition: { x: "48", y: "72" },
+    },
+  );
 });
 
 test("freeform selection moves use positioned same-parent commands in document order", () => {
