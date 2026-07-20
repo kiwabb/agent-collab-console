@@ -84,7 +84,9 @@ from app.domain.structured_prototype import (
     PrototypeReplayManifestError,
     PrototypeReplayManifestV1,
     PrototypeReplayManifestVersionsV1,
+    PrototypeRevisionHistoryEntry,
     PrototypeRevisionRecord,
+    PrototypeRevisionSource,
     PrototypeRuntimeCheckpointRecord,
     PrototypeRuntimeEventAppendResult,
     PrototypeRuntimeEventBatchRecord,
@@ -492,6 +494,11 @@ class StructuredPrototypePersistence(Protocol):
 
     async def load_published_record(self, document_id: str) -> PrototypePublishedRecord | None: ...
 
+    async def list_published_revisions(
+        self,
+        document_id: str,
+    ) -> tuple[PrototypeRevisionHistoryEntry, ...]: ...
+
     async def load_ready_publication(
         self,
         document_id: str,
@@ -743,6 +750,21 @@ class PublishedPrototypeSnapshot:
     output_manifest_hash: str
     visual_preflight_report_hash: str
     published_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedPrototypeRevision:
+    publication: PublishedPrototypeSnapshot
+    summary: str
+    source: PrototypeRevisionSource
+    is_current: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedPrototypeHistory:
+    document_id: str
+    current_revision_no: int | None
+    revisions: tuple[PublishedPrototypeRevision, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -3113,6 +3135,39 @@ class StructuredPrototypeService:
             record.revision,
             record.render_run,
             record.artifact,
+        )
+
+    async def list_published_revisions(
+        self,
+        document_id: str,
+    ) -> PublishedPrototypeHistory:
+        try:
+            document = await self._store.load_document(document_id)
+            if document is None:
+                raise StructuredPrototypeServiceError(
+                    "document_missing",
+                    "prototype document does not exist",
+                )
+            entries = await self._store.list_published_revisions(document_id)
+        except StructuredPrototypeStoreError as exc:
+            raise self._service_error(exc.code, str(exc), None) from exc
+        return PublishedPrototypeHistory(
+            document_id=document.id,
+            current_revision_no=document.published_revision_no,
+            revisions=tuple(
+                PublishedPrototypeRevision(
+                    publication=self._published_snapshot(
+                        document,
+                        entry.revision,
+                        entry.render_run,
+                        entry.artifact,
+                    ),
+                    summary=entry.revision.summary,
+                    source=entry.revision.source,
+                    is_current=entry.revision.revision_no == document.published_revision_no,
+                )
+                for entry in entries
+            ),
         )
 
     async def read_published_file(

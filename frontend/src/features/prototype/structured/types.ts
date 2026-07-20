@@ -716,6 +716,30 @@ export interface PublishedStructuredPrototype extends StructuredPrototypePublica
   activeDraft: StructuredPrototypeDraft;
 }
 
+export type StructuredPrototypeRevisionSource = "user" | "ai" | "initial_generation";
+
+export interface StructuredPrototypePublishedRevision {
+  revisionId: string;
+  revisionNo: number;
+  summary: string;
+  source: StructuredPrototypeRevisionSource;
+  isCurrent: boolean;
+  renderRunId: string;
+  artifactId: string;
+  rendererVersion: string;
+  documentHash: string;
+  outputHash: string;
+  publishedAt: string;
+  artifactPath: string;
+}
+
+export interface StructuredPrototypeRevisionHistory {
+  contractVersion: 1;
+  documentId: string;
+  currentRevisionNo: number | null;
+  revisions: StructuredPrototypePublishedRevision[];
+}
+
 export type StructuredPrototypeGenerationJobStatus =
   | "queued"
   | "planning"

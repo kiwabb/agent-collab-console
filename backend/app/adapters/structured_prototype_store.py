@@ -42,6 +42,7 @@ from app.domain.structured_prototype import (
     PrototypePublishedRecord,
     PrototypeRenderArtifactRecord,
     PrototypeRenderRunRecord,
+    PrototypeRevisionHistoryEntry,
     PrototypeRevisionRecord,
     PrototypeRuntimeCheckpointRecord,
     PrototypeRuntimeEventAppendResult,
@@ -4772,6 +4773,60 @@ class AsyncStructuredPrototypeStore:
             render_run=run,
             artifact=artifact,
         )
+
+    async def list_published_revisions(
+        self,
+        document_id: str,
+    ) -> tuple[PrototypeRevisionHistoryEntry, ...]:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with conn.execute(
+            """
+            SELECT
+                r.id, r.document_id, r.revision_no, r.schema_version, r.checkpoint_id,
+                r.document_object_hash, r.document_hash, r.summary, r.source, r.created_at,
+                run.id, run.document_id, run.kind, run.revision_id, run.ai_edit_run_id,
+                run.status, run.renderer_version, run.renderer_environment_version,
+                run.runtime_core_version, run.runtime_core_source_hash,
+                run.runtime_core_bundle_hash, run.state_machine_kernel_version,
+                run.render_runtime_image_hash, run.browser_version, run.font_pack_hash,
+                run.viewport_profile_hash, run.sandbox_policy_version,
+                run.input_manifest_hash, run.document_object_hash, run.document_hash,
+                run.operation_id, run.attempt, run.artifact_id, run.output_manifest_hash,
+                run.error_code, run.error_message, run.started_at, run.completed_at,
+                run.created_at, run.updated_at,
+                a.id, a.render_run_id, a.document_id, a.revision_id, a.renderer_version,
+                a.document_hash, a.output_hash, a.output_manifest_hash, a.storage_key,
+                a.entrypoint, a.visual_preflight_report_hash, a.created_at
+            FROM prototype_revisions AS r
+            JOIN prototype_render_runs AS run
+                ON run.revision_id = r.id
+                AND run.kind = 'publication'
+                AND run.status = 'ready'
+            JOIN prototype_render_artifacts AS a
+                ON a.id = run.artifact_id
+            WHERE r.document_id = ?
+            ORDER BY r.revision_no DESC, run.attempt DESC
+            """,
+            (document_id,),
+        ) as cursor:
+            rows = list(await cursor.fetchall())
+        entries: list[PrototypeRevisionHistoryEntry] = []
+        seen_revision_ids: set[str] = set()
+        for row in rows:
+            values = tuple(row)
+            revision = self._revision_from_row(values[:10])
+            if revision.id in seen_revision_ids:
+                continue
+            seen_revision_ids.add(revision.id)
+            entries.append(
+                PrototypeRevisionHistoryEntry(
+                    revision=revision,
+                    render_run=self._render_run_from_row(values[10:40]),
+                    artifact=self._render_artifact_from_row(values[40:52]),
+                )
+            )
+        return tuple(entries)
 
     async def load_ready_publication(
         self,

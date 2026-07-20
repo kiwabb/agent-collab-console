@@ -25,6 +25,7 @@ from app.application.structured_prototype_service import (
     ApplyStructuredPrototypeCommandsResult,
     CreateStructuredPrototypeResult,
     PrototypeOperationDetail,
+    PublishedPrototypeHistory,
     PublishedPrototypeSnapshot,
     PublishStructuredPrototypeResult,
     RecoverStructuredPrototypeResult,
@@ -312,6 +313,28 @@ class PublishStructuredPrototypeResponseV1(PublishedPrototypeResponseV1):
     operation_id: str
     correlation_id: str
     active_draft: StructuredPrototypeDraftResponseV1
+
+
+class PublishedPrototypeRevisionResponseV1(StrictResponseModel):
+    revision_id: str
+    revision_no: int
+    summary: str
+    source: Literal["user", "ai", "initial_generation"]
+    is_current: bool
+    render_run_id: str
+    artifact_id: str
+    renderer_version: str
+    document_hash: str
+    output_hash: str
+    published_at: str
+    artifact_path: str
+
+
+class StructuredPrototypeRevisionHistoryResponseV1(StrictResponseModel):
+    contract_version: Literal[1]
+    document_id: str
+    current_revision_no: int | None
+    revisions: list[PublishedPrototypeRevisionResponseV1]
 
 
 class StructuredPrototypeOperationOutcomeResponseV1(StrictResponseModel):
@@ -920,6 +943,37 @@ def _published_response(
     )
 
 
+def _revision_history_response(
+    history: PublishedPrototypeHistory,
+) -> StructuredPrototypeRevisionHistoryResponseV1:
+    return StructuredPrototypeRevisionHistoryResponseV1(
+        contract_version=HTTP_CONTRACT_VERSION,
+        document_id=history.document_id,
+        current_revision_no=history.current_revision_no,
+        revisions=[
+            PublishedPrototypeRevisionResponseV1(
+                revision_id=entry.publication.revision_id,
+                revision_no=entry.publication.revision_no,
+                summary=entry.summary,
+                source=entry.source,
+                is_current=entry.is_current,
+                render_run_id=entry.publication.render_run_id,
+                artifact_id=entry.publication.artifact_id,
+                renderer_version=entry.publication.renderer_version,
+                document_hash=entry.publication.document_hash,
+                output_hash=entry.publication.output_hash,
+                published_at=entry.publication.published_at.isoformat(),
+                artifact_path=(
+                    f"/api/structured-prototype-public/{entry.publication.document_id}"
+                    f"/revisions/{entry.publication.revision_no}"
+                    f"/artifacts/{entry.publication.artifact_id}/index.html"
+                ),
+            )
+            for entry in history.revisions
+        ],
+    )
+
+
 def _publish_response(
     result: PublishStructuredPrototypeResult,
 ) -> PublishStructuredPrototypeResponseV1:
@@ -1207,6 +1261,20 @@ async def get_structured_prototype_publication(
     except StructuredPrototypeServiceError as exc:
         return _service_failure(exc)
     return _published_response(snapshot) if snapshot is not None else None
+
+
+@router.get(
+    "/structured-prototype-documents/{document_id}/revisions",
+    response_model=StructuredPrototypeRevisionHistoryResponseV1,
+)
+async def list_structured_prototype_revisions(
+    document_id: str,
+) -> StructuredPrototypeRevisionHistoryResponseV1 | JSONResponse:
+    try:
+        history = await _require_service().list_published_revisions(document_id)
+    except StructuredPrototypeServiceError as exc:
+        return _service_failure(exc)
+    return _revision_history_response(history)
 
 
 @router.get(

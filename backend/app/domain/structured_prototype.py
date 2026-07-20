@@ -868,6 +868,13 @@ class PrototypePublishedRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class PrototypeRevisionHistoryEntry:
+    revision: PrototypeRevisionRecord
+    render_run: PrototypeRenderRunRecord
+    artifact: PrototypeRenderArtifactRecord
+
+
+@dataclass(frozen=True, slots=True)
 class PrototypeDraftRecoveryBundle:
     document: PrototypeDocumentRecord
     draft: PrototypeDraftRecord

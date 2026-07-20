@@ -19,6 +19,7 @@ import {
   ExternalLink,
   Files,
   GitBranch,
+  History,
   Magnet,
   Maximize2,
   Minimize2,
@@ -114,6 +115,7 @@ import {
   type StructuredPrototypeMutationOperation,
 } from "./structuredPrototypeInteraction";
 import { StructuredPrototypeAiPanel } from "./StructuredPrototypeAiPanel";
+import { StructuredPrototypeReleaseHistoryDialog } from "./StructuredPrototypeReleaseHistory";
 import {
   StructuredPrototypeNodeDragOverlay,
   type StructuredPrototypeMarqueeGestureEvent,
@@ -318,6 +320,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
   const [mobileDrawer, setMobileDrawer] = useState<MobileDrawer>(null);
   const desktopLayout = useStructuredPrototypeDesktopLayout();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [aiMutating, setAiMutating] = useState(false);
@@ -2396,6 +2399,15 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
             )}
             <button
               type="button"
+              className="grid size-9 cursor-pointer place-items-center rounded-md border border-border-muted bg-surface-raised text-brand hover:bg-surface-hover"
+              onClick={() => setHistoryDialogOpen(true)}
+              aria-label={t("prototype.structured.history")}
+              title={t("prototype.structured.history")}
+            >
+              <History size={15} aria-hidden />
+            </button>
+            <button
+              type="button"
               className="grid size-9 cursor-pointer place-items-center rounded-md border border-error/35 bg-surface-raised text-error hover:bg-error/10 disabled:cursor-not-allowed disabled:opacity-45"
               onClick={openDeleteDialog}
               disabled={interactionCapabilities.documentControlsDisabled}
@@ -2943,6 +2955,11 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
           })}
         </nav>
       </div>
+      <StructuredPrototypeReleaseHistoryDialog
+        open={historyDialogOpen}
+        onOpenChange={setHistoryDialogOpen}
+        documentId={controller.draft.documentId}
+      />
       <ConfirmDialog
         open={deleteDialogOpen}
         onOpenChange={(open) => {

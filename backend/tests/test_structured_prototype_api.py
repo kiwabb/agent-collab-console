@@ -976,3 +976,105 @@ def test_publish_and_public_artifact_routes_serve_only_verified_revision(
 
         assert client.portal is not None
         client.portal.call(store.close)
+
+
+def test_revision_history_lists_published_revisions_and_keeps_old_artifacts_viewable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, store = _client(tmp_path, monkeypatch)
+    with client:
+        created_response = client.post(
+            "/api/projects/project-1/structured-prototype-documents",
+            json=_create_body(fixture_id("api-revision-history-document")),
+        )
+        assert created_response.status_code == 201
+        created = created_response.json()
+
+        empty_history = client.get(
+            f"/api/structured-prototype-documents/{created['documentId']}/revisions"
+        )
+        assert empty_history.status_code == 200
+        assert empty_history.json() == {
+            "contractVersion": 1,
+            "documentId": created["documentId"],
+            "currentRevisionNo": None,
+            "revisions": [],
+        }
+
+        first_publish = client.post(
+            f"/api/structured-prototype-drafts/{created['draftId']}/publish",
+            json={
+                "contractVersion": 1,
+                "clientRequestId": fixture_id("api-revision-history-publish-1"),
+                "expectedHeadSequenceNo": 0,
+                "expectedDocumentHash": created["documentHash"],
+            },
+        )
+        assert first_publish.status_code == 201
+        first_published = first_publish.json()
+        second_draft = first_published["activeDraft"]
+
+        edited_response = client.post(
+            f"/api/structured-prototype-drafts/{second_draft['draftId']}/commands",
+            json={
+                "contractVersion": 1,
+                "clientRequestId": fixture_id("api-revision-history-edit"),
+                "expectedHeadSequenceNo": second_draft["headSequenceNo"],
+                "expectedDocumentHash": second_draft["documentHash"],
+                "batch": text_insert_batch_payload(),
+            },
+        )
+        assert edited_response.status_code == 200
+        edited = edited_response.json()
+
+        second_publish = client.post(
+            f"/api/structured-prototype-drafts/{second_draft['draftId']}/publish",
+            json={
+                "contractVersion": 1,
+                "clientRequestId": fixture_id("api-revision-history-publish-2"),
+                "expectedHeadSequenceNo": edited["headSequenceNo"],
+                "expectedDocumentHash": edited["documentHash"],
+            },
+        )
+        assert second_publish.status_code == 201
+        second_published = second_publish.json()
+        assert second_published["revisionNo"] == 2
+
+        history_response = client.get(
+            f"/api/structured-prototype-documents/{created['documentId']}/revisions"
+        )
+        assert history_response.status_code == 200
+        history = history_response.json()
+        assert history["contractVersion"] == 1
+        assert history["documentId"] == created["documentId"]
+        assert history["currentRevisionNo"] == 2
+        assert [entry["revisionNo"] for entry in history["revisions"]] == [2, 1]
+        assert [entry["isCurrent"] for entry in history["revisions"]] == [True, False]
+
+        latest, oldest = history["revisions"]
+        assert latest["revisionId"] == second_published["revisionId"]
+        assert latest["artifactId"] == second_published["artifactId"]
+        assert latest["artifactPath"] == second_published["artifactPath"]
+        assert latest["documentHash"] == edited["documentHash"]
+        assert oldest["revisionId"] == first_published["revisionId"]
+        assert oldest["artifactId"] == first_published["artifactId"]
+        assert oldest["artifactPath"] == first_published["artifactPath"]
+        assert oldest["documentHash"] == created["documentHash"]
+        for entry in history["revisions"]:
+            assert entry["source"] == "user"
+            assert entry["summary"]
+            assert entry["outputHash"].startswith("sha256:")
+            assert entry["publishedAt"]
+            archived = client.get(entry["artifactPath"])
+            assert archived.status_code == 200
+            assert '<script src="./runtime.js" defer></script>' in archived.text
+
+        missing_history = client.get(
+            "/api/structured-prototype-documents/missing-document/revisions"
+        )
+        assert missing_history.status_code == 404
+        assert missing_history.json()["error"]["code"] == "document_missing"
+
+        assert client.portal is not None
+        client.portal.call(store.close)

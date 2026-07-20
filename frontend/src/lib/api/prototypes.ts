@@ -24,6 +24,7 @@ import type {
   StructuredPrototypeGenerationConfirmResult,
   StructuredPrototypeGenerationJob,
   StructuredPrototypePublication,
+  StructuredPrototypeRevisionHistory,
   StructuredPrototypeRuntimeSession,
   SendPrototypeAiMessageRequest,
 } from "../../features/prototype/structured/types";
@@ -1475,6 +1476,14 @@ export async function getStructuredPrototypePublication(
 ): Promise<StructuredPrototypePublication | null> {
   return structuredPrototypeRequest<StructuredPrototypePublication | null>(
     `${API_BASE}/structured-prototype-documents/${encodeURIComponent(documentId)}/published`,
+  );
+}
+
+export async function listStructuredPrototypeRevisions(
+  documentId: string,
+): Promise<StructuredPrototypeRevisionHistory> {
+  return structuredPrototypeRequest<StructuredPrototypeRevisionHistory>(
+    `${API_BASE}/structured-prototype-documents/${encodeURIComponent(documentId)}/revisions`,
   );
 }
 

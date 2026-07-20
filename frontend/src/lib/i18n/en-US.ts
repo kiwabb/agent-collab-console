@@ -2239,6 +2239,23 @@ const enUS = {
   "prototype.structured.redo": "Redo",
   "prototype.structured.publish": "Publish",
   "prototype.structured.openPublished": "Open published prototype",
+  "prototype.structured.history": "Release history",
+  "prototype.structured.history.title": "Release history",
+  "prototype.structured.history.description":
+    "Browse and replay every published revision of this prototype.",
+  "prototype.structured.history.count": "{count} releases",
+  "prototype.structured.history.loading": "Loading release history…",
+  "prototype.structured.history.failed": "Failed to load release history: {message}",
+  "prototype.structured.history.retry": "Retry",
+  "prototype.structured.history.empty":
+    "No releases yet. Publish the prototype to start building its history.",
+  "prototype.structured.history.revision": "Revision v{no}",
+  "prototype.structured.history.current": "Current",
+  "prototype.structured.history.source.user": "Manual publish",
+  "prototype.structured.history.source.ai": "AI publish",
+  "prototype.structured.history.source.initial_generation": "Initial generation",
+  "prototype.structured.history.open": "Open in new tab",
+  "prototype.structured.history.preview": "Published revision preview",
   "prototype.structured.delete": "Delete entire prototype",
   "prototype.structured.deleteTitle": "Delete the entire prototype?",
   "prototype.structured.deleteDescription":
