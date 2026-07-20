@@ -2289,6 +2289,9 @@ const enUS = {
   "prototype.structured.share.versionLabel": "Version",
   "prototype.structured.share.viewingArchived": "Viewing archived revision v{no}",
   "prototype.structured.share.backToCurrent": "Back to current",
+  "prototype.structured.share.emptyTitle": "Nothing published yet",
+  "prototype.structured.share.emptyDescription":
+    "This share link is valid, but the author has not published a revision yet. Refresh this page after the first publish.",
   "prototype.structured.publishDialog.title": "Publish prototype",
   "prototype.structured.publishDialog.description":
     "Publishing archives a new revision you can replay or restore from the release history.",

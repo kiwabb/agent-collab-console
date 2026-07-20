@@ -2185,6 +2185,9 @@ const zhCN = {
   "prototype.structured.share.versionLabel": "版本",
   "prototype.structured.share.viewingArchived": "正在回看历史版本 v{no}",
   "prototype.structured.share.backToCurrent": "返回当前版本",
+  "prototype.structured.share.emptyTitle": "原型还没有发布",
+  "prototype.structured.share.emptyDescription":
+    "这个分享链接是有效的，但作者还没有发布任何版本。发布后刷新本页即可查看。",
   "prototype.structured.publishDialog.title": "发布原型",
   "prototype.structured.publishDialog.description": "发布后会归档为新版本，可在发布历史中回看或恢复。",
   "prototype.structured.publishDialog.summaryLabel": "发布说明（可选）",

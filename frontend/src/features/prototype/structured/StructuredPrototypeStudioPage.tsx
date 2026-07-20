@@ -2972,6 +2972,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         open={historyDialogOpen}
         onOpenChange={setHistoryDialogOpen}
         documentId={controller.draft.documentId}
+        onRestored={() => void controller.refreshPublication()}
       />
       <ConfirmDialog
         open={deleteDialogOpen}

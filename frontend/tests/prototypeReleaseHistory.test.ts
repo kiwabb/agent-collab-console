@@ -58,6 +58,8 @@ test("release history keys exist in both locales", () => {
     "prototype.structured.share.versionLabel",
     "prototype.structured.share.viewingArchived",
     "prototype.structured.share.backToCurrent",
+    "prototype.structured.share.emptyTitle",
+    "prototype.structured.share.emptyDescription",
     "prototype.structured.publishDialog.title",
     "prototype.structured.publishDialog.description",
     "prototype.structured.publishDialog.summaryLabel",
@@ -115,6 +117,22 @@ test("release history dialog restores via rollback API with optimistic concurren
   assert.match(dialog, /rollbackStructuredPrototypePublication\(documentId,/);
   assert.match(dialog, /expectedCurrentRevisionNo: currentRevisionNo/);
   assert.match(dialog, /targetRevisionNo: selected\.revisionNo/);
+  assert.match(dialog, /onRestored\?\.\(\)/);
+});
+
+test("studio refreshes its cached publication after a restore", () => {
+  const studio = readSource("features/prototype/structured/StructuredPrototypeStudioPage.tsx");
+  const hook = readSource("features/prototype/structured/useStructuredPrototypeStudio.ts");
+  assert.match(studio, /onRestored=\{\(\) => void controller\.refreshPublication\(\)\}/);
+  assert.match(hook, /refreshPublication: \(\) => Promise<void>/);
+});
+
+test("share viewer shows a friendly empty state instead of the raw 404 iframe", () => {
+  const shareViewer = readSource(
+    "features/prototype/structured/StructuredPrototypeShareViewer.tsx",
+  );
+  assert.match(shareViewer, /t\("prototype\.structured\.share\.emptyTitle"\)/);
+  assert.match(shareViewer, /historyEmpty \?/);
 });
 
 test("share page renders the version-aware viewer with a sandboxed iframe", () => {

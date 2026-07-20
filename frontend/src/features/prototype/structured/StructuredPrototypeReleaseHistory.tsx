@@ -142,10 +142,12 @@ export function StructuredPrototypeReleaseHistoryDialog({
   open,
   onOpenChange,
   documentId,
+  onRestored,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   documentId: string;
+  onRestored?: (() => void) | undefined;
 }) {
   const { locale, t } = useI18n();
   const [fetchState, setFetchState] = useState<ReleaseHistoryFetchState>({ kind: "loading" });
@@ -230,6 +232,7 @@ export function StructuredPrototypeReleaseHistoryDialog({
         expectedCurrentRevisionNo: currentRevisionNo,
       });
       setRestoreConfirmOpen(false);
+      onRestored?.();
       await loadHistory();
     } catch (error) {
       setRestoreConfirmOpen(false);
@@ -237,7 +240,7 @@ export function StructuredPrototypeReleaseHistoryDialog({
     } finally {
       setRestoring(false);
     }
-  }, [selected, currentRevisionNo, documentId, loadHistory]);
+  }, [selected, currentRevisionNo, documentId, loadHistory, onRestored]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

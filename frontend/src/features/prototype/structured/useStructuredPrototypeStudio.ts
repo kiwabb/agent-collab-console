@@ -101,6 +101,7 @@ interface StructuredPrototypeStudioController extends StudioState {
   sendRuntimeEvents: (events: RuntimeEvent[]) => Promise<boolean>;
   checkpointRuntime: () => Promise<boolean>;
   publish: (summary?: string | null) => Promise<boolean>;
+  refreshPublication: () => Promise<void>;
   deletePrototype: () => Promise<boolean>;
   adoptAiDraft: (draft: StructuredPrototypeDraft) => Promise<boolean>;
   resetRuntimePreview: () => Promise<boolean>;
@@ -1305,6 +1306,17 @@ export function useStructuredPrototypeStudio(
     studio.saving,
   ]);
 
+  const refreshPublication = useCallback(async (): Promise<void> => {
+    const currentDraft = studio.draft;
+    if (!currentDraft) return;
+    try {
+      const publication = await getStructuredPrototypePublication(currentDraft.documentId);
+      setStudio((current) => ({ ...current, publication }));
+    } catch {
+      // Keep the cached publication when the refresh fails; it only feeds display state.
+    }
+  }, [studio.draft]);
+
   const deletePrototype = useCallback(async (): Promise<boolean> => {
     if (studio.saving) return false;
     setStudio((current) => ({ ...current, saving: true, error: null }));
@@ -1447,6 +1459,7 @@ export function useStructuredPrototypeStudio(
     sendRuntimeEvents,
     checkpointRuntime,
     publish,
+    refreshPublication,
     deletePrototype,
     adoptAiDraft,
     resetRuntimePreview,

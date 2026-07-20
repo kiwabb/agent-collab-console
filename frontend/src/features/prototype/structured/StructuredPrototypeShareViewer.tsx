@@ -30,6 +30,7 @@ export function StructuredPrototypeShareViewer({ documentId }: { documentId: str
   const { locale, t } = useI18n();
   const [revisions, setRevisions] = useState<StructuredPrototypePublishedRevision[]>([]);
   const [selectedRevisionNo, setSelectedRevisionNo] = useState<number | null>(null);
+  const [historyEmpty, setHistoryEmpty] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -38,6 +39,7 @@ export function StructuredPrototypeShareViewer({ documentId }: { documentId: str
         if (cancelled) return;
         setRevisions(history.revisions);
         setSelectedRevisionNo(history.currentRevisionNo);
+        setHistoryEmpty(history.revisions.length === 0);
       })
       .catch(() => {
         // Viewers without history access keep the plain current publication.
@@ -101,13 +103,26 @@ export function StructuredPrototypeShareViewer({ documentId }: { documentId: str
           )}
         </div>
       )}
-      <iframe
-        key={source}
-        className="h-full w-full border-0"
-        src={source}
-        title={t("prototype.structured.share.title")}
-        sandbox="allow-scripts allow-same-origin"
-      />
+      {historyEmpty ? (
+        <div className="grid h-full w-full place-items-center px-6 text-center">
+          <div className="grid max-w-sm gap-2">
+            <p className="text-base font-semibold text-neutral-700">
+              {t("prototype.structured.share.emptyTitle")}
+            </p>
+            <p className="text-sm text-neutral-500">
+              {t("prototype.structured.share.emptyDescription")}
+            </p>
+          </div>
+        </div>
+      ) : (
+        <iframe
+          key={source}
+          className="h-full w-full border-0"
+          src={source}
+          title={t("prototype.structured.share.title")}
+          sandbox="allow-scripts allow-same-origin"
+        />
+      )}
     </main>
   );
 }
