@@ -2264,6 +2264,7 @@ const enUS = {
   "prototype.structured.history.restoreConfirm": "Restore",
   "prototype.structured.history.restoreCancel": "Cancel",
   "prototype.structured.history.restoreFailed": "Restore failed: {message}",
+  "prototype.structured.history.restoreImpact": "Live changes after restore (v{from} → v{to})",
   "prototype.structured.history.diff": "Compare with previous",
   "prototype.structured.history.diff.base": "Compared against v{no}",
   "prototype.structured.history.diff.loading": "Computing differences…",

@@ -54,6 +54,7 @@ test("release history keys exist in both locales", () => {
     "prototype.structured.history.restoreConfirm",
     "prototype.structured.history.restoreCancel",
     "prototype.structured.history.restoreFailed",
+    "prototype.structured.history.restoreImpact",
     "prototype.structured.share.title",
     "prototype.structured.share.versionLabel",
     "prototype.structured.share.viewingArchived",
@@ -118,6 +119,16 @@ test("release history dialog restores via rollback API with optimistic concurren
   assert.match(dialog, /expectedCurrentRevisionNo: currentRevisionNo/);
   assert.match(dialog, /targetRevisionNo: selected\.revisionNo/);
   assert.match(dialog, /onRestored\?\.\(\)/);
+});
+
+test("restore confirmation previews the current-to-target live impact diff", () => {
+  const dialog = readSource("features/prototype/structured/StructuredPrototypeReleaseHistory.tsx");
+  assert.match(
+    dialog,
+    /diffStructuredPrototypeRevisions\(documentId, targetRevisionNo, currentRevisionNo\)/,
+  );
+  assert.match(dialog, /t\("prototype\.structured\.history\.restoreImpact",/);
+  assert.match(dialog, /<RevisionDiffSummary state=\{restoreImpact\} \/>/);
 });
 
 test("studio refreshes its cached publication after a restore", () => {

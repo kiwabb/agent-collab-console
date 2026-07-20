@@ -2160,6 +2160,7 @@ const zhCN = {
   "prototype.structured.history.restoreConfirm": "确认恢复",
   "prototype.structured.history.restoreCancel": "取消",
   "prototype.structured.history.restoreFailed": "恢复失败：{message}",
+  "prototype.structured.history.restoreImpact": "恢复后线上变更（v{from} → v{to}）",
   "prototype.structured.history.diff": "与上一版对比",
   "prototype.structured.history.diff.base": "对比基准：v{no}",
   "prototype.structured.history.diff.loading": "正在计算差异…",

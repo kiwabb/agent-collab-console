@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Diff, ExternalLink, History, RotateCcw } from "lucide-react";
 
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
   DialogContent,
@@ -157,6 +156,7 @@ export function StructuredPrototypeReleaseHistoryDialog({
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
   const [diffs, setDiffs] = useState<Record<number, RevisionDiffFetchState>>({});
+  const [restoreImpact, setRestoreImpact] = useState<RevisionDiffFetchState | undefined>(undefined);
 
   const loadHistory = useCallback(async (): Promise<void> => {
     setFetchState({ kind: "loading" });
@@ -219,6 +219,21 @@ export function StructuredPrototypeReleaseHistoryDialog({
         }));
       });
   }, [diffOpen, selected, previousRevisionNo, diffs, documentId]);
+
+  const openRestoreConfirm = useCallback((): void => {
+    setRestoreConfirmOpen(true);
+    if (selected === null || currentRevisionNo === null) return;
+    const targetRevisionNo = selected.revisionNo;
+    setRestoreImpact({ kind: "loading" });
+    void diffStructuredPrototypeRevisions(documentId, targetRevisionNo, currentRevisionNo)
+      .then((diff) => setRestoreImpact({ kind: "ready", diff }))
+      .catch((error: unknown) => {
+        setRestoreImpact({
+          kind: "failed",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }, [selected, currentRevisionNo, documentId]);
 
   const restoreSelected = useCallback(async (): Promise<void> => {
     if (selected === null || currentRevisionNo === null || selected.isCurrent) return;
@@ -385,7 +400,7 @@ export function StructuredPrototypeReleaseHistoryDialog({
                       <button
                         type="button"
                         className="inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-md bg-brand px-2.5 text-xs font-semibold text-black hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-45"
-                        onClick={() => setRestoreConfirmOpen(true)}
+                        onClick={openRestoreConfirm}
                         disabled={restoring}
                       >
                         <RotateCcw size={13} aria-hidden />
@@ -431,21 +446,60 @@ export function StructuredPrototypeReleaseHistoryDialog({
             )}
           </div>
         )}
-        <ConfirmDialog
+        <Dialog
           open={restoreConfirmOpen}
           onOpenChange={(nextOpen) => {
             if (!restoring) setRestoreConfirmOpen(nextOpen);
           }}
-          title={t("prototype.structured.history.restoreTitle")}
-          description={t("prototype.structured.history.restoreDescription", {
-            no: selected?.revisionNo ?? 0,
-          })}
-          confirmText={t("prototype.structured.history.restoreConfirm")}
-          cancelText={t("prototype.structured.history.restoreCancel")}
-          onConfirm={() => void restoreSelected()}
-          isLoading={restoring}
-          variant="default"
-        />
+        >
+          <DialogContent className="sm:max-w-lg" showCloseButton={false}>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <RotateCcw size={16} aria-hidden />
+                {t("prototype.structured.history.restoreTitle")}
+              </DialogTitle>
+              <DialogDescription>
+                {t("prototype.structured.history.restoreDescription", {
+                  no: selected?.revisionNo ?? 0,
+                })}
+              </DialogDescription>
+            </DialogHeader>
+            {selected !== null && currentRevisionNo !== null && (
+              <div className="max-h-48 overflow-y-auto rounded-md border border-border-muted bg-surface-raised p-2.5 text-xs text-foreground">
+                <p className="mb-1.5 font-semibold text-text-muted">
+                  {t("prototype.structured.history.restoreImpact", {
+                    from: currentRevisionNo,
+                    to: selected.revisionNo,
+                  })}
+                </p>
+                <RevisionDiffSummary state={restoreImpact} />
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="inline-flex min-h-9 cursor-pointer items-center rounded-md border border-border-muted bg-surface-raised px-3 text-xs font-semibold text-foreground hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-45"
+                onClick={() => setRestoreConfirmOpen(false)}
+                disabled={restoring}
+              >
+                {t("prototype.structured.history.restoreCancel")}
+              </button>
+              <button
+                type="button"
+                className="inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-md bg-brand px-3 text-xs font-semibold text-black hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-45"
+                onClick={() => void restoreSelected()}
+                disabled={restoring}
+              >
+                <RotateCcw size={14} aria-hidden />
+                {t(
+                  restoring
+                    ? "prototype.structured.history.restoring"
+                    : "prototype.structured.history.restoreConfirm",
+                )}
+              </button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </DialogContent>
     </Dialog>
   );
