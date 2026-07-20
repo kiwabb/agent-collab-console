@@ -1,102 +1,83 @@
 # Roadmap
 
-记录"下一阶段做什么",按 ROI 排序。每个 stage 是 1-2 周的工作量。
+记录"下一阶段做什么",按 ROI 排序。上次全面刷新: 2026-07-20 (旧版 Stage 1-4 见 git 历史,其中大部分已交付或被架构演进取代)。
 
 ---
 
-## Stage 1 · 巩固 (next, started)
+## 当前主线 · Penpot 级结构化原型编辑器 (进行中)
 
-底盘加固。不做新功能,但让后续每次改动都不会偷偷退化。
+唯一排队中的大型程序,PRD 与 ADR 见
+`.trellis/tasks/07-19-penpot-grade-structured-prototype-editor/prd.md`。
+确认范围是"do all of it" — 7 个里程碑顺序交付:
 
-- [ ] **后端测试覆盖**
-  - `tests/test_qa_workflow.py`、`tests/test_engineer_workflow.py` 当前是空文件,补完核心断言
-  - 新加的端点 (`/cost-stats`, `/checklist`, `/answer`, `/steer`, `/restore`, `/abandon/finalize`) 都没有单元/集成测试,补
-  - QA verification command 执行的安全过滤 + reconcile 逻辑要直接测
-  - `_scan_and_backfill_artifacts` 的 canonical-file 判定逻辑要测,防 PM/Engineer/Architect/QA backfill 退化
-- [ ] **Auto-plan LLM JSON 解析稳健**
-  - Orchestrator 经常吐非纯 JSON (markdown fence、有 prose 前缀);现有 `tolerant_json_loads` 仍偶尔失败。补:
-    - 增加自动 retry (max 2),失败前不要立刻 fallback to heuristic
-    - 第二次重试时往 prompt 加 "Your previous output failed to parse. Reply with **only** the JSON object."
-    - 把 raw response 写到 issue artifact 让用户可查
-- [ ] **事件链 race / 静默吃异常**
-  - 这次发现 `_refresh_task_result` 中 persist 抛出会被吃掉(只 mark failed,不 surface)。补:
-    - 任何 persist 异常都要写一条 audit row,issue 头部出 ⚠️ 提示
-    - 对每个 role 增加 "expected canonical artifact" 检查,缺失时显式 backfill (现已修了一半,补 architect/engineer)
-- [ ] **Anonymous workspace UX**
-  - 当前侧栏会显示 "1" "1" "2" 这种从旧数据来的单数字标题,无法区分。补:
-    - workspace API 强制 title 非空(至少 3 字符)
-    - 旧 row 显示 fallback `Workspace #<id-slice>` 而不是 `1`
-    - WorkspaceFormDialog 在编辑时允许改 title 兼容历史
-- [ ] **前端测试** (开个口子)
-  - 加 Vitest + RTL,先覆盖关键组件:`StatusBadge` / `UndoBar` / `ApprovalsPage` / `InboxDashboard.computeBuckets`
-  - CI workflow 跑 `npm test` + `npx tsc --noEmit`
+1. **Transform foundation** — 统一选择/命中模型、修饰键语义、旋转、显式 auto/absolute 定位、原子多选变换
+2. **Layer operations** — lock、z-order、group/ungroup、重叠循环选择、图层搜索
+3. **Precision system** — 标尺、持久参考线、统一吸附仲裁、constraints
+4. **Direct editing** — 画布内联 Text/语义文案/Table 编辑,共享 typed command 通道
+5. **Reusable design system** — 组件定义/实例/overrides、样式与图片资产、有界矢量图元
+6. **Collaboration & scale** — presence、评论、冲突安全编辑、历史 UX、1000 节点性能预算
+7. **End-to-end parity audit** — 桌面/移动矩阵、多会话验证、deterministic replay、AI parity、发布、双 fixture
+
+**首刀** (PRD Technical Notes 指定): Stack/Grid/Form 容器内显式 absolute 定位,
+复用 V1 `layoutItem.position`、`moveNode`、`setNodeLayout`、群组变换、吸附、inverse、replay。
 
 ---
 
-## Stage 2 · Devin-killer + GitHub PR 闭环 (after Stage 1)
+## 待清点 backlog (`.trellis/tasks/` 未归档任务)
 
-把"差异化卖点"走到底,核心是接 GitHub remote 真合 PR — Devin 做不到。
+2026-07-20 按 PRD 验收框 + 代码证据清点后仍挂起的任务,分三类:
 
-- [ ] **A4 narrative timeline**
-  - issue 头部一条横向时间轴: PM 13:28 (PRD 3 acceptance criteria) → Architect 13:30 (5 components) → Engineer 13:36 (2 files changed) → QA 13:40 (1 cmd, 0 failures)
-  - 纯前端,从现有 task.result 抽
-- [ ] **C2 explain decision**
-  - 每个 DAG 节点角落 ⓘ 按钮 → 抽屉显示 task.result 的关键 prose 字段(requirement_analysis / architecture_summary / summary / final_recommendation)+ 系统 prompt 摘录
-- [ ] **C3 per-hunk attribution**
-  - Diff·Merge 每个文件 hunk 头部一行 "by Engineer · run a710ff79 · 13:36"
-- [ ] **🔥 GitHub PR 闭环**
-  - `POST /api/codex/issues/{id}/pr/create` — 用 `gh pr create` 真提 PR
-  - issue 表加 `github_pr_url` 字段
-  - Diff·Merge tab 改造: "Open GitHub PR" 与 "Squash-merge" 并列
-  - 后端轮询 PR review state (`gh pr view --json reviews`),review comment 回流到 task.review_comment → 自动 rework
-  - PR 合上时把 issue 的 `git_merge_status` 改 "merged"
-  - 这是 Devin 拿不到的能力(Devin 是云,没法绑你的私仓 remote)
+- **疑似废弃** (针对已移除的旧 code-scan/HTML 流生成链路,建议确认后关闭):
+  `06-23-prototype-batch-regenerate` (regenerate-all 端点已不存在)、
+  `07-12-prototype-generation-acceptance-fixes`、`07-13-prototype-workbench-redesign`
+  (structured studio 已是唯一工作流)
+- **未动工**: `06-27-audit-log-one-click-clear-button`、`06-27-audit-role-call-chain`
+  (前端 audit 页尚无按角色分组的调用链视图)、`07-06-project-excellence-24h`、
+  `07-10-startup-config-interaction`、`07-12-startup-config-claude-mcp`、
+  `07-12-vue3-springboot-admin-demo` (admin-demo 仍是 07-19 验收 fixture,别删)
+- **有进度未收尾**: `07-03-restore-operations-engineer-startup-scripts`、
+  `07-08-fix-over-defensive-programming-patterns`、`07-09-ops-runcommand-envfix`、
+  `07-14-fix-project-startup-service-identity-detection`
 
 ---
 
-## Stage 3 · 多智能体扩展
+## 后续方向 (主线之外,按 ROI)
 
-差异化最大、技术难度最高的一跳。Devin/MetaGPT 都没做。
-
-- [ ] **项目记忆 v2**
-  - 现在 team_notes.md 是 deterministic 摘要,堆积式。下一步: 每次 issue 完成喂一次 LLM 让它**精炼** lessons + 抽 anti-patterns,只保留有 signal 的 5-10 条
-  - "Forget" UI:用户可以删 / 编辑 memory 块
-- [ ] **Custom agent roles**
-  - Security reviewer / DBA / Designer / Doc writer — 通过 Agent 表注册
-  - UI 可视化拖拽编排 DAG,不局限于 PM/Architect/Engineer/QA 四角
-  - 每个 role 自定义 prompt template + JSON schema
-- [ ] **Workflow templates**
-  - "CRUD endpoint" / "Bug fix" / "Module refactor" / "Migration" / "Hotfix" 五个内置模板
-  - 新建 issue 时选模板,自动出对应 DAG
-- [ ] **Parallel sub-agents**
-  - Engineer 任务拆给 2-3 个 sub-engineer 同时跑(不同文件),最后 merge
-  - 需要冲突解决策略
+- [ ] **项目记忆 v2** — team_notes.md 从堆积式 deterministic 摘要升级:
+  issue 完成后 LLM 精炼 lessons + anti-patterns 只留 5-10 条高 signal;"Forget" UI 可删/改记忆块
+- [ ] **GitHub PR 闭环前端化** — `github_pr_followup.py` 后端已在
+  (含测试与模型字段);把 Diff·Merge tab 与 PR 创建/review 回流打通成完整闭环
+- [ ] **run manager WS 日志实时流** — 现前端轮询 `run/logs?after=<seq>`;
+  接入全局 WS events 推增量
+- [ ] **Workflow templates** — "CRUD endpoint / Bug fix / Refactor / Migration / Hotfix"
+  内置模板,建 issue 时选用引导 Conductor
+- [ ] **原型多文件沙箱** — structured prototype `framework` 字段预留的
+  React/Vite 多文件运行时
+- [ ] **生产化** — auth/多用户、per-issue 容器沙箱、SOC2 审计
+  (07-11 trusted execution boundary: loopback token / secret fail-closed / Docker 加固已打底)
 
 ---
 
-## Stage 4 · 生产化
+## 文档债
 
-企业发布前必修。不急的话可以后插。
-
-- [ ] **Auth + 多用户**
-  - Google OAuth / GitHub OAuth + RBAC + 每用户 cost cap
-- [ ] **Cloud sandbox 隔离**
-  - 现在 worktree 跑在用户机器上,危险代码会污染 host。Docker container per issue
-- [ ] **Cost budget alerts**
-  - `$/issue` 上限,超了暂停;Slack/email 推送
-- [ ] **Audit log + SOC2**
-  - 操作流水可查,过基本合规
-- [ ] **企业 SSO + 共享 workspace**
-  - 团队协作,issue 可分配,review 走 GitHub
+- [ ] CLAUDE.md「类 Claude Design 原型设计」段落仍在描述已删除的
+  `prototype_service.py` + SSE HTML 流 + `regenerate-all` 端点;
+  现实是 `structured_prototype_*` 服务家族 + typed command journal + deterministic
+  replay + 发布。待按新架构重写该段。
+- 旧 roadmap 的 "Auto-plan LLM JSON 解析" 条目随固定 DAG 编排一起被
+  Conductor tool-use 架构整体取代,不再适用;"Anonymous workspace UX" 状态未核实。
 
 ---
 
-## 已完成的阶段
+## 已完成 (简要,证据在 CLAUDE.md / `.trellis/workspace/*/journal-*.md`)
 
-参考 git log,简要回顾:
-
-- **P0**: REAL_CLI=true 默认、QA 真跑测试、QA-fail → Engineer 自动 rework、Codex idle timeout
-- **P1**: 跨 issue 项目记忆 (`.agent-collab/team_notes.md` deterministic 摘要 + 自动注入 prompt)
-- **P2**: Agent 主动提问 (clarification_question schema field + Approvals 答问 UI + `/answer` 端点)
-- **Devin 级交互**: D 闭环 (post-merge redirect / post-answer redirect / 浏览器 tab notifications / abandon undo) + A2 cost meter + A3 plan checklist + B1 Steer / B3 Fork / B4 Take over locally
-- **E2E sweep**: 7 个 bug 全修(KPI 双计数 / `_steer.md` 污染 / sidebar nav / header phase / status badge / PM persist / settings hydration)
+- **2026-05**: Conductor 决策可视化 + 流式;并行 swarm (`dispatch_batch` +
+  per-agent worktree 隔离 + in-flow join);成本感知调度 (per-issue 预算/软警告/并发压缩);
+  统一审计日志 (audit_log + 6 choke-point + 全局 viewer);QA 真跑命令闭环
+- **2026-06**: Conductor policy 与 decision explanation;self-improvement proposal
+  ledger;coordinator source-informed upgrade;audit 时间过滤边界修复
+- **2026-07**: QA framework-owned 完成证据;trusted execution boundary;
+  agent 驱动 .env 自举 (加密入库 + 物化校验);项目一键 run manager;
+  structured prototype 平台 (多页文档/图层树/typed commands/checkpoint/replay/
+  runtime/发布/AI 提案/Penpot 式 freeform 交互);pane graph 前端重构;
+  GitHub PR followup 后端;MCP 管理中心;本地 agent 原型协作边界
