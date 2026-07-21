@@ -3236,10 +3236,10 @@ def test_freeform_tree_contract_enforces_size_root_and_direct_child_positions() 
         by_alias=True,
         by_name=False,
     )
-    positioned_root = positioned_document.pages[0].root
-    assert isinstance(positioned_root, StackNodeV1)
-    assert positioned_root.children[0].layout_item.position is not None
-    assert positioned_root.children[0].layout_item.position.model_dump(mode="json") == {
+    positioned_stack_root = positioned_document.pages[0].root
+    assert isinstance(positioned_stack_root, StackNodeV1)
+    assert positioned_stack_root.children[0].layout_item.position is not None
+    assert positioned_stack_root.children[0].layout_item.position.model_dump(mode="json") == {
         "x": "1",
         "y": "2",
     }
