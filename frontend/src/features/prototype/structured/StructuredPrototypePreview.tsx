@@ -21,6 +21,7 @@ import { structuredPrototypeShowsRoleControl } from "./prototypeRendererCore";
 import {
   StructuredPrototypeCanvas,
   type StructuredPrototypeMarqueeGestureEvent,
+  type StructuredPrototypeNodeElementRegisteredEvent,
   type StructuredPrototypeNodeSelectionIntent,
   type StructuredPrototypeResizeGestureEvent,
 } from "./StructuredPrototypeCanvas";
@@ -89,6 +90,7 @@ interface Props {
   ) => Promise<boolean>;
   onResizeError: (error: unknown) => void;
   onResizeGestureChange: (event: StructuredPrototypeResizeGestureEvent) => number | null;
+  onNodeElementRegistered: (event: StructuredPrototypeNodeElementRegisteredEvent) => void;
   onPanGestureStart: (pointerId: number) => number | null;
   onPanGestureEnd: (sessionId: number) => void;
   onFormValue: (nodeId: string, value: string) => void;
@@ -148,6 +150,7 @@ export function StructuredPrototypePreview({
   onResizeNode,
   onResizeError,
   onResizeGestureChange,
+  onNodeElementRegistered,
   onPanGestureStart,
   onPanGestureEnd,
   onFormValue,
@@ -606,6 +609,7 @@ export function StructuredPrototypePreview({
                 onResizeNode={onResizeNode}
                 onResizeError={onResizeError}
                 onResizeGestureChange={handleResizeGestureChange}
+                onNodeElementRegistered={onNodeElementRegistered}
                 onFormValue={onFormValue}
                 onNodeActivate={onNodeActivate}
                 onRowActivate={onRowActivate}

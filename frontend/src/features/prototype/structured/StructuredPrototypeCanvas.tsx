@@ -133,6 +133,12 @@ import type {
   StructuredPrototypeTableNode,
 } from "./types";
 
+export interface StructuredPrototypeNodeElementRegisteredEvent {
+  nodeId: string;
+  parentId: string;
+  element: HTMLElement;
+}
+
 interface Props {
   document: StructuredPrototypeDocument;
   page: StructuredPrototypePage;
@@ -176,6 +182,7 @@ interface Props {
   ) => Promise<boolean>;
   onResizeError: (error: unknown) => void;
   onResizeGestureChange: (event: StructuredPrototypeResizeGestureEvent) => number | null;
+  onNodeElementRegistered: (event: StructuredPrototypeNodeElementRegisteredEvent) => void;
   onFormValue: (nodeId: string, value: string) => void;
   onNodeActivate: (nodeId: string, event: "click" | "submit") => void;
   onRowActivate: (nodeId: string, entity: RuntimeEntity) => void;
@@ -189,6 +196,7 @@ interface NodeRendererProps extends Omit<
   | "onFreeformMoveNode"
   | "onFreeformSelectionNudge"
   | "onMarqueeGestureChange"
+  | "onNodeElementRegistered"
   | "onResizeError"
   | "onResizeGestureChange"
 > {
@@ -201,6 +209,7 @@ interface NodeRendererProps extends Omit<
     nodeId: string,
     registrationKey: symbol,
     element: HTMLElement | null,
+    parentId: string,
     ancestorNodeIds: readonly string[],
     container: boolean,
   ) => void;
@@ -253,6 +262,7 @@ export type StructuredPrototypeResizeGestureEvent =
 interface StructuredPrototypeNodeElementRegistration {
   registrationKey: symbol;
   element: HTMLElement;
+  parentId: string;
   ancestorNodeIds: readonly string[];
   container: boolean;
 }
@@ -1371,13 +1381,14 @@ function SortableCanvasNode({
       dragMirrorSourceRef.current = element;
       setNodeRef(element);
       onMeasuredElement(node.id, element);
-      registerNodeElement(node.id, registrationKey, element, ancestorNodeIds, container);
+      registerNodeElement(node.id, registrationKey, element, parentId, ancestorNodeIds, container);
     },
     [
       ancestorNodeIds,
       container,
       node.id,
       onMeasuredElement,
+      parentId,
       registerNodeElement,
       registrationKey,
       setNodeRef,
@@ -2270,6 +2281,7 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
     onFreeformMoveGestureChange,
     onFreeformMoveNode,
     onMarqueeGestureChange,
+    onNodeElementRegistered,
     onResizeError,
     onResizeGestureChange,
     onResizeNode,
@@ -2306,6 +2318,7 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
   const marqueeGestureRef = useRef<StructuredPrototypeMarqueeGesture | null>(null);
   const marqueeCleanupRef = useRef<(() => void) | null>(null);
   const marqueeGestureChangeRef = useRef(onMarqueeGestureChange);
+  const nodeElementRegisteredRef = useRef(onNodeElementRegistered);
   const selectionChangeRef = useRef(onSelectionChange);
   const mountedRef = useRef(true);
   const positionedGroupSelection = useMemo(
@@ -2521,9 +2534,11 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
     resizeGestureChangeRef.current = onResizeGestureChange;
     resizeNodeRef.current = onResizeNode;
     marqueeGestureChangeRef.current = onMarqueeGestureChange;
+    nodeElementRegisteredRef.current = onNodeElementRegistered;
     selectionChangeRef.current = onSelectionChange;
   }, [
     onMarqueeGestureChange,
+    onNodeElementRegistered,
     onResizeError,
     onResizeGestureChange,
     onResizeNode,
@@ -2535,6 +2550,7 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
       nodeId: string,
       registrationKey: symbol,
       element: HTMLElement | null,
+      parentId: string,
       ancestorNodeIds: readonly string[],
       container: boolean,
     ) => {
@@ -2548,6 +2564,7 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
       if (
         current?.registrationKey === registrationKey &&
         current.element === element &&
+        current.parentId === parentId &&
         current.container === container &&
         current.ancestorNodeIds.length === ancestorNodeIds.length &&
         current.ancestorNodeIds.every(
@@ -2559,10 +2576,12 @@ export function StructuredPrototypeCanvas({ page, ...props }: Props) {
       nodeElementRegistrationsRef.current.set(nodeId, {
         registrationKey,
         element,
+        parentId,
         ancestorNodeIds,
         container,
       });
       setNodeRegistryVersion((version) => version + 1);
+      nodeElementRegisteredRef.current({ nodeId, parentId, element });
     },
     [],
   );

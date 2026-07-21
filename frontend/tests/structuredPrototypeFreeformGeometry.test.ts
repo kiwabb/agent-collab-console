@@ -69,6 +69,26 @@ test("Freeform pointer placement converts the scaled, bordered canvas origin onc
     resolveStructuredPrototypeFreeformPointerPlacement({
       pointerClientX: 204,
       pointerClientY: 153,
+      grabOffsetClient: { x: 0, y: 0 },
+      containerRect: { left: 100, top: 50 },
+      containerClientLeft: 2,
+      containerClientTop: 3,
+      previewScale: 2,
+      nodeWidth: 80,
+      nodeHeight: 40,
+      containerWidth: 300,
+      containerHeight: 200,
+    }),
+    { x: 50, y: 48.5 },
+  );
+});
+
+test("Freeform pointer placement preserves the frozen client-space grab point", () => {
+  assert.deepEqual(
+    resolveStructuredPrototypeFreeformPointerPlacement({
+      pointerClientX: 244,
+      pointerClientY: 183,
+      grabOffsetClient: { x: 40, y: 30 },
       containerRect: { left: 100, top: 50 },
       containerClientLeft: 2,
       containerClientTop: 3,
@@ -87,6 +107,7 @@ test("Freeform pointer placement clamps the requested top-left to keep the node 
     resolveStructuredPrototypeFreeformPointerPlacement({
       pointerClientX: 1000,
       pointerClientY: -100,
+      grabOffsetClient: { x: 0, y: 0 },
       containerRect: { left: 100, top: 100 },
       containerClientLeft: 0,
       containerClientTop: 0,
@@ -105,6 +126,7 @@ test("Freeform pointer placement uses each nested container's own client origin"
   assert.deepEqual(
     resolveStructuredPrototypeFreeformPointerPlacement({
       ...pointer,
+      grabOffsetClient: { x: 0, y: 0 },
       containerRect: { left: 40, top: 20 },
       containerClientLeft: 0,
       containerClientTop: 0,
@@ -119,6 +141,7 @@ test("Freeform pointer placement uses each nested container's own client origin"
   assert.deepEqual(
     resolveStructuredPrototypeFreeformPointerPlacement({
       ...pointer,
+      grabOffsetClient: { x: 20, y: 10 },
       containerRect: { left: 260, top: 160 },
       containerClientLeft: 2,
       containerClientTop: 2,
@@ -128,7 +151,7 @@ test("Freeform pointer placement uses each nested container's own client origin"
       containerWidth: 400,
       containerHeight: 300,
     }),
-    { x: 198, y: 198 },
+    { x: 158, y: 178 },
   );
 });
 
@@ -138,6 +161,7 @@ test("Freeform pointer placement rejects unavailable geometry", () => {
       resolveStructuredPrototypeFreeformPointerPlacement({
         pointerClientX: 0,
         pointerClientY: 0,
+        grabOffsetClient: { x: 0, y: 0 },
         containerRect: { left: 0, top: 0 },
         containerClientLeft: 0,
         containerClientTop: 0,

@@ -30,6 +30,7 @@ are kept in sync (currently a copy with a subtitle patch).
 | [State Management](./state-management.md) | Local state, context, server state, polling | Mirror of ccgui/frontend |
 | [Quality Guidelines](./quality-guidelines.md) | Forbidden / required patterns, tests, review checklist | Mirror of ccgui/frontend |
 | [Type Safety](./type-safety.md) | Domain types, API typing, no-any, validation | Mirror of ccgui/frontend |
+| [Structured Prototype Drag Placement](../../ccgui/frontend/structured-prototype-drag-placement.md) | Pointer grab offsets, direct DOM ownership, registration-driven Freeform remeasurement | Canonical ccgui/frontend spec |
 
 ---
 

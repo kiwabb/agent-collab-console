@@ -434,6 +434,7 @@ export function resolveStructuredPrototypeFreeformMove({
 export interface StructuredPrototypeFreeformPointerPlacementInput {
   pointerClientX: number;
   pointerClientY: number;
+  grabOffsetClient: { x: number; y: number };
   containerRect: { left: number; top: number };
   containerClientLeft: number;
   containerClientTop: number;
@@ -445,12 +446,14 @@ export interface StructuredPrototypeFreeformPointerPlacementInput {
 }
 
 /**
- * Resolves a pointer drop as the requested node top-left in the unscaled
- * Freeform canvas, then applies the same boundary semantics as a normal move.
+ * Resolves the dragged node's client-space top-left from its frozen grab
+ * offset, converts it once into the Freeform canvas, then applies normal move
+ * bounds.
  */
 export function resolveStructuredPrototypeFreeformPointerPlacement({
   pointerClientX,
   pointerClientY,
+  grabOffsetClient,
   containerRect,
   containerClientLeft,
   containerClientTop,
@@ -463,6 +466,8 @@ export function resolveStructuredPrototypeFreeformPointerPlacement({
   const values = [
     pointerClientX,
     pointerClientY,
+    grabOffsetClient.x,
+    grabOffsetClient.y,
     containerRect.left,
     containerRect.top,
     containerClientLeft,
@@ -493,8 +498,8 @@ export function resolveStructuredPrototypeFreeformPointerPlacement({
     startY: 0,
     startClientX: contentOriginClientX,
     startClientY: contentOriginClientY,
-    clientX: pointerClientX,
-    clientY: pointerClientY,
+    clientX: pointerClientX - grabOffsetClient.x,
+    clientY: pointerClientY - grabOffsetClient.y,
     previewScale,
     nodeWidth,
     nodeHeight,

@@ -23,6 +23,73 @@ import type {
 const PALETTE_PREVIEW_NODE_ID_PREFIX = "prototype-palette-preview:";
 const COMPONENT_PREVIEW_NODE_ID_PREFIX = "prototype-component-preview:";
 
+export type StructuredPrototypeActiveDragPointerState =
+  | { kind: "unknown"; interactionSessionId: null; coordinates: null }
+  | { kind: "keyboard"; interactionSessionId: number; coordinates: null }
+  | {
+      kind: "pointer";
+      interactionSessionId: number;
+      coordinates: { x: number; y: number };
+      grabOffsetClient: { x: number; y: number };
+    };
+
+export function updateStructuredPrototypeActiveDragPointerState(
+  current: StructuredPrototypeActiveDragPointerState,
+  input: {
+    interactionSessionId: number;
+    pointerCoordinates: { x: number; y: number } | null;
+    collisionRect: { left: number; top: number };
+  },
+): StructuredPrototypeActiveDragPointerState {
+  if (input.pointerCoordinates === null) {
+    return {
+      kind: "keyboard",
+      interactionSessionId: input.interactionSessionId,
+      coordinates: null,
+    };
+  }
+  if (current.kind === "pointer" && current.interactionSessionId === input.interactionSessionId) {
+    return { ...current, coordinates: input.pointerCoordinates };
+  }
+  return {
+    kind: "pointer",
+    interactionSessionId: input.interactionSessionId,
+    coordinates: input.pointerCoordinates,
+    grabOffsetClient: {
+      x: input.pointerCoordinates.x - input.collisionRect.left,
+      y: input.pointerCoordinates.y - input.collisionRect.top,
+    },
+  };
+}
+
+export function shouldScheduleStructuredPrototypeFreeformRegistrationRemeasure(input: {
+  sessionIsCurrent: boolean;
+  sessionId: number;
+  activeInteractionSessionId: number | null;
+  projectionOwnerSessionId: number | null;
+  expectedNodeId: string;
+  latestTargetParentId: string | null;
+  pending: { parentId: string; nodeId: string } | null;
+  registration: {
+    nodeId: string;
+    parentId: string;
+    elementParentContainerId: string | null;
+  };
+}): boolean {
+  const { pending, registration } = input;
+  return (
+    input.sessionIsCurrent &&
+    input.activeInteractionSessionId === input.sessionId &&
+    input.projectionOwnerSessionId === input.sessionId &&
+    pending !== null &&
+    pending.nodeId === input.expectedNodeId &&
+    pending.parentId === input.latestTargetParentId &&
+    registration.nodeId === pending.nodeId &&
+    registration.parentId === pending.parentId &&
+    registration.elementParentContainerId === pending.parentId
+  );
+}
+
 export function isStructuredPrototypePalettePreviewNodeId(nodeId: string): boolean {
   return nodeId.startsWith(PALETTE_PREVIEW_NODE_ID_PREFIX);
 }

@@ -28,8 +28,10 @@ import {
   resolveStructuredPrototypeActiveLayoutNodeId,
   resolveStructuredPrototypeMoveTargetIndex,
   resolveStructuredPrototypeSelectionChromeState,
+  shouldScheduleStructuredPrototypeFreeformRegistrationRemeasure,
   structuredPrototypeCollisionDetection,
   structuredPrototypeNodeDragMatchesSelection,
+  updateStructuredPrototypeActiveDragPointerState,
 } from "../src/features/prototype/structured/structuredPrototypeDrag";
 import { createPaletteNode } from "../src/features/prototype/structured/structuredPrototypeCommands";
 import { structuredPrototypeSubtreeHasRuntimeReferences } from "../src/features/prototype/structured/structuredPrototypeDerived";
@@ -780,6 +782,110 @@ test("prototype pointer collision cancels outside targets and keeps keyboard fal
   );
 });
 
+test("drag pointer state freezes the first grab offset per interaction session", () => {
+  const unknown = { kind: "unknown", interactionSessionId: null, coordinates: null } as const;
+  const first = updateStructuredPrototypeActiveDragPointerState(unknown, {
+    interactionSessionId: 7,
+    pointerCoordinates: { x: 140, y: 90 },
+    collisionRect: { left: 100, top: 60 },
+  });
+  assert.deepEqual(first, {
+    kind: "pointer",
+    interactionSessionId: 7,
+    coordinates: { x: 140, y: 90 },
+    grabOffsetClient: { x: 40, y: 30 },
+  });
+
+  const moved = updateStructuredPrototypeActiveDragPointerState(first, {
+    interactionSessionId: 7,
+    pointerCoordinates: { x: 300, y: 180 },
+    collisionRect: { left: 240, top: 130 },
+  });
+  assert.deepEqual(moved, {
+    ...first,
+    coordinates: { x: 300, y: 180 },
+  });
+
+  assert.deepEqual(
+    updateStructuredPrototypeActiveDragPointerState(moved, {
+      interactionSessionId: 8,
+      pointerCoordinates: { x: 300, y: 180 },
+      collisionRect: { left: 240, top: 130 },
+    }),
+    {
+      kind: "pointer",
+      interactionSessionId: 8,
+      coordinates: { x: 300, y: 180 },
+      grabOffsetClient: { x: 60, y: 50 },
+    },
+  );
+  assert.deepEqual(
+    updateStructuredPrototypeActiveDragPointerState(moved, {
+      interactionSessionId: 8,
+      pointerCoordinates: null,
+      collisionRect: { left: 0, top: 0 },
+    }),
+    { kind: "keyboard", interactionSessionId: 8, coordinates: null },
+  );
+});
+
+test("Freeform registration remeasure rejects stale sessions and mismatched DOM ownership", () => {
+  const valid = {
+    sessionIsCurrent: true,
+    sessionId: 7,
+    activeInteractionSessionId: 7,
+    projectionOwnerSessionId: 7,
+    expectedNodeId: "transient-node",
+    latestTargetParentId: "freeform-b",
+    pending: { parentId: "freeform-b", nodeId: "transient-node" },
+    registration: {
+      nodeId: "transient-node",
+      parentId: "freeform-b",
+      elementParentContainerId: "freeform-b",
+    },
+  };
+  assert.equal(shouldScheduleStructuredPrototypeFreeformRegistrationRemeasure(valid), true);
+  assert.equal(
+    shouldScheduleStructuredPrototypeFreeformRegistrationRemeasure({
+      ...valid,
+      sessionIsCurrent: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldScheduleStructuredPrototypeFreeformRegistrationRemeasure({
+      ...valid,
+      activeInteractionSessionId: 8,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldScheduleStructuredPrototypeFreeformRegistrationRemeasure({
+      ...valid,
+      projectionOwnerSessionId: null,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldScheduleStructuredPrototypeFreeformRegistrationRemeasure({
+      ...valid,
+      latestTargetParentId: "freeform-c",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldScheduleStructuredPrototypeFreeformRegistrationRemeasure({
+      ...valid,
+      registration: { ...valid.registration, elementParentContainerId: "freeform-c" },
+    }),
+    false,
+  );
+  assert.equal(
+    shouldScheduleStructuredPrototypeFreeformRegistrationRemeasure({ ...valid, pending: null }),
+    false,
+  );
+});
+
 test("prototype move and page projections keep the dropped layout until server confirmation", () => {
   const document = rendererDocument();
   const ids = STRUCTURED_PROCUREMENT_IDS;
@@ -1480,19 +1586,26 @@ test("Studio recursively registers sortable children and faithful drag mirrors",
   assert.match(studio, /collisionDetection=\{captureStructuredPrototypeDragPointer\}/);
   assert.match(
     studio,
-    /args\.pointerCoordinates === null.*kind: "keyboard".*kind: "pointer".*structuredPrototypeCollisionDetection\(args\)/,
+    /updateStructuredPrototypeActiveDragPointerState\(activeDragPointerStateRef\.current, \{.*pointerCoordinates: args\.pointerCoordinates,.*collisionRect: args\.collisionRect/,
   );
   assert.match(studio, /MeasuringStrategy\.Always/);
   assert.match(studio, /onDragStart=\{handleDragStart\}/);
   assert.match(studio, /onDragMove=\{handleDragMove\}/);
   assert.match(studio, /onDragOver=\{handleDragOver\}/);
   assert.match(studio, /findPersistentFreeformDropGeometry\(/);
-  assert.match(studio, /node\.offsetParent !== container/);
+  assert.match(studio, /node\.parentElement !== container/);
   assert.match(studio, /resolveStructuredPrototypeFreeformPointerPlacement\(\{/);
+  assert.match(studio, /grabOffsetClient: pointerState\.grabOffsetClient/);
   assert.match(
     studio,
-    /placement\.remeasureAfterProjection.*currentLocation\?\.parentId !== targetParent\.id.*scheduleActiveMoveProjection\(session\)/,
+    /placement\.remeasureAfterProjection.*session\.pendingFreeformRemeasure = \{.*parentId: targetParent\.id/,
   );
+  assert.match(studio, /shouldScheduleStructuredPrototypeFreeformRegistrationRemeasure\(\{/);
+  assert.match(
+    studio,
+    /session\.pendingFreeformRemeasure = null;.*scheduleActiveMoveProjection\(session\)/,
+  );
+  assert.match(canvas, /nodeElementRegisteredRef\.current\(\{nodeId, parentId, element\}\)/);
   assert.match(studio, /projectActiveMove\(session, "drop"\)/);
   assert.match(studio, /phase === "drop" \? null : deterministicFallback/);
   assert.match(studio, /setInteractionError\(t\("prototype\.structured\.canvas\.invalidDrop"\)\)/);
