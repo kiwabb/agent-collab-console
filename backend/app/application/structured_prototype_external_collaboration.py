@@ -68,6 +68,9 @@ SUPPORTED_COMMAND_KINDS = (
     "addBehaviorRule",
     "replaceBehaviorRule",
     "removeBehaviorRule",
+    "defineComponent",
+    "removeComponentDefinition",
+    "instantiateComponent",
 )
 
 

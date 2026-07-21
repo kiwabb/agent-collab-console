@@ -447,7 +447,18 @@ function validateNode(
   const item = record(value, path);
   const type = literal(
     item["type"],
-    ["Freeform", "Stack", "Grid", "Form", "Text", "Input", "Button", "Table"] as const,
+    [
+      "Freeform",
+      "Stack",
+      "Grid",
+      "Form",
+      "Text",
+      "Input",
+      "Button",
+      "Table",
+      "Divider",
+      "Badge",
+    ] as const,
     `${path}.type`,
   );
   const common = ["id", "name", "visibility", "layoutItem", "responsive", "type"];
@@ -469,6 +480,8 @@ function validateNode(
     ],
     Button: ["label", "variant", "size", "disabled", "iconName"],
     Table: ["columns", "rows", "density"],
+    Divider: ["spacing", "tone"],
+    Badge: ["label", "tone", "iconName"],
   } as const;
   exactKeys(item, [...common, ...fieldsByType[type]], path, type === "Freeform" ? ["grids"] : []);
   validateCommon(item, path);
@@ -621,6 +634,18 @@ function validateNode(
       );
       literal(item["size"], ["small", "medium", "large"] as const, `${path}.size`);
       boolean(item["disabled"], `${path}.disabled`);
+      if (item["iconName"] !== null) nonEmptyString(item["iconName"], `${path}.iconName`);
+      return;
+    case "Divider":
+      boundedInteger(item["spacing"], 0, 64, `${path}.spacing`);
+      literal(item["tone"], ["default", "muted"] as const, `${path}.tone`);
+      return;
+    case "Badge":
+      nonEmptyString(item["label"], `${path}.label`);
+      if (String(item["label"]).length > 40) {
+        throw new RendererDocumentCodecError(`${path}.label must be at most 40 characters`);
+      }
+      literal(item["tone"], ["default", "success", "warning", "danger"] as const, `${path}.tone`);
       if (item["iconName"] !== null) nonEmptyString(item["iconName"], `${path}.iconName`);
       return;
     case "Table":

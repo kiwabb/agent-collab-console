@@ -431,6 +431,78 @@ export function resolveStructuredPrototypeFreeformMove({
   };
 }
 
+export interface StructuredPrototypeFreeformPointerPlacementInput {
+  pointerClientX: number;
+  pointerClientY: number;
+  containerRect: { left: number; top: number };
+  containerClientLeft: number;
+  containerClientTop: number;
+  previewScale: number;
+  nodeWidth: number;
+  nodeHeight: number;
+  containerWidth: number;
+  containerHeight: number;
+}
+
+/**
+ * Resolves a pointer drop as the requested node top-left in the unscaled
+ * Freeform canvas, then applies the same boundary semantics as a normal move.
+ */
+export function resolveStructuredPrototypeFreeformPointerPlacement({
+  pointerClientX,
+  pointerClientY,
+  containerRect,
+  containerClientLeft,
+  containerClientTop,
+  previewScale,
+  nodeWidth,
+  nodeHeight,
+  containerWidth,
+  containerHeight,
+}: StructuredPrototypeFreeformPointerPlacementInput): { x: number; y: number } {
+  const values = [
+    pointerClientX,
+    pointerClientY,
+    containerRect.left,
+    containerRect.top,
+    containerClientLeft,
+    containerClientTop,
+    previewScale,
+    nodeWidth,
+    nodeHeight,
+    containerWidth,
+    containerHeight,
+  ];
+  if (values.some((value) => !Number.isFinite(value))) {
+    throw new Error("freeform pointer placement geometry must be finite");
+  }
+  if (previewScale <= 0) throw new Error("freeform pointer placement scale must be positive");
+  if (containerClientLeft < 0 || containerClientTop < 0) {
+    throw new Error("freeform pointer placement border must be non-negative");
+  }
+  if (nodeWidth <= 0 || nodeHeight <= 0) {
+    throw new Error("freeform pointer placement node size must be positive");
+  }
+  if (containerWidth <= 0 || containerHeight <= 0) {
+    throw new Error("freeform pointer placement container size must be positive");
+  }
+  const contentOriginClientX = containerRect.left + containerClientLeft * previewScale;
+  const contentOriginClientY = containerRect.top + containerClientTop * previewScale;
+  return resolveStructuredPrototypeFreeformMove({
+    startX: 0,
+    startY: 0,
+    startClientX: contentOriginClientX,
+    startClientY: contentOriginClientY,
+    clientX: pointerClientX,
+    clientY: pointerClientY,
+    previewScale,
+    nodeWidth,
+    nodeHeight,
+    containerWidth,
+    containerHeight,
+  });
+}
+
 export function resolveStructuredPrototypeFreeformResize({
   x: startX,
   y: startY,

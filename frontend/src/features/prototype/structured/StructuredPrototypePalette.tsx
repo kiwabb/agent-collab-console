@@ -2,11 +2,13 @@
 
 import { useDraggable } from "@dnd-kit/core";
 import {
+  BadgeCheck,
   Box,
   FormInput,
   Frame,
   GripVertical,
   LayoutGrid,
+  Minus,
   MousePointerClick,
   Table2,
   TextCursorInput,
@@ -30,6 +32,8 @@ const PALETTE_ICONS: Record<StructuredPrototypePaletteType, typeof Box> = {
   Input: TextCursorInput,
   Button: MousePointerClick,
   Table: Table2,
+  Divider: Minus,
+  Badge: BadgeCheck,
 };
 
 interface PaletteItem {

@@ -188,6 +188,19 @@ export interface StructuredPrototypeTableNode extends StructuredPrototypeNodeCom
   density: "compact" | "comfortable";
 }
 
+export interface StructuredPrototypeDividerNode extends StructuredPrototypeNodeCommon {
+  type: "Divider";
+  spacing: number;
+  tone: "default" | "muted";
+}
+
+export interface StructuredPrototypeBadgeNode extends StructuredPrototypeNodeCommon {
+  type: "Badge";
+  label: string;
+  tone: "default" | "success" | "warning" | "danger";
+  iconName: string | null;
+}
+
 export type StructuredPrototypeNode =
   | StructuredPrototypeStackNode
   | StructuredPrototypeGridNode
@@ -196,7 +209,9 @@ export type StructuredPrototypeNode =
   | StructuredPrototypeTextNode
   | StructuredPrototypeInputNode
   | StructuredPrototypeButtonNode
-  | StructuredPrototypeTableNode;
+  | StructuredPrototypeTableNode
+  | StructuredPrototypeDividerNode
+  | StructuredPrototypeBadgeNode;
 
 export interface StructuredPrototypePage {
   id: string;
@@ -228,6 +243,12 @@ export interface StructuredPrototypeTopbarShell extends StructuredPrototypeShell
 export type StructuredPrototypeShell =
   StructuredPrototypeSidebarShell | StructuredPrototypeTopbarShell;
 
+export interface StructuredPrototypeComponentDefinition {
+  id: string;
+  key: string;
+  root: StructuredPrototypeNode;
+}
+
 export interface StructuredPrototypeDocument {
   schemaVersion: 1;
   id: string;
@@ -242,11 +263,7 @@ export interface StructuredPrototypeDocument {
     colors: Array<{ key: string; value: string }>;
     spacing: Array<{ key: string; value: string }>;
   };
-  componentDefinitions: Array<{
-    id: string;
-    key: string;
-    root: StructuredPrototypeNode;
-  }>;
+  componentDefinitions: StructuredPrototypeComponentDefinition[];
   pages: StructuredPrototypePage[];
   navigation: {
     items: Array<{ id: string; key: string; label: string; targetPageId: string }>;
@@ -345,6 +362,19 @@ export interface NewStructuredPrototypeTableNode extends NewStructuredPrototypeN
   density: "compact" | "comfortable";
 }
 
+export interface NewStructuredPrototypeDividerNode extends NewStructuredPrototypeNodeCommon {
+  type: "Divider";
+  spacing: number;
+  tone: "default" | "muted";
+}
+
+export interface NewStructuredPrototypeBadgeNode extends NewStructuredPrototypeNodeCommon {
+  type: "Badge";
+  label: string;
+  tone: "default" | "success" | "warning" | "danger";
+  iconName: string | null;
+}
+
 export type NewStructuredPrototypeNode =
   | NewStructuredPrototypeStackNode
   | NewStructuredPrototypeGridNode
@@ -353,7 +383,9 @@ export type NewStructuredPrototypeNode =
   | NewStructuredPrototypeTextNode
   | NewStructuredPrototypeInputNode
   | NewStructuredPrototypeButtonNode
-  | NewStructuredPrototypeTableNode;
+  | NewStructuredPrototypeTableNode
+  | NewStructuredPrototypeDividerNode
+  | NewStructuredPrototypeBadgeNode;
 
 export type StructuredPrototypeNodeRef =
   { kind: "existing"; nodeId: string } | { kind: "new"; newNodeKey: string };
@@ -402,6 +434,12 @@ export type StructuredPrototypeNodePropertyUpdate =
   | {
       kind: "responsiveLayout";
       responsive: StructuredPrototypeResponsiveOverride[];
+    }
+  | { kind: "badgeTone"; tone: "default" | "success" | "warning" | "danger" }
+  | {
+      kind: "dividerStyle";
+      spacing?: number | undefined;
+      tone?: "default" | "muted" | undefined;
     }
   | { kind: "visibility"; visibility: "visible" | "hidden" };
 
@@ -469,7 +507,16 @@ export type StructuredPrototypeCommand =
       ruleId: string;
       definition: StructuredPrototypeBehaviorRuleDefinition;
     }
-  | { kind: "removeBehaviorRule"; ruleId: string };
+  | { kind: "removeBehaviorRule"; ruleId: string }
+  | { kind: "defineComponent"; key: string; sourceNode: StructuredPrototypeNodeRef }
+  | { kind: "removeComponentDefinition"; componentId: string }
+  | {
+      kind: "instantiateComponent";
+      componentId: string;
+      parent: StructuredPrototypeNodeRef;
+      index: number;
+      targetPosition?: StructuredPrototypeFreeformPosition | null;
+    };
 
 export type StructuredPrototypeFreeformMoveEvidenceAxis = "x" | "y";
 export type StructuredPrototypeFreeformMoveEvidenceWinner =
@@ -691,7 +738,7 @@ export interface PublishStructuredPrototypeRequest {
   clientRequestId: string;
   expectedHeadSequenceNo: number;
   expectedDocumentHash: string;
-  summary: string | null;
+  summary?: string | null;
 }
 
 export interface StructuredPrototypePublication {
@@ -755,8 +802,7 @@ export interface StructuredPrototypeRevisionDiffPage {
   route: string;
 }
 
-export interface StructuredPrototypeRevisionDiffPageChange
-  extends StructuredPrototypeRevisionDiffPage {
+export interface StructuredPrototypeRevisionDiffPageChange extends StructuredPrototypeRevisionDiffPage {
   titleChanged: boolean;
   routeChanged: boolean;
   nodesAdded: number;

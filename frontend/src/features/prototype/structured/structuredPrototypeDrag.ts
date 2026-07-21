@@ -4,7 +4,10 @@ import {
   isStructuredPrototypeContainerNode,
   type StructuredPrototypeContainerNode,
 } from "./structuredPrototypeNodes";
-import type { StructuredPrototypePaletteType } from "./StructuredPrototypePalette";
+import {
+  STRUCTURED_PROTOTYPE_PALETTE_TYPES,
+  type StructuredPrototypePaletteType,
+} from "./structuredPrototypePaletteTypes";
 import type { StructuredPrototypeDragMirrorCapture } from "./structuredPrototypeDragMirror";
 import {
   readStructuredPrototypeLayerDragData,
@@ -18,9 +21,17 @@ import type {
 } from "./types";
 
 const PALETTE_PREVIEW_NODE_ID_PREFIX = "prototype-palette-preview:";
+const COMPONENT_PREVIEW_NODE_ID_PREFIX = "prototype-component-preview:";
 
 export function isStructuredPrototypePalettePreviewNodeId(nodeId: string): boolean {
   return nodeId.startsWith(PALETTE_PREVIEW_NODE_ID_PREFIX);
+}
+
+function isStructuredPrototypeTransientPreviewNodeId(nodeId: string): boolean {
+  return (
+    isStructuredPrototypePalettePreviewNodeId(nodeId) ||
+    nodeId.startsWith(COMPONENT_PREVIEW_NODE_ID_PREFIX)
+  );
 }
 
 export interface StructuredPrototypePaletteDragData {
@@ -40,6 +51,11 @@ export interface StructuredPrototypePageDragData {
   kind: "page";
   pageId: string;
   index: number;
+}
+
+export interface StructuredPrototypeComponentDefinitionDragData {
+  kind: "componentDef";
+  componentId: string;
 }
 
 interface StructuredPrototypeDropTargetMetadata {
@@ -103,9 +119,7 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 function isPaletteType(value: unknown): value is StructuredPrototypePaletteType {
-  return ["Freeform", "Stack", "Grid", "Form", "Text", "Input", "Button", "Table"].includes(
-    String(value),
-  );
+  return STRUCTURED_PROTOTYPE_PALETTE_TYPES.includes(value as StructuredPrototypePaletteType);
 }
 
 function readStructuredPrototypeDropTargetMetadata(
@@ -213,6 +227,15 @@ export function readStructuredPrototypePageDragData(
   };
 }
 
+export function readStructuredPrototypeComponentDefinitionDragData(
+  value: unknown,
+): StructuredPrototypeComponentDefinitionDragData | null {
+  if (!isRecord(value) || value["kind"] !== "componentDef") return null;
+  return typeof value["componentId"] === "string"
+    ? { kind: "componentDef", componentId: value["componentId"] }
+    : null;
+}
+
 export function resolveStructuredPrototypeActiveLayoutNodeId(
   dragData: unknown,
   ownerNodeId: string,
@@ -220,9 +243,10 @@ export function resolveStructuredPrototypeActiveLayoutNodeId(
 ): string | null {
   const draggedNode = readStructuredPrototypeNodeDragData(dragData);
   if (draggedNode !== null) return draggedNode.nodeId;
-  if (isStructuredPrototypePalettePreviewNodeId(ownerNodeId)) return null;
+  if (isStructuredPrototypeTransientPreviewNodeId(ownerNodeId)) return null;
   return (
-    directChildren.find((child) => isStructuredPrototypePalettePreviewNodeId(child.id))?.id ?? null
+    directChildren.find((child) => isStructuredPrototypeTransientPreviewNodeId(child.id))?.id ??
+    null
   );
 }
 
@@ -309,11 +333,11 @@ function targetIsInsideDraggedSubtree(
   );
 }
 
-function targetBelongsToPalettePreview(target: StructuredPrototypeDropTarget): boolean {
+function targetBelongsToTransientPreview(target: StructuredPrototypeDropTarget): boolean {
   return (
-    isStructuredPrototypePalettePreviewNodeId(target.ownerNodeId) ||
-    isStructuredPrototypePalettePreviewNodeId(target.parentId) ||
-    target.ancestorNodeIds.some(isStructuredPrototypePalettePreviewNodeId)
+    isStructuredPrototypeTransientPreviewNodeId(target.ownerNodeId) ||
+    isStructuredPrototypeTransientPreviewNodeId(target.parentId) ||
+    target.ancestorNodeIds.some(isStructuredPrototypeTransientPreviewNodeId)
   );
 }
 
@@ -342,9 +366,13 @@ export const structuredPrototypeCollisionDetection: CollisionDetection = (args) 
     return args.pointerCoordinates === null ? closestCenter(scopedArgs) : pointerWithin(scopedArgs);
   }
   const pageDrag = readStructuredPrototypePageDragData(args.active.data.current);
+  const componentDrag = readStructuredPrototypeComponentDefinitionDragData(
+    args.active.data.current,
+  );
   const structuredDrag =
     readStructuredPrototypePaletteDragData(args.active.data.current) ??
-    readStructuredPrototypeNodeDragData(args.active.data.current);
+    readStructuredPrototypeNodeDragData(args.active.data.current) ??
+    componentDrag;
   if (pageDrag === null && structuredDrag === null) return closestCenter(args);
 
   const draggedNode = readStructuredPrototypeNodeDragData(args.active.data.current);
@@ -357,7 +385,10 @@ export const structuredPrototypeCollisionDetection: CollisionDetection = (args) 
     return (
       target !== null &&
       !targetIsInsideDraggedSubtree(draggedNode, target) &&
-      !(draggedPalette !== null && targetBelongsToPalettePreview(target))
+      !(
+        (draggedPalette !== null || componentDrag !== null) &&
+        targetBelongsToTransientPreview(target)
+      )
     );
   });
   const scopedArgs = { ...args, droppableContainers };
@@ -632,6 +663,18 @@ export function materializeStructuredPrototypePalettePreviewNode(
       iconName: node.iconName,
     };
   }
+  if (node.type === "Divider") {
+    return { ...common, type: node.type, spacing: node.spacing, tone: node.tone };
+  }
+  if (node.type === "Badge") {
+    return {
+      ...common,
+      type: node.type,
+      label: node.label,
+      tone: node.tone,
+      iconName: node.iconName,
+    };
+  }
   return {
     ...common,
     type: node.type,
@@ -639,6 +682,50 @@ export function materializeStructuredPrototypePalettePreviewNode(
     rows: node.rows,
     density: node.density,
   };
+}
+
+export function materializeStructuredPrototypeComponentPreviewNode(
+  node: StructuredPrototypeNode,
+  ownerSessionId: number,
+): StructuredPrototypeNode {
+  const id = `${COMPONENT_PREVIEW_NODE_ID_PREFIX}${ownerSessionId}:${node.id}`;
+  if (node.type === "Stack" || node.type === "Grid" || node.type === "Form") {
+    return {
+      ...node,
+      id,
+      children: node.children.map((child) =>
+        materializeStructuredPrototypeComponentPreviewNode(child, ownerSessionId),
+      ),
+    };
+  }
+  if (node.type === "Freeform") {
+    return {
+      ...node,
+      id,
+      ...(node.grids === undefined
+        ? {}
+        : {
+            grids: node.grids.map((grid) => ({
+              ...grid,
+              id: `${COMPONENT_PREVIEW_NODE_ID_PREFIX}${ownerSessionId}:${grid.id}`,
+            })),
+          }),
+      children: node.children.map((child) =>
+        materializeStructuredPrototypeComponentPreviewNode(child, ownerSessionId),
+      ),
+    };
+  }
+  if (node.type === "Table") {
+    return {
+      ...node,
+      id,
+      rows: node.rows.map((row) => ({
+        ...row,
+        id: `${COMPONENT_PREVIEW_NODE_ID_PREFIX}${ownerSessionId}:${row.id}`,
+      })),
+    };
+  }
+  return { ...node, id };
 }
 
 export function projectStructuredPrototypeNodeMove(

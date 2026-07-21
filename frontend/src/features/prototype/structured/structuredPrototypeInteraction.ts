@@ -4,6 +4,7 @@ export type StructuredPrototypeMoveSource =
   | { kind: "node"; nodeId: string }
   | { kind: "layer"; nodeId: string }
   | { kind: "palette"; nodeType: StructuredPrototypePaletteType }
+  | { kind: "component"; componentId: string }
   | { kind: "page"; pageId: string };
 
 export type StructuredPrototypeInteraction =

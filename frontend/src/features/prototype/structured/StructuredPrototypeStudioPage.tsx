@@ -10,6 +10,7 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
@@ -48,12 +49,15 @@ import {
   addPageBatch,
   addBehaviorRuleBatch,
   createPaletteNode,
+  defineComponentBatch,
   deletePageBatch,
   duplicatePageBatch,
+  instantiateComponentBatch,
   insertPaletteNodeBatch,
   movePositionedSelectionBatch,
   moveNodeBatch,
   removeNodesBatch,
+  removeComponentDefinitionBatch,
   reorderPageBatch,
   removeBehaviorRuleBatch,
   renamePageBatch,
@@ -72,14 +76,17 @@ import {
   runtimeNodeRows,
   runtimeTableRowsBinding,
   structuredPrototypeInputNodes,
+  structuredPrototypeSubtreeHasRuntimeReferences,
 } from "./structuredPrototypeDerived";
 import {
+  readStructuredPrototypeComponentDefinitionDragData,
   readStructuredPrototypeDropTarget,
   readStructuredPrototypeNodeDragData,
   readStructuredPrototypeNodeDragMirrorCapture,
   readStructuredPrototypePageDragData,
   readStructuredPrototypePaletteDragData,
   findStructuredPrototypeNodeLocation,
+  materializeStructuredPrototypeComponentPreviewNode,
   materializeStructuredPrototypePalettePreviewNode,
   projectStructuredPrototypeNodeInsert,
   projectStructuredPrototypeNodeMoveToDropTarget,
@@ -89,6 +96,7 @@ import {
   type StructuredPrototypeNodeLocation,
 } from "./structuredPrototypeDrag";
 import { StructuredPrototypeDragMirrorView } from "./StructuredPrototypeDragMirrorView";
+import { StructuredPrototypeComponentLibrary } from "./StructuredPrototypeComponentLibrary";
 import type { StructuredPrototypeDragMirrorSnapshot } from "./structuredPrototypeDragMirror";
 import {
   isStructuredPrototypeContainerNode,
@@ -101,6 +109,7 @@ import {
 import {
   canonicalStructuredPrototypeFreeformValue,
   STRUCTURED_PROTOTYPE_MAX_FREEFORM_COORDINATE,
+  resolveStructuredPrototypeFreeformPointerPlacement,
 } from "./structuredPrototypeFreeformGeometry";
 import { serializeStructuredPrototypeFreeformMoveEvidence } from "./structuredPrototypeFreeformMoveEvidence";
 import { replayStructuredPrototypeFreeformMove } from "./structuredPrototypeFreeformMoveReplay";
@@ -210,6 +219,7 @@ interface ActiveMoveProjectionSessionBase {
   interactionSessionId: number;
   baseDocumentHash: string;
   authoritativeDocument: StructuredPrototypeDocument;
+  previewScale: number;
   animationFrameId: number | null;
 }
 type ActiveMoveProjectionSession =
@@ -235,9 +245,17 @@ type ActiveMoveProjectionSession =
       transientNode: StructuredPrototypeNode;
       latestTarget: StructuredPrototypeDropTarget | null;
       finalLocation: StructuredPrototypeNodeLocation | null;
+    })
+  | (ActiveMoveProjectionSessionBase & {
+      kind: "component";
+      pageId: string;
+      componentId: string;
+      transientNode: StructuredPrototypeNode;
+      latestTarget: StructuredPrototypeDropTarget | null;
+      finalLocation: StructuredPrototypeNodeLocation | null;
     });
 type ActiveMoveProjectionResult =
-  | { kind: "node" | "palette"; location: StructuredPrototypeNodeLocation }
+  | { kind: "node" | "palette" | "component"; location: StructuredPrototypeNodeLocation }
   | { kind: "page"; targetIndex: number };
 const PREVIEW_ZOOM_OPTIONS: readonly StructuredPrototypePreviewZoom[] = ["fit", 0.75, 1, 1.25];
 const FIXED_OVERLAY_VIEWPORT_WIDTH = { tablet: 760, mobile: 390 } as const;
@@ -256,6 +274,59 @@ function defaultFreeformPosition(index: number): StructuredPrototypeFreeformPosi
     x: String(FREEFORM_INSERT_ORIGIN + column * FREEFORM_INSERT_STEP),
     y: String(FREEFORM_INSERT_ORIGIN + row * FREEFORM_INSERT_STEP),
   };
+}
+
+interface PersistentFreeformDropGeometry {
+  container: HTMLElement;
+  nodeWidth: number;
+  nodeHeight: number;
+}
+
+interface FreeformDropPositionResolution {
+  position: StructuredPrototypeFreeformPosition | null;
+  remeasureAfterProjection: boolean;
+}
+
+type ActiveDragPointerState =
+  | { kind: "unknown"; coordinates: null }
+  | { kind: "keyboard"; coordinates: null }
+  | { kind: "pointer"; coordinates: { x: number; y: number } };
+
+function persistentCanvasWrapper(): HTMLElement | null {
+  return globalThis.document.querySelector<HTMLElement>(
+    '[data-prototype-canvas-region="persistent"] [data-prototype-canvas-wrapper="true"]',
+  );
+}
+
+function findPersistentFreeformDropGeometry(
+  parentId: string,
+  nodeId: string,
+): PersistentFreeformDropGeometry | null {
+  const canvas = persistentCanvasWrapper();
+  if (canvas === null) return null;
+  const container = Array.from(canvas.querySelectorAll<HTMLElement>("[data-container-id]")).find(
+    (candidate) => candidate.dataset["containerId"] === parentId,
+  );
+  if (container === undefined) return null;
+  const node = Array.from(canvas.querySelectorAll<HTMLElement>("[data-node-id]")).find(
+    (candidate) => candidate.dataset["nodeId"] === nodeId,
+  );
+  if (node === undefined || node.offsetParent !== container) return null;
+  const nodeWidth = node.offsetWidth;
+  const nodeHeight = node.offsetHeight;
+  if (
+    nodeWidth <= 0 ||
+    nodeHeight <= 0 ||
+    container.clientWidth <= 0 ||
+    container.clientHeight <= 0 ||
+    !Number.isFinite(nodeWidth) ||
+    !Number.isFinite(nodeHeight) ||
+    !Number.isFinite(container.clientWidth) ||
+    !Number.isFinite(container.clientHeight)
+  ) {
+    return null;
+  }
+  return { container, nodeWidth, nodeHeight };
 }
 
 function findDocumentContainer(
@@ -334,8 +405,14 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     useState<StructuredPrototypeDragMirrorSnapshot | null>(null);
   const [activePaletteDragNode, setActivePaletteDragNode] =
     useState<StructuredPrototypeNode | null>(null);
+  const [activeComponentDragNode, setActiveComponentDragNode] =
+    useState<StructuredPrototypeNode | null>(null);
   const projectedDocumentRef = useRef<ProjectedPrototypeDocument | null>(null);
   const activeMoveProjectionRef = useRef<ActiveMoveProjectionSession | null>(null);
+  const activeDragPointerStateRef = useRef<ActiveDragPointerState>({
+    kind: "unknown",
+    coordinates: null,
+  });
   const interactionRef = useRef(interaction);
   const nextInteractionSessionIdRef = useRef(1);
   const editorMutationLocked =
@@ -430,6 +507,13 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
   const gestureActive = interactionCapabilities.busy;
   const activeDrag =
     interaction.kind === "move" && interaction.phase === "active" ? interaction.source : null;
+  const captureStructuredPrototypeDragPointer: CollisionDetection = useCallback((args) => {
+    activeDragPointerStateRef.current =
+      args.pointerCoordinates === null
+        ? { kind: "keyboard", coordinates: null }
+        : { kind: "pointer", coordinates: args.pointerCoordinates };
+    return structuredPrototypeCollisionDetection(args);
+  }, []);
   const handleResizeGestureChange = useCallback(
     (event: StructuredPrototypeResizeGestureEvent): number | null => {
       if (event.phase === "start") {
@@ -686,6 +770,13 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     document !== null &&
     selectedNode?.type === "Table" &&
     runtimeTableRowsBinding(document, selectedNode.id) !== null;
+  const canSaveSelectedNodeAsComponent =
+    document !== null &&
+    activePage !== null &&
+    activeSelectedNodeIds.length === 1 &&
+    selectedNode !== null &&
+    selectedNode.id !== activePage.root.id &&
+    !structuredPrototypeSubtreeHasRuntimeReferences(document, selectedNode);
   const selectedRuntimeTable = useMemo<StructuredPrototypeInspectorRuntimeTable | null>(() => {
     if (document === null || runtime === null || selectedNode?.type !== "Table") return null;
     const binding = runtimeTableRowsBinding(document, selectedNode.id);
@@ -886,11 +977,82 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     if (session === null) return;
     if (session.animationFrameId !== null) cancelAnimationFrame(session.animationFrameId);
     activeMoveProjectionRef.current = null;
+    activeDragPointerStateRef.current = { kind: "unknown", coordinates: null };
+    setActiveComponentDragNode(null);
     clearProjectedDocumentForSession(session.interactionSessionId);
+  };
+
+  const resolveFreeformDropPosition = (
+    session: ActiveMoveProjectionSession,
+    parentId: string,
+    nodeId: string,
+    targetIndex: number,
+    fallback: StructuredPrototypeFreeformPosition | undefined,
+    phase: "hover" | "drop",
+  ): FreeformDropPositionResolution => {
+    const deterministicFallback = fallback ?? defaultFreeformPosition(targetIndex);
+    const pointerState = activeDragPointerStateRef.current;
+    if (pointerState.kind === "keyboard") {
+      return { position: deterministicFallback, remeasureAfterProjection: false };
+    }
+    if (pointerState.kind === "unknown" || pointerState.coordinates === null) {
+      return {
+        position: phase === "drop" ? null : deterministicFallback,
+        remeasureAfterProjection: phase === "hover",
+      };
+    }
+    const geometry = findPersistentFreeformDropGeometry(parentId, nodeId);
+    if (geometry === null) {
+      return {
+        position: phase === "drop" ? null : deterministicFallback,
+        remeasureAfterProjection: phase === "hover",
+      };
+    }
+    const rect = geometry.container.getBoundingClientRect();
+    if (
+      !Number.isFinite(rect.left) ||
+      !Number.isFinite(rect.top) ||
+      !Number.isFinite(session.previewScale) ||
+      session.previewScale <= 0
+    ) {
+      return {
+        position: phase === "drop" ? null : deterministicFallback,
+        remeasureAfterProjection: false,
+      };
+    }
+    const position = resolveStructuredPrototypeFreeformPointerPlacement({
+      pointerClientX: pointerState.coordinates.x,
+      pointerClientY: pointerState.coordinates.y,
+      containerRect: { left: rect.left, top: rect.top },
+      containerClientLeft: geometry.container.clientLeft,
+      containerClientTop: geometry.container.clientTop,
+      previewScale: session.previewScale,
+      nodeWidth: geometry.nodeWidth,
+      nodeHeight: geometry.nodeHeight,
+      containerWidth: geometry.container.clientWidth,
+      containerHeight: geometry.container.clientHeight,
+    });
+    if (
+      position.x > STRUCTURED_PROTOTYPE_MAX_FREEFORM_COORDINATE ||
+      position.y > STRUCTURED_PROTOTYPE_MAX_FREEFORM_COORDINATE
+    ) {
+      return {
+        position: phase === "drop" ? null : deterministicFallback,
+        remeasureAfterProjection: false,
+      };
+    }
+    return {
+      position: {
+        x: canonicalStructuredPrototypeFreeformValue(position.x),
+        y: canonicalStructuredPrototypeFreeformValue(position.y),
+      },
+      remeasureAfterProjection: false,
+    };
   };
 
   const projectActiveMove = (
     session: ActiveMoveProjectionSession,
+    phase: "hover" | "drop" = "hover",
   ): ActiveMoveProjectionResult | null => {
     const currentProjection = projectedDocumentRef.current;
     const ownedProjection =
@@ -934,10 +1096,24 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         session.nodeId,
       );
       const authoritativePosition = authoritativeLocation?.position ?? undefined;
-      const targetPosition =
+      const sourceLocation = findStructuredPrototypeNodeLocation(
+        sourceDocument,
+        session.pageId,
+        session.nodeId,
+      );
+      const placement =
         targetParent.type === "Freeform"
-          ? (authoritativePosition ?? defaultFreeformPosition(target.index))
-          : (authoritativePosition ?? null);
+          ? resolveFreeformDropPosition(
+              session,
+              targetParent.id,
+              session.nodeId,
+              target.index,
+              authoritativePosition,
+              phase,
+            )
+          : { position: authoritativePosition ?? null, remeasureAfterProjection: false };
+      const targetPosition = placement.position;
+      if (targetParent.type === "Freeform" && targetPosition === null) return null;
       const projection = projectStructuredPrototypeNodeMoveToDropTarget(
         sourceDocument,
         session.pageId,
@@ -956,6 +1132,9 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         clearProjectedDocumentForSession(session.interactionSessionId);
       } else {
         publishMoveProjection(session, projection.document, "hover");
+        if (placement.remeasureAfterProjection && sourceLocation?.parentId !== targetParent.id) {
+          scheduleActiveMoveProjection(session);
+        }
       }
       return { kind: "node", location: projection.location };
     }
@@ -969,14 +1148,23 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       session.pageId,
       session.transientNode.id,
     );
-    const targetPosition =
+    const currentPosition =
+      currentLocation?.parentId === targetParent.id
+        ? (currentLocation.position ?? undefined)
+        : undefined;
+    const placement =
       targetParent.type === "Freeform"
-        ? currentLocation?.parentId === targetParent.id &&
-          currentLocation.position !== undefined &&
-          currentLocation.position !== null
-          ? currentLocation.position
-          : defaultFreeformPosition(target.index)
-        : null;
+        ? resolveFreeformDropPosition(
+            session,
+            targetParent.id,
+            session.transientNode.id,
+            target.index,
+            currentPosition,
+            phase,
+          )
+        : { position: null, remeasureAfterProjection: false };
+    const targetPosition = placement.position;
+    if (targetParent.type === "Freeform" && targetPosition === null) return null;
     const projection =
       currentLocation === null
         ? projectStructuredPrototypeNodeInsert(
@@ -1003,7 +1191,10 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     if (location === null) return null;
     session.finalLocation = location;
     publishMoveProjection(session, projection, "hover");
-    return { kind: "palette", location };
+    if (placement.remeasureAfterProjection && currentLocation?.parentId !== targetParent.id) {
+      scheduleActiveMoveProjection(session);
+    }
+    return { kind: session.kind, location };
   };
 
   const scheduleActiveMoveProjection = (session: ActiveMoveProjectionSession): void => {
@@ -1051,6 +1242,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     clearActiveMoveProjection();
     setActiveNodeDragMirror(null);
     setActivePaletteDragNode(null);
+    setActiveComponentDragNode(null);
     setInteractionError(null);
     const layer = readStructuredPrototypeLayerDragData(event.active.data.current);
     if (layer !== null) {
@@ -1094,8 +1286,44 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         interactionSessionId: sessionId,
         baseDocumentHash: currentDraft.documentHash,
         authoritativeDocument: currentDraft.document,
+        previewScale: effectivePreviewScale,
         pageId: activePage.id,
         commandNode,
+        transientNode,
+        latestTarget: null,
+        finalLocation: null,
+        animationFrameId: null,
+      };
+      return;
+    }
+    const component = readStructuredPrototypeComponentDefinitionDragData(event.active.data.current);
+    if (component !== null) {
+      const definition = currentDraft.document.componentDefinitions.find(
+        (candidate) => candidate.id === component.componentId,
+      );
+      if (definition === undefined) {
+        setInteractionError(t("prototype.structured.canvas.invalidDrop"));
+        return;
+      }
+      const sessionId = beginInteraction({
+        kind: "move",
+        source: { kind: "component", componentId: component.componentId },
+        baseDocumentHash: currentDraft.documentHash,
+      });
+      if (sessionId === null) return;
+      const transientNode = materializeStructuredPrototypeComponentPreviewNode(
+        definition.root,
+        sessionId,
+      );
+      setActiveComponentDragNode(transientNode);
+      activeMoveProjectionRef.current = {
+        kind: "component",
+        interactionSessionId: sessionId,
+        baseDocumentHash: currentDraft.documentHash,
+        authoritativeDocument: currentDraft.document,
+        previewScale: effectivePreviewScale,
+        pageId: activePage.id,
+        componentId: component.componentId,
         transientNode,
         latestTarget: null,
         finalLocation: null,
@@ -1123,6 +1351,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         interactionSessionId: sessionId,
         baseDocumentHash: currentDraft.documentHash,
         authoritativeDocument: currentDraft.document,
+        previewScale: effectivePreviewScale,
         pageId: activePage.id,
         nodeId: dragged.nodeId,
         latestTarget: null,
@@ -1148,6 +1377,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         interactionSessionId: sessionId,
         baseDocumentHash: currentDraft.documentHash,
         authoritativeDocument: currentDraft.document,
+        previewScale: effectivePreviewScale,
         pageId: page.pageId,
         originalIndex,
         latestTargetPageId: null,
@@ -1180,11 +1410,28 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         session.kind === "node"
           ? readStructuredPrototypeNodeDragData(event.active.data.current)?.nodeId ===
             session.nodeId
-          : readStructuredPrototypePaletteDragData(event.active.data.current)?.nodeType ===
-            session.commandNode.type;
+          : session.kind === "palette"
+            ? readStructuredPrototypePaletteDragData(event.active.data.current)?.nodeType ===
+              session.commandNode.type
+            : readStructuredPrototypeComponentDefinitionDragData(event.active.data.current)
+                ?.componentId === session.componentId;
       if (!sourceMatches) return;
       session.latestTarget =
         event.over === null ? null : readStructuredPrototypeDropTarget(event.over.data.current);
+    }
+    scheduleActiveMoveProjection(session);
+  };
+
+  const handleDragMove = (): void => {
+    const session = activeMoveProjectionRef.current;
+    const activeInteraction = interactionRef.current;
+    if (
+      session === null ||
+      activeInteraction.kind !== "move" ||
+      activeInteraction.phase !== "active" ||
+      activeInteraction.sessionId !== session.interactionSessionId
+    ) {
+      return;
     }
     scheduleActiveMoveProjection(session);
   };
@@ -1200,8 +1447,10 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     }
     if (session.animationFrameId !== null) cancelAnimationFrame(session.animationFrameId);
     if (activeMoveProjectionRef.current === session) activeMoveProjectionRef.current = null;
+    activeDragPointerStateRef.current = { kind: "unknown", coordinates: null };
     setActiveNodeDragMirror(null);
     setActivePaletteDragNode(null);
+    setActiveComponentDragNode(null);
     clearProjectedDocumentForSession(session.interactionSessionId);
     endInteraction(session.interactionSessionId);
   };
@@ -1213,8 +1462,10 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     if (!advanceInteraction(session.interactionSessionId, "committing")) return false;
     if (session.animationFrameId !== null) cancelAnimationFrame(session.animationFrameId);
     if (activeMoveProjectionRef.current === session) activeMoveProjectionRef.current = null;
+    activeDragPointerStateRef.current = { kind: "unknown", coordinates: null };
     setActiveNodeDragMirror(null);
     setActivePaletteDragNode(null);
+    setActiveComponentDragNode(null);
     const hoverProjection = projectedDocumentRef.current;
     if (hoverProjection?.ownerSessionId !== session.interactionSessionId) {
       setInteractionError(t("prototype.structured.canvas.invalidDrop"));
@@ -1249,6 +1500,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       activeInteraction.source.kind === "layer"
     ) {
       const dragged = readStructuredPrototypeLayerDragData(event.active.data.current);
+      activeDragPointerStateRef.current = { kind: "unknown", coordinates: null };
       endInteraction(activeInteraction.sessionId);
       if (dragged?.nodeId !== activeInteraction.source.nodeId) {
         setInteractionError(t("prototype.structured.canvas.invalidDrop"));
@@ -1262,6 +1514,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       activeInteraction.phase !== "active" ||
       activeInteraction.sessionId !== session.interactionSessionId
     ) {
+      activeDragPointerStateRef.current = { kind: "unknown", coordinates: null };
       return;
     }
     const currentDraft = controller.draft;
@@ -1313,8 +1566,9 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         return;
       }
       session.latestTarget = target;
-      const result = projectActiveMove(session);
+      const result = projectActiveMove(session, "drop");
       if (result?.kind !== "palette" || projectedDocumentRef.current === null) {
+        setInteractionError(t("prototype.structured.canvas.invalidDrop"));
         cancelActiveMove(session);
         return;
       }
@@ -1338,6 +1592,41 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       );
       return;
     }
+    if (session.kind === "component") {
+      const dragged = readStructuredPrototypeComponentDefinitionDragData(event.active.data.current);
+      const target =
+        event.over === null ? null : readStructuredPrototypeDropTarget(event.over.data.current);
+      if (dragged?.componentId !== session.componentId || target === null) {
+        cancelActiveMove(session);
+        return;
+      }
+      session.latestTarget = target;
+      const result = projectActiveMove(session, "drop");
+      if (result?.kind !== "component" || projectedDocumentRef.current === null) {
+        setInteractionError(t("prototype.structured.canvas.invalidDrop"));
+        cancelActiveMove(session);
+        return;
+      }
+      const targetParent = findDocumentContainer(
+        session.authoritativeDocument,
+        session.pageId,
+        result.location.parentId,
+      );
+      if (targetParent === null) {
+        cancelActiveMove(session);
+        return;
+      }
+      commitActiveMove(
+        session,
+        instantiateComponentBatch(
+          session.componentId,
+          targetParent,
+          result.location.index,
+          result.location.position,
+        ),
+      );
+      return;
+    }
     const dragged = readStructuredPrototypeNodeDragData(event.active.data.current);
     const target =
       event.over === null ? null : readStructuredPrototypeDropTarget(event.over.data.current);
@@ -1346,7 +1635,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       return;
     }
     session.latestTarget = target;
-    const result = projectActiveMove(session);
+    const result = projectActiveMove(session, "drop");
     const originalLocation = findStructuredPrototypeNodeLocation(
       session.authoritativeDocument,
       session.pageId,
@@ -1358,6 +1647,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       sameNodeLocation(result.location, originalLocation) ||
       projectedDocumentRef.current === null
     ) {
+      if (result === null) setInteractionError(t("prototype.structured.canvas.invalidDrop"));
       cancelActiveMove(session);
       return;
     }
@@ -1400,6 +1690,37 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       ),
     );
     setMobileDrawer(null);
+  };
+
+  const insertComponentInstance = (componentId: string): void => {
+    if (editorMutationLocked || interactionRef.current.kind !== "idle") return;
+    const root = activePage.root;
+    if (!isStructuredPrototypeContainerNode(root)) return;
+    void runLockedMutation("commands", () =>
+      controller.applyCommands(
+        instantiateComponentBatch(
+          componentId,
+          root,
+          root.children.length,
+          root.type === "Freeform" ? defaultFreeformPosition(root.children.length) : undefined,
+        ),
+      ),
+    );
+    setMobileDrawer(null);
+  };
+
+  const removeComponentDefinition = (componentId: string): void => {
+    void runLockedMutation("commands", () =>
+      controller.applyCommands(removeComponentDefinitionBatch(componentId)),
+    );
+  };
+
+  const saveNodeAsComponent = (nodeId: string): void => {
+    void runLockedMutation("commands", () =>
+      controller.applyCommands(
+        defineComponentBatch(`component-${crypto.randomUUID().slice(0, 8)}`, nodeId),
+      ),
+    );
   };
 
   const handlePageSelect = (pageId: string): void => {
@@ -1652,6 +1973,8 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     Input: t("prototype.structured.palette.input"),
     Button: t("prototype.structured.palette.button"),
     Table: t("prototype.structured.palette.table"),
+    Divider: t("prototype.structured.palette.divider"),
+    Badge: t("prototype.structured.palette.badge"),
   };
   const prototypePaletteLabels = {
     Freeform: getDictionaryValue(document.locale, "prototype.structured.palette.freeform"),
@@ -1662,6 +1985,8 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     Input: getDictionaryValue(document.locale, "prototype.structured.palette.input"),
     Button: getDictionaryValue(document.locale, "prototype.structured.palette.button"),
     Table: getDictionaryValue(document.locale, "prototype.structured.palette.table"),
+    Divider: getDictionaryValue(document.locale, "prototype.structured.palette.divider"),
+    Badge: getDictionaryValue(document.locale, "prototype.structured.palette.badge"),
   };
   const layerTreeLabels = {
     tree: t("prototype.structured.layers.tree"),
@@ -2205,12 +2530,14 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={structuredPrototypeCollisionDetection}
+      collisionDetection={captureStructuredPrototypeDragPointer}
       measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
       onDragStart={handleDragStart}
+      onDragMove={handleDragMove}
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
       onDragCancel={() => {
+        activeDragPointerStateRef.current = { kind: "unknown", coordinates: null };
         const activeInteraction = interactionRef.current;
         if (activeInteraction.kind === "move" && activeInteraction.source.kind === "layer") {
           endInteraction(activeInteraction.sessionId);
@@ -2433,13 +2760,13 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
             desktopClassName={cn(
               "grid min-h-0 border-r border-border-subtle bg-surface",
               mode === "design"
-                ? "grid-rows-[44px_minmax(112px,1fr)_44px_minmax(160px,1.4fr)_44px_minmax(150px,1fr)]"
+                ? "grid-rows-[44px_minmax(112px,1fr)_44px_minmax(160px,1.4fr)_minmax(180px,1fr)]"
                 : "grid-rows-[44px_minmax(130px,1fr)_44px_minmax(180px,1fr)]",
             )}
             drawerClassName={cn(
               "grid w-[min(90vw,20rem)] bg-surface",
               mode === "design"
-                ? "grid-rows-[44px_minmax(90px,0.8fr)_44px_minmax(120px,1.2fr)_44px_minmax(100px,1fr)]"
+                ? "grid-rows-[44px_minmax(90px,0.8fr)_44px_minmax(120px,1.2fr)_minmax(160px,1fr)]"
                 : "grid-rows-[44px_minmax(130px,1fr)_44px_minmax(180px,1fr)]",
             )}
             open={mobileDrawer === "left"}
@@ -2548,13 +2875,13 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
                   onMove={moveLayer}
                   onDropRefused={refuseLayerDrop}
                 />
-                <div className="flex items-center justify-between border-y border-border-subtle px-3 text-xs font-bold uppercase">
-                  {t("prototype.structured.components")}
-                  <span className="font-normal text-text-muted">
-                    {STRUCTURED_PROTOTYPE_PALETTE_TYPES.length}
-                  </span>
-                </div>
                 <div className="min-h-0 overflow-auto">
+                  <div className="flex items-center justify-between border-y border-border-subtle px-3 text-xs font-bold uppercase">
+                    {t("prototype.structured.components")}
+                    <span className="font-normal text-text-muted">
+                      {STRUCTURED_PROTOTYPE_PALETTE_TYPES.length}
+                    </span>
+                  </div>
                   <StructuredPrototypePalette
                     labels={paletteLabels}
                     forms={document.runtime.forms}
@@ -2565,6 +2892,21 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
                     controlsDisabled={interactionCapabilities.documentControlsDisabled}
                     onFormSelect={setPaletteFormId}
                     onInsert={insertPaletteNode}
+                  />
+                  <div className="flex items-center justify-between border-y border-border-subtle px-3 text-xs font-bold uppercase">
+                    {t("prototype.structured.library")}
+                    <span className="font-normal text-text-muted">
+                      {document.componentDefinitions.length}
+                    </span>
+                  </div>
+                  <StructuredPrototypeComponentLibrary
+                    definitions={document.componentDefinitions}
+                    disabled={interactionCapabilities.documentControlsDisabled}
+                    insertLabel={t("prototype.structured.library.insert")}
+                    deleteLabel={t("prototype.structured.library.delete")}
+                    emptyLabel={t("prototype.structured.library.empty")}
+                    onInsert={insertComponentInstance}
+                    onDelete={removeComponentDefinition}
                   />
                 </div>
               </>
@@ -2883,12 +3225,14 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
                     selectedCount={activeSelectedNodeIds.length}
                     disabled={interactionCapabilities.documentControlsDisabled}
                     canDelete={activeSelectedNodeIds.length > 0}
+                    canSaveAsComponent={canSaveSelectedNodeAsComponent}
                     placementModeAvailable={selectedNodePlacementModeAvailable}
                     isRuntimeBoundTable={selectedNodeIsRuntimeBoundTable}
                     runtimeTable={selectedRuntimeTable}
                     onCapturePlacementFrame={captureSelectedNodePlacementFrame}
                     onApply={applyInspectorCommands}
                     onDelete={() => void deleteSelectedNodes()}
+                    onSaveAsComponent={saveNodeAsComponent}
                   />
                 ) : (
                   <StructuredPrototypeAiPanel
@@ -3004,6 +3348,17 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
             kind="palette"
             document={document}
             node={activePaletteDragNode}
+            runtimeState={runtime.state}
+            viewModel={runtime.viewModel}
+            viewportWidth={activeOverlayViewportWidth}
+            formValues={formValues}
+            previewScale={effectivePreviewScale}
+          />
+        ) : activeDrag?.kind === "component" && activeComponentDragNode !== null ? (
+          <StructuredPrototypeNodeDragOverlay
+            kind="component"
+            document={document}
+            node={activeComponentDragNode}
             runtimeState={runtime.state}
             viewModel={runtime.viewModel}
             viewportWidth={activeOverlayViewportWidth}

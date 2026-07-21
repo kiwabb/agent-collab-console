@@ -40,6 +40,7 @@ from app.application.structured_prototype_contracts import (
     AllPredicateV1,
     ComparePredicateV1,
     CreateEntityEffectV1,
+    DefineComponentCommandV1,
     DeletePageCommandV1,
     DomainCommandBatchV1,
     DomainCommandV1,
@@ -55,6 +56,7 @@ from app.application.structured_prototype_contracts import (
     GridNodeV1,
     InputNodeV1,
     InsertNodeCommandV1,
+    InstantiateComponentCommandV1,
     LiteralExpressionV1,
     MoveNodeCommandV1,
     NavigateEffectV1,
@@ -63,6 +65,7 @@ from app.application.structured_prototype_contracts import (
     PrototypeFlowV1,
     PrototypePageV1,
     RemoveBehaviorRuleCommandV1,
+    RemoveComponentDefinitionCommandV1,
     RemoveNodeCommandV1,
     RenamePageCommandV1,
     ReplaceBehaviorRuleCommandV1,
@@ -2400,6 +2403,14 @@ class StructuredPrototypeAiService:
             | _runtime_scope_ids(_runtime_scope_slice(document, allowed_node_ids))
         )
         for command in batch.commands:
+            if isinstance(
+                command,
+                (DefineComponentCommandV1, RemoveComponentDefinitionCommandV1),
+            ):
+                raise StructuredPrototypeAiServiceError(
+                    "scope_violation",
+                    "prototype AI component definition commands require document scope",
+                )
             if isinstance(command, AddPageCommandV1):
                 if selection.scope != "page" or command.after_page_id != page.id:
                     raise StructuredPrototypeAiServiceError(
@@ -3160,6 +3171,20 @@ def _command_existing_ids(command: DomainCommandV1) -> set[str]:
             command.entity_id,
             command.field_id,
         }
+    if isinstance(command, InstantiateComponentCommandV1):
+        return (
+            {command.parent.node_id}
+            if isinstance(command.parent, ExistingNodeRefV1)
+            else set()
+        )
+    if isinstance(
+        command,
+        (DefineComponentCommandV1, RemoveComponentDefinitionCommandV1),
+    ):
+        raise StructuredPrototypeAiServiceError(
+            "scope_validation_unsupported",
+            "prototype AI component definition commands require document scope",
+        )
     raise StructuredPrototypeAiServiceError(
         "scope_validation_unsupported",
         f"prototype AI command scope validation does not support {command.kind}",

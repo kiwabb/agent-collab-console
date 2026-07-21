@@ -1246,6 +1246,113 @@ def test_page_scope_accepts_its_page_commands_and_selection_scope_refuses_them(
     assert error.value.code == "scope_violation"
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        {
+            "kind": "defineComponent",
+            "key": "ai-summary-card",
+            "sourceNode": {
+                "kind": "existing",
+                "nodeId": fixture_id("title-list"),
+            },
+        },
+        {
+            "kind": "removeComponentDefinition",
+            "componentId": fixture_id("ai-component-definition"),
+        },
+    ],
+)
+def test_component_definition_commands_require_document_scope(
+    command: dict[str, object],
+) -> None:
+    document = _new_document().materialize(fixture_id("ai-component-scope-document"))
+    batch = DomainCommandBatchV1.model_validate(
+        {
+            "commandContractVersion": 1,
+            "summary": "Edit component definition",
+            "commands": [command],
+        },
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+    document_selection = PrototypeAiSelectionV1(
+        scope="document",
+        page_id=None,
+        selected_node_ids=[],
+        flow_id=None,
+        viewport="desktop",
+    )
+    StructuredPrototypeAiService._validate_command_scope(
+        document,
+        batch,
+        document_selection,
+    )
+    for selection in (
+        _page_selection(),
+        PrototypeAiSelectionV1(
+            scope="selection",
+            page_id=fixture_id("page-list"),
+            selected_node_ids=[fixture_id("title-list")],
+            flow_id=None,
+            viewport="desktop",
+        ),
+    ):
+        with pytest.raises(StructuredPrototypeAiServiceError) as error:
+            StructuredPrototypeAiService._validate_command_scope(document, batch, selection)
+        assert error.value.code == "scope_violation"
+
+
+def test_component_instantiation_scope_validates_only_the_target_parent() -> None:
+    document = _new_document().materialize(fixture_id("ai-component-instance-document"))
+
+    def batch_for(parent_id: str) -> DomainCommandBatchV1:
+        return DomainCommandBatchV1.model_validate(
+            {
+                "commandContractVersion": 1,
+                "summary": "Insert reusable component",
+                "commands": [
+                    {
+                        "kind": "instantiateComponent",
+                        "componentId": fixture_id("ai-component-definition"),
+                        "parent": {"kind": "existing", "nodeId": parent_id},
+                        "index": 0,
+                    }
+                ],
+            },
+            strict=True,
+            by_alias=True,
+            by_name=False,
+        )
+
+    page_selection = _page_selection()
+    StructuredPrototypeAiService._validate_command_scope(
+        document,
+        batch_for(fixture_id("root-list")),
+        page_selection,
+    )
+    selection = PrototypeAiSelectionV1(
+        scope="selection",
+        page_id=fixture_id("page-list"),
+        selected_node_ids=[fixture_id("root-list")],
+        flow_id=None,
+        viewport="desktop",
+    )
+    StructuredPrototypeAiService._validate_command_scope(
+        document,
+        batch_for(fixture_id("root-list")),
+        selection,
+    )
+    with pytest.raises(StructuredPrototypeAiServiceError) as error:
+        StructuredPrototypeAiService._validate_command_scope(
+            document,
+            batch_for(fixture_id("root-detail")),
+            page_selection,
+        )
+    assert error.value.code == "scope_violation"
+
+
 def test_ai_node_name_scope_accepts_only_nodes_inside_the_selection() -> None:
     document = _new_document().materialize(fixture_id("ai-node-name-document"))
     selection = PrototypeAiSelectionV1(

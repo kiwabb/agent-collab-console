@@ -173,8 +173,113 @@ def test_renderer_refuses_a_tampered_bundle_manifest(tmp_path: Path) -> None:
     bundle.write_bytes(bundle.read_bytes() + b"\n// tampered")
 
     with pytest.raises(PrototypeRendererWorkerError) as error:
-        PrototypeRendererWorker(
-            manifest_path=target / "prototype_renderer_worker.manifest.json"
-        )
+        PrototypeRendererWorker(manifest_path=target / "prototype_renderer_worker.manifest.json")
 
     assert error.value.code == "renderer_worker_asset_hash_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_renderer_renders_divider_and_badge_nodes() -> None:
+    from app.application.structured_prototype_contracts import (
+        execute_command_batch,
+        parse_command_batch_json,
+    )
+
+    def _layout() -> dict[str, object]:
+        auto = {"unit": "auto", "value": None}
+        return {
+            "width": auto,
+            "minWidth": None,
+            "maxWidth": None,
+            "height": auto,
+            "minHeight": None,
+            "maxHeight": None,
+            "grow": 0,
+            "shrink": 1,
+            "alignSelf": "stretch",
+        }
+
+    import json
+
+    batch = parse_command_batch_json(
+        json.dumps(
+            {
+                "commandContractVersion": 1,
+                "summary": "插入分隔线与徽章",
+                "commands": [
+                    {
+                        "kind": "insertNode",
+                        "parent": {"kind": "existing", "nodeId": fixture_id("root-list")},
+                        "slot": None,
+                        "index": 1,
+                        "node": {
+                            "newNodeKey": "render-divider",
+                            "type": "Divider",
+                            "name": "分隔线",
+                            "visibility": "visible",
+                            "layoutItem": _layout(),
+                            "responsive": [],
+                            "spacing": 20,
+                            "tone": "muted",
+                        },
+                    },
+                    {
+                        "kind": "insertNode",
+                        "parent": {"kind": "existing", "nodeId": fixture_id("root-list")},
+                        "slot": None,
+                        "index": 2,
+                        "node": {
+                            "newNodeKey": "render-badge",
+                            "type": "Badge",
+                            "name": "状态徽章",
+                            "visibility": "visible",
+                            "layoutItem": _layout(),
+                            "responsive": [],
+                            "label": "待审批",
+                            "tone": "warning",
+                            "iconName": None,
+                        },
+                    },
+                ],
+            }
+        )
+    )
+    result = execute_command_batch(
+        procurement_document(),
+        batch,
+        draft_id=fixture_id("draft"),
+        client_request_id=fixture_id("render-divider-badge"),
+    )
+    worker = PrototypeRendererWorker()
+    manifest = _input_manifest(worker)
+    manifest["documentObjectHash"] = document_hash(result.document)
+
+    rendered = await worker.render(
+        request_id=fixture_id("renderer-divider-badge"),
+        artifact_id=fixture_id("renderer-divider-badge-artifact"),
+        input_manifest=manifest,
+        document=document_payload(result.document),
+    )
+
+    index = next(file.content for file in rendered.files if file.relative_path == "index.html")
+    styles = next(file.content for file in rendered.files if file.relative_path == "styles.css")
+    allocated = dict(result.allocated_entity_ids)
+    assert (
+        f'data-prototype-node-id="{allocated["render-divider"]}" '
+        'data-prototype-node-type="Divider" '
+        'class="prototype-divider" role="separator">'
+        '<span class="prototype-divider-line prototype-divider-line-muted"></span>'
+    ).encode() in index
+    assert (
+        f'data-prototype-node-id="{allocated["render-badge"]}" '
+        'data-prototype-node-type="Badge" '
+        'class="prototype-badge prototype-badge-warning">待审批</span>'
+    ).encode() in index
+    assert f'[data-prototype-node-id="{allocated["render-divider"]}"]'.encode() in styles
+    assert b"padding:20px 0" in styles
+    assert b".prototype-divider{width:100%}" in styles
+    assert (
+        b".prototype-divider-line{display:block;width:100%;height:1px;background:#c9d2ce}" in styles
+    )
+    assert b".prototype-divider-line-muted{background:#e6eae8}" in styles
+    assert b".prototype-badge-warning{background:#fff2d8;color:#936221}" in styles
