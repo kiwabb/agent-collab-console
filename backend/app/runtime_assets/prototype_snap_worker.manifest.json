@@ -2,9 +2,9 @@
   "manifestVersion": "prototype-snap-worker-manifest/v1",
   "protocolVersion": "prototype-snap-worker/v1",
   "snapSolverVersion": "structured-prototype-freeform-snap/v1",
-  "snapSolverSourceHash": "sha256:62e45d53f507f2b8846ac3000ef5199288f58dfccf11afad218c2aee671dcb37",
+  "snapSolverSourceHash": "sha256:0cc1fcbd431be45d9e76da2e66bcc88ba31ac8c72dbbf6ab5693d11780726bbf",
   "bundleFile": "prototype_snap_worker.mjs",
-  "bundleHash": "sha256:2e978026f5df35d97b2bd63ac9e3e37f98e39f56401810d04cc7ee5c1da7fe90",
+  "bundleHash": "sha256:07fa0ca7e7da799df9a55f219e22ebd0c5a22a0b36d445919f6873bcca3e2a1f",
   "bundleByteSize": 90822,
   "buildTool": "esbuild@0.28.1",
   "target": "node20",
@@ -51,8 +51,8 @@
     },
     {
       "path": "src/features/prototype/structured/types.ts",
-      "hash": "sha256:00ec763620e2f22e654242a0f996544abb47ae61e96856ff64d3e9faf941c684",
-      "byteSize": 32673
+      "hash": "sha256:0a0d11cdee144ba4ecca542852ec61a717a20d5f6bae0109ae95ec2839d4ce65",
+      "byteSize": 36373
     },
     {
       "path": "src/lib/utils.tsx",

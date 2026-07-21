@@ -153,7 +153,10 @@ test("share page renders the version-aware viewer with a sandboxed iframe", () =
   );
   assert.match(page, /<StructuredPrototypeShareViewer documentId=\{documentId\} \/>/);
   assert.match(shareViewer, /sandbox="allow-scripts allow-same-origin"/);
-  assert.match(shareViewer, /structured-prototype-public\/\$\{encodeURIComponent\(documentId\)\}\/current\/index\.html/);
+  assert.match(
+    shareViewer,
+    /structured-prototype-public\/\$\{encodeURIComponent\(documentId\)\}\/current\/index\.html/,
+  );
 });
 
 test("publish flow carries an optional release note into the revision summary", () => {
@@ -194,6 +197,12 @@ test("prototypes api exposes revision history surface", () => {
   assert.match(api, /export async function listStructuredPrototypeRevisions\b/);
   assert.match(api, /export async function diffStructuredPrototypeRevisions\b/);
   assert.match(api, /export async function rollbackStructuredPrototypePublication\b/);
-  assert.match(api, /structured-prototype-documents\/\$\{encodeURIComponent\(documentId\)\}\/revisions/);
-  assert.match(api, /structured-prototype-documents\/\$\{encodeURIComponent\(documentId\)\}\/rollback/);
+  assert.match(
+    api,
+    /structured-prototype-documents\/\$\{encodeURIComponent\(documentId\)\}\/revisions/,
+  );
+  assert.match(
+    api,
+    /structured-prototype-documents\/\$\{encodeURIComponent\(documentId\)\}\/rollback/,
+  );
 });

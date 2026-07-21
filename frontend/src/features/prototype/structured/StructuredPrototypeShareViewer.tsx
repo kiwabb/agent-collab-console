@@ -97,7 +97,10 @@ export function StructuredPrototypeShareViewer({ documentId }: { documentId: str
             </label>
           </div>
           {viewingArchived && selected.summary.length > 0 && (
-            <p className="truncate text-right text-[11px] text-neutral-500" title={selected.summary}>
+            <p
+              className="truncate text-right text-[11px] text-neutral-500"
+              title={selected.summary}
+            >
               {selected.summary}
             </p>
           )}

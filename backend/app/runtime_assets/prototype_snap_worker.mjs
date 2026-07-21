@@ -1565,7 +1565,7 @@ function resolveStructuredPrototypeFreeformMoveSnap({
 
 // src/features/prototype/structured/structuredPrototypeSnapBuildIdentity.ts
 var STRUCTURED_PROTOTYPE_SNAP_SOLVER_VERSION = "structured-prototype-freeform-snap/v1";
-var STRUCTURED_PROTOTYPE_SNAP_SOURCE_HASH = "sha256:62e45d53f507f2b8846ac3000ef5199288f58dfccf11afad218c2aee671dcb37";
+var STRUCTURED_PROTOTYPE_SNAP_SOURCE_HASH = "sha256:0cc1fcbd431be45d9e76da2e66bcc88ba31ac8c72dbbf6ab5693d11780726bbf";
 
 // src/features/prototype/structured/structuredPrototypeFreeformMoveReplay.ts
 var SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;

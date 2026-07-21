@@ -187,7 +187,8 @@ export function StructuredPrototypeReleaseHistoryDialog({
 
   const revisions: StructuredPrototypePublishedRevision[] =
     fetchState.kind === "ready" ? fetchState.history.revisions : [];
-  const currentRevisionNo = fetchState.kind === "ready" ? fetchState.history.currentRevisionNo : null;
+  const currentRevisionNo =
+    fetchState.kind === "ready" ? fetchState.history.currentRevisionNo : null;
   const selected =
     revisions.find((entry) => entry.revisionNo === selectedRevisionNo) ?? revisions[0] ?? null;
 
@@ -296,81 +297,81 @@ export function StructuredPrototypeReleaseHistoryDialog({
         ) : (
           <div className="grid min-h-0 grid-cols-1 gap-3 sm:grid-cols-[16rem_minmax(0,1fr)]">
             <div className="flex min-h-0 flex-col gap-2">
-            <ol
-              className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1"
-              aria-label={t("prototype.structured.history.title")}
-            >
-              {revisions.map((entry) => {
-                const isSelected = selected?.revisionNo === entry.revisionNo;
-                return (
-                  <li key={entry.revisionId}>
-                    <button
-                      type="button"
-                      className={cn(
-                        "w-full cursor-pointer rounded-md border px-3 py-2 text-left",
-                        isSelected
-                          ? "border-brand bg-brand-bg"
-                          : "border-border-muted bg-surface-raised hover:bg-surface-hover",
-                      )}
-                      aria-pressed={isSelected}
-                      onClick={() => setSelectedRevisionNo(entry.revisionNo)}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-bold text-foreground">
-                          {t("prototype.structured.history.revision", { no: entry.revisionNo })}
-                        </span>
-                        {entry.isCurrent && (
-                          <span className="rounded-full bg-brand px-2 py-0.5 text-[10px] font-semibold text-black">
-                            {t("prototype.structured.history.current")}
-                          </span>
+              <ol
+                className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1"
+                aria-label={t("prototype.structured.history.title")}
+              >
+                {revisions.map((entry) => {
+                  const isSelected = selected?.revisionNo === entry.revisionNo;
+                  return (
+                    <li key={entry.revisionId}>
+                      <button
+                        type="button"
+                        className={cn(
+                          "w-full cursor-pointer rounded-md border px-3 py-2 text-left",
+                          isSelected
+                            ? "border-brand bg-brand-bg"
+                            : "border-border-muted bg-surface-raised hover:bg-surface-hover",
                         )}
-                      </div>
-                      <div className="mt-1 text-xs text-text-muted">
-                        {formatPublishedAt(locale, entry.publishedAt)}
-                      </div>
-                      <div className="mt-1 line-clamp-2 text-xs text-text-muted">
-                        {entry.summary}
-                      </div>
-                      <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                        {t(SOURCE_LABEL_KEYS[entry.source])}
-                      </div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
-            {fetchState.kind === "ready" && fetchState.history.events.length > 0 && (
-              <div className="max-h-36 shrink-0 overflow-y-auto rounded-md border border-border-muted bg-surface-raised p-2 text-xs">
-                <p className="mb-1 font-bold uppercase tracking-wide text-text-muted">
-                  {t("prototype.structured.history.timeline")}
-                </p>
-                <ol className="grid gap-1">
-                  {fetchState.history.events.map(
-                    (event: StructuredPrototypePublicationEvent, index: number) => (
-                      <li
-                        key={`${event.kind}-${event.revisionNo}-${event.occurredAt}-${index}`}
-                        className="flex items-baseline justify-between gap-2"
+                        aria-pressed={isSelected}
+                        onClick={() => setSelectedRevisionNo(entry.revisionNo)}
                       >
-                        <span
-                          className={cn(event.kind === "rollback" && "text-amber-600")}
-                          title={event.summary ?? undefined}
-                        >
-                          {t(
-                            event.kind === "publish"
-                              ? "prototype.structured.history.timeline.publish"
-                              : "prototype.structured.history.timeline.rollback",
-                            { no: event.revisionNo },
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-bold text-foreground">
+                            {t("prototype.structured.history.revision", { no: entry.revisionNo })}
+                          </span>
+                          {entry.isCurrent && (
+                            <span className="rounded-full bg-brand px-2 py-0.5 text-[10px] font-semibold text-black">
+                              {t("prototype.structured.history.current")}
+                            </span>
                           )}
-                        </span>
-                        <span className="shrink-0 text-text-muted">
-                          {formatPublishedAt(locale, event.occurredAt)}
-                        </span>
-                      </li>
-                    ),
-                  )}
-                </ol>
-              </div>
-            )}
+                        </div>
+                        <div className="mt-1 text-xs text-text-muted">
+                          {formatPublishedAt(locale, entry.publishedAt)}
+                        </div>
+                        <div className="mt-1 line-clamp-2 text-xs text-text-muted">
+                          {entry.summary}
+                        </div>
+                        <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                          {t(SOURCE_LABEL_KEYS[entry.source])}
+                        </div>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+              {fetchState.kind === "ready" && fetchState.history.events.length > 0 && (
+                <div className="max-h-36 shrink-0 overflow-y-auto rounded-md border border-border-muted bg-surface-raised p-2 text-xs">
+                  <p className="mb-1 font-bold uppercase tracking-wide text-text-muted">
+                    {t("prototype.structured.history.timeline")}
+                  </p>
+                  <ol className="grid gap-1">
+                    {fetchState.history.events.map(
+                      (event: StructuredPrototypePublicationEvent, index: number) => (
+                        <li
+                          key={`${event.kind}-${event.revisionNo}-${event.occurredAt}-${index}`}
+                          className="flex items-baseline justify-between gap-2"
+                        >
+                          <span
+                            className={cn(event.kind === "rollback" && "text-amber-600")}
+                            title={event.summary ?? undefined}
+                          >
+                            {t(
+                              event.kind === "publish"
+                                ? "prototype.structured.history.timeline.publish"
+                                : "prototype.structured.history.timeline.rollback",
+                              { no: event.revisionNo },
+                            )}
+                          </span>
+                          <span className="shrink-0 text-text-muted">
+                            {formatPublishedAt(locale, event.occurredAt)}
+                          </span>
+                        </li>
+                      ),
+                    )}
+                  </ol>
+                </div>
+              )}
             </div>
             {selected && (
               <div className="flex min-h-0 flex-col gap-2">

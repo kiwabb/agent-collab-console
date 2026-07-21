@@ -1236,75 +1236,78 @@ export function useStructuredPrototypeStudio(
     studio.saving,
   ]);
 
-  const publish = useCallback(async (summary?: string | null): Promise<boolean> => {
-    const currentDraft = studio.draft;
-    if (!currentDraft || studio.saving || studio.runtimeRecovery !== null) return false;
-    const releaseNote = summary?.trim().slice(0, 200) || null;
-    setStudio((current) => ({ ...current, saving: true, error: null }));
-    const requestKey = structuredPrototypePublishRequestKey(
-      currentDraft.draftId,
-      currentDraft.headSequenceNo,
-      currentDraft.documentHash,
-    );
-    let descriptor: StructuredPrototypePendingOperation;
-    try {
-      descriptor = beginStructuredPrototypePendingOperation(projectId, {
-        operationKind: "publish",
-        resourceKind: "draft",
-        resourceId: currentDraft.draftId,
-        requestKey,
-      });
-    } catch (error) {
-      return reportMutationFailure("structured prototype publication persistence failed", error);
-    }
-    let activeDraft: StructuredPrototypeDraft;
-    let publication: StructuredPrototypePublication;
-    try {
-      const published = await publishStructuredPrototypeDraft(currentDraft.draftId, {
-        contractVersion: 1,
-        clientRequestId: descriptor.clientRequestId,
-        expectedHeadSequenceNo: currentDraft.headSequenceNo,
-        expectedDocumentHash: currentDraft.documentHash,
-        summary: releaseNote,
-      });
-      activeDraft = published.activeDraft;
-      publication = published;
-      finishStructuredPrototypePendingOperation(projectId, descriptor.clientRequestId);
-    } catch (error) {
-      let reconciled: ReconciledStudioOperation;
-      try {
-        reconciled = await reconcileAfterRequestFailure(descriptor);
-      } catch (recoveryError) {
-        return reportMutationFailure(
-          "structured prototype publication recovery failed",
-          recoveryError,
-        );
-      }
-      if (reconciled.kind !== "publication") {
-        return reportMutationFailure(
-          "structured prototype publication recovery failed",
-          operationResourceMismatch("publication recovered a non-publication resource"),
-        );
-      }
-      return applyReconciledOperation(reconciled);
-    }
-    try {
-      return await stageDraftAndRebuildRuntime(activeDraft, publication);
-    } catch (rebuildError) {
-      return reportMutationFailure(
-        "structured prototype publication runtime rebuild failed",
-        rebuildError,
+  const publish = useCallback(
+    async (summary?: string | null): Promise<boolean> => {
+      const currentDraft = studio.draft;
+      if (!currentDraft || studio.saving || studio.runtimeRecovery !== null) return false;
+      const releaseNote = summary?.trim().slice(0, 200) || null;
+      setStudio((current) => ({ ...current, saving: true, error: null }));
+      const requestKey = structuredPrototypePublishRequestKey(
+        currentDraft.draftId,
+        currentDraft.headSequenceNo,
+        currentDraft.documentHash,
       );
-    }
-  }, [
-    applyReconciledOperation,
-    projectId,
-    reportMutationFailure,
-    stageDraftAndRebuildRuntime,
-    studio.draft,
-    studio.runtimeRecovery,
-    studio.saving,
-  ]);
+      let descriptor: StructuredPrototypePendingOperation;
+      try {
+        descriptor = beginStructuredPrototypePendingOperation(projectId, {
+          operationKind: "publish",
+          resourceKind: "draft",
+          resourceId: currentDraft.draftId,
+          requestKey,
+        });
+      } catch (error) {
+        return reportMutationFailure("structured prototype publication persistence failed", error);
+      }
+      let activeDraft: StructuredPrototypeDraft;
+      let publication: StructuredPrototypePublication;
+      try {
+        const published = await publishStructuredPrototypeDraft(currentDraft.draftId, {
+          contractVersion: 1,
+          clientRequestId: descriptor.clientRequestId,
+          expectedHeadSequenceNo: currentDraft.headSequenceNo,
+          expectedDocumentHash: currentDraft.documentHash,
+          summary: releaseNote,
+        });
+        activeDraft = published.activeDraft;
+        publication = published;
+        finishStructuredPrototypePendingOperation(projectId, descriptor.clientRequestId);
+      } catch (error) {
+        let reconciled: ReconciledStudioOperation;
+        try {
+          reconciled = await reconcileAfterRequestFailure(descriptor);
+        } catch (recoveryError) {
+          return reportMutationFailure(
+            "structured prototype publication recovery failed",
+            recoveryError,
+          );
+        }
+        if (reconciled.kind !== "publication") {
+          return reportMutationFailure(
+            "structured prototype publication recovery failed",
+            operationResourceMismatch("publication recovered a non-publication resource"),
+          );
+        }
+        return applyReconciledOperation(reconciled);
+      }
+      try {
+        return await stageDraftAndRebuildRuntime(activeDraft, publication);
+      } catch (rebuildError) {
+        return reportMutationFailure(
+          "structured prototype publication runtime rebuild failed",
+          rebuildError,
+        );
+      }
+    },
+    [
+      applyReconciledOperation,
+      projectId,
+      reportMutationFailure,
+      stageDraftAndRebuildRuntime,
+      studio.draft,
+      studio.runtimeRecovery,
+      studio.saving,
+    ],
+  );
 
   const refreshPublication = useCallback(async (): Promise<void> => {
     const currentDraft = studio.draft;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import ClassVar
 
 import aiosqlite
 import pytest
@@ -58,15 +59,16 @@ def _text_insert_batch() -> DomainCommandBatchV1:
 
 
 class _ReplayReferenceFailingStore(AsyncStructuredPrototypeStore):
-    fail_replay_operation_kind: str | None = None
+    fail_replay_operation_kind: ClassVar[str | None] = None
 
+    @staticmethod
     async def _insert_object_reference(
-        self,
         conn: aiosqlite.Connection,
         reference: PrototypeObjectReference,
     ) -> None:
+        fail_replay_operation_kind = _ReplayReferenceFailingStore.fail_replay_operation_kind
         if (
-            self.fail_replay_operation_kind is not None
+            fail_replay_operation_kind is not None
             and reference.owner_kind == "replay_manifest"
         ):
             row = await (
@@ -75,12 +77,12 @@ class _ReplayReferenceFailingStore(AsyncStructuredPrototypeStore):
                     (reference.owner_id,),
                 )
             ).fetchone()
-            if row is not None and row[0] == self.fail_replay_operation_kind:
+            if row is not None and row[0] == fail_replay_operation_kind:
                 raise StructuredPrototypeStoreError(
                     "replay_manifest_registration_failed",
                     "test replay manifest registration failure",
                 )
-        await super()._insert_object_reference(conn, reference)
+        await AsyncStructuredPrototypeStore._insert_object_reference(conn, reference)
 
 
 def _service(
@@ -204,9 +206,10 @@ async def test_create_and_apply_commit_a_strict_replay_manifest_in_the_business_
 @pytest.mark.asyncio
 async def test_replay_reference_registration_failure_rolls_back_command_head(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = _ReplayReferenceFailingStore(tmp_path / "console.db")
-    store, _, service = _service(tmp_path, store=store)
+    _, _, service = _service(tmp_path, store=store)
     try:
         created = await service.create_document(
             project_id="project-1",
@@ -214,7 +217,11 @@ async def test_replay_reference_registration_failure_rolls_back_command_head(
             document=_new_document(),
         )
         original_draft = created.state.draft
-        store.fail_replay_operation_kind = "apply_command_batch"
+        monkeypatch.setattr(
+            _ReplayReferenceFailingStore,
+            "fail_replay_operation_kind",
+            "apply_command_batch",
+        )
 
         with pytest.raises(StructuredPrototypeServiceError) as error:
             await service.apply_command_batch(
@@ -446,9 +453,10 @@ async def test_runtime_operation_groups_have_shared_replay_manifests_and_keep_re
 @pytest.mark.asyncio
 async def test_runtime_replay_reference_failure_rolls_back_session_head(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = _ReplayReferenceFailingStore(tmp_path / "console.db")
-    store, _, service = _runtime_service(tmp_path, store=store)
+    _, _, service = _runtime_service(tmp_path, store=store)
     try:
         created = await service.create_document(
             project_id="project-1",
@@ -463,7 +471,11 @@ async def test_runtime_replay_reference_failure_rolls_back_session_head(
             actor_subject_id=None,
         )
         event_request_id = fixture_id("runtime-replay-failure-event")
-        store.fail_replay_operation_kind = "apply_runtime_event"
+        monkeypatch.setattr(
+            _ReplayReferenceFailingStore,
+            "fail_replay_operation_kind",
+            "apply_runtime_event",
+        )
 
         with pytest.raises(StructuredPrototypeServiceError) as error:
             await service.apply_runtime_event_batch(
@@ -500,6 +512,7 @@ async def test_runtime_replay_reference_failure_rolls_back_session_head(
 @pytest.mark.asyncio
 async def test_publish_replay_reference_failure_preserves_public_pointer(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = _ReplayReferenceFailingStore(tmp_path / "console.db")
     object_store = PrototypeObjectStore(tmp_path / "managed-data")
@@ -531,7 +544,11 @@ async def test_publish_replay_reference_failure_preserves_public_pointer(
         assert publish_reference.role == "publish-replay-manifest"
 
         baseline_draft = published.state.draft
-        store.fail_replay_operation_kind = "publish"
+        monkeypatch.setattr(
+            _ReplayReferenceFailingStore,
+            "fail_replay_operation_kind",
+            "publish",
+        )
         with pytest.raises(StructuredPrototypeServiceError) as error:
             await service.publish_draft(
                 draft_id=baseline_draft.id,

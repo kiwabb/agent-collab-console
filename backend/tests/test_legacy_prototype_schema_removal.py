@@ -39,8 +39,10 @@ async def test_schema_v12_drops_legacy_html_prototype_tables(tmp_path: Path) -> 
     store = AsyncSQLiteStore(db_path)
     try:
         await store._ensure_db()
-        conn = await store._get_conn()
-        version = await (await conn.execute("SELECT version FROM schema_version WHERE id = 1")).fetchone()
+        async_conn = await store._get_conn()
+        version = await (
+            await async_conn.execute("SELECT version FROM schema_version WHERE id = 1")
+        ).fetchone()
     finally:
         await store.close()
 

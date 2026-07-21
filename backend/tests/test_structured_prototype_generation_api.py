@@ -190,7 +190,9 @@ def test_generation_api_exposes_plan_review_preview_and_atomic_accept(
         ] == [("open-users", "dashboard")]
         assert planned_body["canConfirm"] is True
 
-        def operation_detail(operation_id: str) -> dict[str, object]:
+        def operation_detail(
+            operation_id: str,
+        ) -> structured_api.StructuredPrototypeOperationDetailResponseV1:
             response = client.get(f"/api/prototype-operations/{operation_id}")
             if response.status_code != 200:
                 portal.call(store.close)
@@ -199,20 +201,18 @@ def test_generation_api_exposes_plan_review_preview_and_atomic_accept(
             if events_response.status_code != 200:
                 portal.call(store.close)
                 pytest.fail(events_response.text)
-            events = events_response.json()["events"]
-            assert [event["eventNo"] for event in events] == list(range(len(events)))
-            payload: object = response.json()
-            assert isinstance(payload, dict)
-            result: dict[str, object] = {}
-            for key, item in payload.items():
-                assert isinstance(key, str)
-                result[key] = item
-            return result
+            events = structured_api.StructuredPrototypeOperationEventsResponseV1.model_validate_json(
+                events_response.content
+            ).events
+            assert [event.event_no for event in events] == list(range(len(events)))
+            return structured_api.StructuredPrototypeOperationDetailResponseV1.model_validate_json(
+                response.content
+            )
 
         planned_root_detail = operation_detail(planned.job.operation_id)
-        assert planned_root_detail["operation"]["status"] == "running"
-        assert planned_root_detail["replayManifest"] is None
-        assert planned_root_detail["childOperationIds"]
+        assert planned_root_detail.operation.status == "running"
+        assert planned_root_detail.replay_manifest is None
+        assert planned_root_detail.child_operation_ids
 
         assert planned.job.blueprint_object_hash is not None
         blueprint_descriptor = portal.call(
@@ -324,21 +324,21 @@ def test_generation_api_exposes_plan_review_preview_and_atomic_accept(
         ]
         assert ready_body["previewPath"].endswith("/preview/index.html")
         ready_root_detail = operation_detail(planned.job.operation_id)
-        discovered: dict[str, dict[str, object]] = {}
-        pending_operation_ids = list(ready_root_detail["childOperationIds"])
+        discovered: dict[str, structured_api.StructuredPrototypeOperationDetailResponseV1] = {}
+        pending_operation_ids = list(ready_root_detail.child_operation_ids)
         while pending_operation_ids:
             operation_id = pending_operation_ids.pop()
             if operation_id in discovered:
                 continue
             child_detail = operation_detail(operation_id)
             discovered[operation_id] = child_detail
-            pending_operation_ids.extend(child_detail["childOperationIds"])
+            pending_operation_ids.extend(child_detail.child_operation_ids)
         assert confirm_receipt["operationId"] in discovered
         assert {item["operationId"] for item in ready_body["items"]}.issubset(discovered)
         phase_step_kinds = {
-            tuple(step["stepKind"] for step in detail["steps"])
+            tuple(step.step_kind for step in detail.steps)
             for detail in discovered.values()
-            if detail["operation"]["operationKind"] == "generation_job"
+            if detail.operation.operation_kind == "generation_job"
         }
         assert ("freeze_context", "generate_foundation") in phase_step_kinds
         assert ("generate_pages",) in phase_step_kinds
@@ -389,12 +389,13 @@ def test_generation_api_exposes_plan_review_preview_and_atomic_accept(
         assert accepted["documentId"] == accepted["job"]["documentId"]
         assert accepted["headSequenceNo"] == 0
         accepted_root_detail = operation_detail(planned.job.operation_id)
-        assert accepted_root_detail["operation"]["status"] == "succeeded"
-        assert accepted_root_detail["replayManifest"]["operationId"] == (planned.job.operation_id)
-        assert accepted["operationId"] in accepted_root_detail["childOperationIds"]
+        assert accepted_root_detail.operation.status == "succeeded"
+        assert accepted_root_detail.replay_manifest is not None
+        assert accepted_root_detail.replay_manifest.operation_id == planned.job.operation_id
+        assert accepted["operationId"] in accepted_root_detail.child_operation_ids
         accepted_detail = operation_detail(accepted["operationId"])
-        assert accepted_detail["operation"]["operationKind"] == "create_document"
-        assert accepted_detail["operation"]["parentOperationId"] == planned.job.operation_id
+        assert accepted_detail.operation.operation_kind == "create_document"
+        assert accepted_detail.operation.parent_operation_id == planned.job.operation_id
 
         retried_accept = client.post(
             f"/api/prototype-document-generation-jobs/{job_id}/accept",

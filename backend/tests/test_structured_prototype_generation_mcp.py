@@ -14,6 +14,7 @@ from test_structured_prototype_generation_contracts import (
 
 import app.application.structured_prototype_generation_mcp as generation_mcp_module
 from app.adapters.async_sqlite_store import AsyncSQLiteStore
+from app.adapters.project_source_reader import RepositoryBoundary
 from app.adapters.prototype_object_store import canonical_json_bytes
 from app.application import audit
 from app.application.audit import recorders as audit_recorders
@@ -1393,10 +1394,14 @@ async def test_generation_mcp_close_waits_for_in_flight_repository_read(
     release = threading.Event()
     original = generation_mcp_module._list_project_files
 
-    def slow_list(*args: object, **kwargs: object) -> object:
+    def slow_list(
+        boundary: RepositoryBoundary,
+        request: generation_mcp_module._ListProjectFilesInput,
+        identity: dict[str, object],
+    ) -> generation_mcp_module._RepositoryToolExecution:
         started.set()
         assert release.wait(timeout=2)
-        return original(*args, **kwargs)
+        return original(boundary, request, identity)
 
     monkeypatch.setattr(generation_mcp_module, "_list_project_files", slow_list)
     handle_task = asyncio.create_task(
@@ -1443,10 +1448,14 @@ async def test_cancelled_repository_scan_consumes_quota_and_records_safe_audit(
     release = threading.Event()
     original = generation_mcp_module._list_project_files
 
-    def slow_list(*args: object, **kwargs: object) -> object:
+    def slow_list(
+        boundary: RepositoryBoundary,
+        request: generation_mcp_module._ListProjectFilesInput,
+        identity: dict[str, object],
+    ) -> generation_mcp_module._RepositoryToolExecution:
         started.set()
         assert release.wait(timeout=2)
-        return original(*args, **kwargs)
+        return original(boundary, request, identity)
 
     monkeypatch.setattr(generation_mcp_module, "_list_project_files", slow_list)
     handle_task = asyncio.create_task(
