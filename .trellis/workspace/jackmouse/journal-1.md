@@ -1455,3 +1455,37 @@ Completed the domain-neutral structured prototype generation, editable Design an
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: Complete physical structured prototype deletion
+
+**Date**: 2026-07-24
+**Task**: Complete physical structured prototype deletion
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+Made project prototype deletion physically purge managed objects, render files, and orphan generation snapshot refs through a resumable deletion saga; added startup recovery, fail-closed retry semantics, cross-layer error mapping, regression tests, and executable specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `60a944a9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
