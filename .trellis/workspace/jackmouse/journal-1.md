@@ -20,7 +20,11 @@
 
 ### Main Changes
 
-(Add details)
+- Corrected the Project Conductor state API route and replaced fake zero-value fallbacks with explicit loading, stale-data, and error states.
+- Bounded hot, warm, and cold memory growth; stopped scheduled-review recursion; and repaired legacy recursive review data with scoped, transactional migration logic.
+- Added revision-based compare-and-swap persistence plus retry limits so concurrent Conductor writes cannot silently overwrite each other.
+- Isolated project-switch requests and unmounted loop callbacks so an old project cannot invalidate or stall the active page.
+- Simplified the dashboard hierarchy and added progressive disclosure for long events and memory sections.
 
 ### Git Commits
 
@@ -30,7 +34,12 @@
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] 102 related backend tests
+- [OK] 833 frontend tests
+- [OK] Backend mypy and Ruff checks
+- [OK] Frontend typecheck, ESLint, and Prettier checks
+- [OK] Frontend and backend HTTP health checks returned 200
+- [OK] Independent review found no P0/P1 blockers
 
 ### Status
 
@@ -1477,6 +1486,40 @@ Made project prototype deletion physically purge managed objects, render files, 
 | Hash | Message |
 |------|---------|
 | `60a944a9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 25: Repair Project Conductor state and dashboard
+
+**Date**: 2026-07-24
+**Task**: Repair Project Conductor state and dashboard
+**Package**: ccgui
+**Branch**: `main`
+
+### Summary
+
+Fixed Project Conductor API contract, bounded durable review state, concurrency-safe persistence, scoped migration recovery, and explicit frontend loading/error states.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `85b88280c681bed56f3956a12cd16dd57e3c4eec` | (see git log) |
 
 ### Testing
 
