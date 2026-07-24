@@ -1,120 +1,97 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Bot, Play, RadioTower, Wrench } from "lucide-react";
 
-import { API_BASE } from "@/lib/api/fetch";
-import { startProjectConductorLoop } from "@/lib/api/projects";
-import type { ProjectConductorLoopResult, ProjectConductorToolEvent } from "@/lib/types";
-import { cn } from "@/lib/utils";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
+import { ProjectConductorExpandableText } from "@/features/projects/components/ProjectConductorExpandableText";
+import { startProjectConductorLoop } from "@/lib/api/projects";
+import type { ProjectConductorLoopResult, ProjectConductorToolEvent } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { useI18n } from "@/providers/I18nProvider";
-
-import {
-  parseProjectConductorRecord,
-  parseProjectConductorToolEvent,
-  readProjectConductorToolEvents,
-} from "./projectConductorStreamEvents";
 
 type ThreadEvent = {
   id: string;
   role: string;
   content: string;
-  status?: string | undefined;
-  tool_events?: ProjectConductorToolEvent[] | undefined;
+  status: string;
 };
+
+function toolResultText(result: unknown): string {
+  const text = JSON.stringify(result, null, 2);
+  return text === undefined ? String(result) : text;
+}
 
 export function ProjectConductorThreadDock({
   projectId,
   onLoopDone,
 }: {
   projectId: string;
-  onLoopDone?: () => void;
+  onLoopDone?: (completedProjectId: string) => void;
 }) {
+  const promptId = useId();
   const { addToast } = useToast();
   const { t } = useI18n();
   const [prompt, setPrompt] = useState("");
   const [running, setRunning] = useState(false);
-  const [connected, setConnected] = useState(false);
   const [events, setEvents] = useState<ThreadEvent[]>([]);
   const [tools, setTools] = useState<ProjectConductorToolEvent[]>([]);
   const [latestResult, setLatestResult] = useState<ProjectConductorLoopResult | null>(null);
-  const isProjectConductorStreaming = connected || running;
-
-  const streamUrl = useMemo(
-    () => `${API_BASE}/codex/projects/${encodeURIComponent(projectId)}/conductor/stream`,
-    [projectId],
-  );
-
-  const connectStream = useCallback(() => {
-    const source = new EventSource(streamUrl);
-    source.addEventListener("open", () => setConnected(true));
-    source.addEventListener("event", (message) => {
-      const parsed = parseProjectConductorRecord(message);
-      if (!parsed) return;
-      setEvents((prev) =>
-        [
-          {
-            id: String(parsed["task_id"] ?? parsed["created_at"] ?? `${Date.now()}-${prev.length}`),
-            role: String(parsed["role"] ?? "project_conductor"),
-            content: String(parsed["content"] ?? ""),
-            status: typeof parsed["status"] === "string" ? parsed["status"] : undefined,
-            tool_events: readProjectConductorToolEvents(parsed["tool_events"]),
-          },
-          ...prev,
-        ].slice(0, 12),
-      );
-    });
-    source.addEventListener("tool", (message) => {
-      const toolEvent = parseProjectConductorToolEvent(message);
-      if (!toolEvent) return;
-      setTools((prev) => [toolEvent, ...prev].slice(0, 12));
-    });
-    source.addEventListener("done", () => {
-      setConnected(false);
-      source.close();
-    });
-    source.onerror = () => {
-      setConnected(false);
-      source.close();
-    };
-    return source;
-  }, [streamUrl]);
+  const mountedRef = useRef(false);
+  const loopRequestRef = useRef(0);
+  const isProjectConductorStreaming = running;
 
   useEffect(() => {
-    const source = connectStream();
-    return () => source.close();
-  }, [connectStream]);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      loopRequestRef.current += 1;
+    };
+  }, []);
 
   const handleStartLoop = useCallback(async () => {
+    const requestId = ++loopRequestRef.current;
     setRunning(true);
     try {
       const result = await startProjectConductorLoop(projectId, prompt.trim() || undefined);
+      if (!mountedRef.current || loopRequestRef.current !== requestId) return;
       setLatestResult(result);
-      setTools((prev) => [...result.tool_events, ...prev].slice(0, 12));
+      setEvents((previous) =>
+        [
+          {
+            id: result.task_id,
+            role: "project_conductor",
+            content: result.answer,
+            status: result.status,
+          },
+          ...previous,
+        ].slice(0, 12),
+      );
+      setTools((previous) => [...result.tool_events, ...previous].slice(0, 12));
       setPrompt("");
-      onLoopDone?.();
-      const source = connectStream();
-      setTimeout(() => source.close(), 2500);
-    } catch (err) {
+      onLoopDone?.(projectId);
+    } catch (error) {
+      if (!mountedRef.current || loopRequestRef.current !== requestId) return;
       addToast({
         type: "error",
         title: t("projectConductor.toast.loopFailed"),
-        message: err instanceof Error ? err.message : String(err),
+        message: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      setRunning(false);
+      if (mountedRef.current && loopRequestRef.current === requestId) {
+        setRunning(false);
+      }
     }
-  }, [projectId, prompt, onLoopDone, connectStream, addToast, t]);
+  }, [projectId, prompt, onLoopDone, addToast, t]);
 
   return (
-    <div
+    <section
       data-density="project-conductor-thread-dock"
       className={cn(
-        "relative overflow-hidden rounded-2xl border border-border-subtle bg-surface/75 p-4 shadow-inner shadow-black/5 transition-colors",
+        "relative overflow-hidden border-y border-border-subtle bg-surface px-4 py-5",
         isProjectConductorStreaming && "motion-essential border-brand/35 bg-brand-muted/10",
       )}
     >
@@ -124,157 +101,160 @@ export function ProjectConductorThreadDock({
           className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
         />
       )}
+
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="flex items-start gap-3">
           <div
             className={cn(
-              "size-9 rounded-2xl border border-brand/20 bg-brand/10 flex items-center justify-center text-brand transition-colors",
+              "flex size-9 shrink-0 items-center justify-center border border-brand/20 bg-brand/10 text-brand",
               isProjectConductorStreaming && "border-brand/35 bg-brand/15",
             )}
           >
-            <RadioTower size={17} />
+            <RadioTower size={17} aria-hidden />
           </div>
           <div>
-            <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted">
+            <h2 className="text-sm font-bold text-foreground">
               {t("projectConductor.threadDock.title")}
-            </h3>
-            <p className="mt-1 text-xs text-text-muted">
-              {connected
-                ? t("projectConductor.threadDock.listening")
-                : t("projectConductor.threadDock.replayHint")}
+            </h2>
+            <p className="mt-1 text-xs leading-5 text-text-muted">
+              {t("projectConductor.threadDock.replayHint")}
             </p>
           </div>
         </div>
         <div
           className={cn(
-            "flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-text-muted transition-colors",
-            isProjectConductorStreaming && "text-brand",
+            "flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-muted",
+            running && "text-brand",
           )}
         >
-          {isProjectConductorStreaming ? (
-            <AgentThinkingIndicator phase={running ? "dispatching" : "streaming"} size={14} />
+          {running ? (
+            <AgentThinkingIndicator phase="dispatching" size={14} />
           ) : (
             <span aria-hidden className="size-2 rounded-full bg-text-muted" />
           )}
           {running
             ? t("projectConductor.threadDock.status.running")
-            : connected
-              ? t("projectConductor.threadDock.status.streaming")
-              : t("projectConductor.threadDock.status.idle")}
+            : t("projectConductor.threadDock.status.idle")}
         </div>
       </div>
 
-      <div className="mt-4 flex gap-2">
-        <Input
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") void handleStartLoop();
-          }}
-          placeholder={t("projectConductor.threadDock.promptPlaceholder")}
-          className="bg-surface-input border-border-subtle"
-        />
-        <Button
-          data-density={
-            running ? "project-conductor-loop-dispatch-cta" : "project-conductor-loop-cta"
-          }
-          onClick={() => void handleStartLoop()}
-          disabled={running}
-          className={cn("gap-2 shrink-0", running && "motion-essential")}
-        >
-          {running ? <AgentThinkingIndicator phase="dispatching" size={14} /> : <Play size={14} />}
-          {t("projectConductor.threadDock.startLoop")}
-        </Button>
+      <div className="mt-4">
+        <label htmlFor={promptId} className="block text-xs font-semibold text-text-secondary">
+          {t("projectConductor.threadDock.promptLabel")}
+        </label>
+        <p id={`${promptId}-description`} className="mt-1 text-xs leading-5 text-text-muted">
+          {t("projectConductor.threadDock.promptDescription")}
+        </p>
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+          <Input
+            id={promptId}
+            aria-describedby={`${promptId}-description`}
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !running) void handleStartLoop();
+            }}
+            placeholder={t("projectConductor.threadDock.promptPlaceholder")}
+            className="min-h-11 border-border-subtle bg-surface-input"
+          />
+          <Button
+            data-density={
+              running ? "project-conductor-loop-dispatch-cta" : "project-conductor-loop-cta"
+            }
+            onClick={() => void handleStartLoop()}
+            disabled={running}
+            className={cn("min-h-11 shrink-0 gap-2", running && "motion-essential")}
+          >
+            {running ? (
+              <AgentThinkingIndicator phase="dispatching" size={14} />
+            ) : (
+              <Play size={14} aria-hidden />
+            )}
+            {t("projectConductor.threadDock.startLoop")}
+          </Button>
+        </div>
       </div>
 
       {latestResult && (
-        <div className="mt-3 rounded-xl border border-brand/15 bg-brand/5 p-3 text-xs leading-relaxed text-text-secondary">
-          <span className="font-black text-text-primary">
+        <div className="mt-4 border-l-2 border-brand bg-brand/5 px-4 py-3">
+          <div className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-brand">
             {t("projectConductor.threadDock.latest")}
-          </span>{" "}
-          {latestResult.answer}
+          </div>
+          <ProjectConductorExpandableText text={latestResult.answer} />
         </div>
       )}
 
-      <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-text-muted">
-            <Bot size={13} /> {t("projectConductor.threadDock.turns")}
+      <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-xs font-bold text-foreground">
+            <Bot size={14} className="text-brand" aria-hidden />
+            {t("projectConductor.threadDock.turns")}
           </div>
           {events.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-border-subtle p-3 text-xs text-text-muted">
+            <p className="mt-3 border-l-2 border-border-subtle pl-3 text-xs leading-5 text-text-muted">
               {t("projectConductor.threadDock.empty.turns")}
             </p>
           ) : (
-            events.map((event) => (
-              <div
-                key={event.id}
-                className="rounded-xl border border-border-subtle bg-surface-raised/70 p-3 text-xs"
-              >
-                <div className="font-black text-text-primary">{event.role}</div>
-                <p className="mt-1 whitespace-pre-wrap leading-relaxed text-text-secondary">
-                  {event.content || t("projectConductor.threadDock.empty.turn")}
-                </p>
-              </div>
-            ))
+            <ul className="mt-3 divide-y divide-border-subtle border-y border-border-subtle">
+              {events.map((event) => (
+                <li key={event.id} className="py-3">
+                  <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-foreground">{event.role}</span>
+                    <span className="text-[10px] uppercase tracking-[0.14em] text-text-muted">
+                      {event.status}
+                    </span>
+                  </div>
+                  <ProjectConductorExpandableText
+                    text={event.content || t("projectConductor.threadDock.empty.turn")}
+                  />
+                </li>
+              ))}
+            </ul>
           )}
         </div>
 
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-text-muted">
-            <Wrench size={13} /> {t("projectConductor.threadDock.toolCards")}
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-xs font-bold text-foreground">
+            <Wrench size={14} className="text-brand" aria-hidden />
+            {t("projectConductor.threadDock.toolCards")}
           </div>
           {tools.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-border-subtle p-3 text-xs text-text-muted">
+            <p className="mt-3 border-l-2 border-border-subtle pl-3 text-xs leading-5 text-text-muted">
               {t("projectConductor.threadDock.empty.tools")}
             </p>
           ) : (
-            tools.map((tool, index) => {
-              const isProjectConductorToolActive =
-                isProjectConductorStreaming && index === 0 && !tool.is_error;
-
-              return (
-                <div
+            <ul className="mt-3 divide-y divide-border-subtle border-y border-border-subtle">
+              {tools.map((tool, index) => (
+                <li
                   key={`${tool.id}-${index}`}
-                  data-density={
-                    isProjectConductorToolActive
-                      ? "project-conductor-active-tool-card"
-                      : "project-conductor-tool-card"
-                  }
-                  className={cn(
-                    "relative overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/70 p-3 text-xs transition-colors",
-                    isProjectConductorToolActive &&
-                      "motion-essential border-brand/30 bg-brand-muted/10",
-                  )}
+                  data-density="project-conductor-tool-card"
+                  className="py-3"
                 >
-                  {isProjectConductorToolActive && (
-                    <span
-                      aria-hidden
-                      className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
-                    />
-                  )}
                   <div className="flex items-center justify-between gap-2">
-                    <span className="inline-flex min-w-0 items-center gap-1.5 font-black text-text-primary">
-                      {isProjectConductorToolActive && (
-                        <AgentThinkingIndicator phase="tool" size={12} className="shrink-0" />
-                      )}
-                      <span className="truncate">{tool.name}</span>
+                    <span className="min-w-0 truncate text-xs font-semibold text-foreground">
+                      {tool.name}
                     </span>
-                    <span className={tool.is_error ? "text-red-500" : "text-text-muted"}>
+                    <span
+                      className={
+                        tool.is_error ? "text-xs text-status-failed" : "text-xs text-text-muted"
+                      }
+                    >
                       {tool.is_error
                         ? t("projectConductor.threadDock.toolState.error")
                         : t("projectConductor.threadDock.toolState.ok")}
                     </span>
                   </div>
-                  <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-text-muted">
-                    {JSON.stringify(tool.result, null, 2)}
-                  </pre>
-                </div>
-              );
-            })
+                  <ProjectConductorExpandableText
+                    text={toolResultText(tool.result)}
+                    mono
+                    className="mt-2"
+                  />
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       </div>
-    </div>
+    </section>
   );
 }

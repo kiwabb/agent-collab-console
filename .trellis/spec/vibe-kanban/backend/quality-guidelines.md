@@ -2127,9 +2127,10 @@ ProjectConductor.handle_task(ConductorTask(task_kind="scheduled_review")) -> {
 - Manual single-issue PR refresh MUST NOT update the project sweep status
   snapshot.
 - A `ProjectConductor` scheduled review MUST run the project sweep with
-  `auto_merge=True`, then include the sweep summary under
+  `auto_merge=True`, then include a compact sweep summary under
   `github_pr_followup` in the returned result, persisted task `result_json`,
-  and project hot-thread answer event.
+  and one bounded project hot-thread event. It MUST NOT call
+  `answer_question()` or persist rendered pinned/warm/cold context.
 - Scheduled-review PR follow-up is best-effort supervisor work. A sweep
   exception is logged and reported as `{"status": "failed", "error": ...}`,
   but the conductor task still completes so the project review loop survives.
@@ -2186,7 +2187,10 @@ ProjectConductor.handle_task(ConductorTask(task_kind="scheduled_review")) -> {
 - Diagnostics includes top-level `github_pr_followup` and degrades when its
   `last_error` is present or `running` is `true`.
 - ProjectConductor scheduled review: calls project sweep with `auto_merge=True`
-  and records the summary in return payload, `result_json`, and hot memory.
+  and records only the compact summary delta in return payload, `result_json`,
+  and one bounded hot-memory event.
+- ProjectConductor scheduled review: does not call `answer_question()` and does
+  not re-ingest pinned, warm, or cold memory.
 - ProjectConductor scheduled review: sweep exception is reported without
   raising or failing the conductor task.
 - Auto-merge: approved + all-green + mergeable -> calls `gh pr merge`, marks
@@ -2390,6 +2394,8 @@ async def run_project_review_tick(
     event_bus=None,
     conductor_factory=_default_conductor_factory,
     limit=None,
+    due_after=None,
+    review_slot=None,
 ) -> ProjectReviewTickSummary
 ```
 
@@ -2397,6 +2403,11 @@ async def run_project_review_tick(
 
 - The scheduler MUST list projects through the typed store API
   (`list_projects`); it does not query SQL directly.
+- For background cadence, the scheduler MUST skip a project whose latest
+  completed review is newer than `due_after`.
+- `review_slot` produces a deterministic task ID for each project. The store
+  claims that ID with `create_conductor_task_if_absent()` so concurrent workers
+  and backend reloads cannot execute the same interval twice.
 - Each selected project gets a `ConductorTask` with
   `task_kind="scheduled_review"` and the standard scheduled health-review
   question.
@@ -2412,6 +2423,9 @@ async def run_project_review_tick(
 - Project list with two projects -> two scheduled-review conductor tasks.
 - First project raises -> first result `failed`, second project still runs.
 - `limit=2` with three projects -> only first two projects are reviewed.
+- A recent completed review -> `skipped_recent` and no new task.
+- Two ticks with the same `review_slot` -> one execution and one
+  `skipped_claimed` result.
 
 #### 5. Wrong vs Correct
 

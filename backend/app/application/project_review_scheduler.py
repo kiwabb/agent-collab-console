@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol, cast
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from app.application import timeouts
 from app.application.github_pr_followup import EventBusLike
@@ -17,6 +18,15 @@ logger = logging.getLogger(__name__)
 
 class ProjectReviewSchedulerStore(Protocol):
     async def list_projects(self) -> list[Project]: ...
+
+    async def create_conductor_task_if_absent(self, task: ConductorTask) -> bool: ...
+
+    async def load_latest_completed_project_review_at(
+        self,
+        project_id: str,
+    ) -> datetime | None: ...
+
+    async def save_conductor_task(self, task: ConductorTask) -> None: ...
 
 
 class ProjectReviewConductor(Protocol):
@@ -40,6 +50,8 @@ class ProjectReviewTickFn(Protocol):
         *,
         event_bus: object | None = None,
         limit: int | None = None,
+        due_after: datetime | None = None,
+        review_slot: str | None = None,
     ) -> ProjectReviewTickSummary: ...
 
 
@@ -47,8 +59,16 @@ class ProjectReviewSleepFn(Protocol):
     async def __call__(self, interval: float) -> None: ...
 
 
+class ProjectReviewNowFn(Protocol):
+    def __call__(self) -> datetime: ...
+
+
 async def _sleep(interval: float) -> None:
     await asyncio.sleep(interval)
+
+
+def _now() -> datetime:
+    return datetime.now()
 
 
 @dataclass
@@ -170,6 +190,8 @@ async def run_project_review_tick(
     event_bus: object | None = None,
     conductor_factory: ProjectReviewConductorFactory = _default_conductor_factory,
     limit: int | None = None,
+    due_after: datetime | None = None,
+    review_slot: str | None = None,
 ) -> ProjectReviewTickSummary:
     projects = await store.list_projects()
     if limit is not None:
@@ -177,26 +199,73 @@ async def run_project_review_tick(
 
     results: list[ProjectReviewTickResult] = []
     for project in projects:
+        task_id = (
+            str(uuid5(NAMESPACE_URL, f"project-review:{project.id}:{review_slot}"))
+            if review_slot is not None
+            else str(uuid4())
+        )
+        now = datetime.now()
         task = ConductorTask(
-            id=str(uuid4()),
+            id=task_id,
             project_id=project.id,
             task_kind="scheduled_review",
             payload={"question": "Run a scheduled project health review."},
-            created_at=datetime.now(),
+            created_at=now,
+            updated_at=now,
         )
+        claimed = False
         try:
+            if due_after is not None:
+                latest_completed_at = await store.load_latest_completed_project_review_at(
+                    project.id
+                )
+                if latest_completed_at is not None and latest_completed_at >= due_after:
+                    results.append(
+                        ProjectReviewTickResult(
+                            project_id=project.id,
+                            task_id=task_id,
+                            status="skipped_recent",
+                        )
+                    )
+                    continue
+
+            if not await store.create_conductor_task_if_absent(task):
+                results.append(
+                    ProjectReviewTickResult(
+                        project_id=project.id,
+                        task_id=task.id,
+                        status="skipped_claimed",
+                    )
+                )
+                continue
+            claimed = True
             conductor = conductor_factory(
                 project_id=project.id,
                 store=store,
                 event_bus=event_bus,
             )
             result = await conductor.handle_task(task)
-        except Exception as exc:  # noqa: BLE001, RUF100
+        except Exception as exc:  # Per-project supervisor boundary; continue the tick.
             logger.exception(
                 "project review tick failed project_id=%s task_id=%s",
                 project.id,
                 task.id,
             )
+            task.status = "failed"
+            task.result_json = json.dumps(
+                {"status": "failed", "error": str(exc), "task_id": task.id},
+                ensure_ascii=False,
+            )
+            task.updated_at = datetime.now()
+            if claimed:
+                try:
+                    await store.save_conductor_task(task)
+                except Exception:  # Failure recording must not stop later projects.
+                    logger.exception(
+                        "failed to persist project review failure project_id=%s task_id=%s",
+                        project.id,
+                        task.id,
+                    )
             results.append(
                 ProjectReviewTickResult(
                     project_id=project.id,
@@ -227,15 +296,25 @@ async def run_project_review_scheduler_loop(
     limit: int | None = None,
     tick_fn: ProjectReviewTickFn = run_project_review_tick,
     sleep_fn: ProjectReviewSleepFn = _sleep,
+    now_fn: ProjectReviewNowFn = _now,
 ) -> None:
     interval = interval_s if interval_s is not None else timeouts.project_review_interval_s()
     review_limit = limit if limit is not None else timeouts.project_review_limit()
 
     try:
         while True:
+            now = now_fn()
+            due_after = now - timedelta(seconds=interval)
+            slot = f"{interval:g}:{int(now.timestamp() // interval)}"
             _scheduler_status.mark_started(interval_s=interval, limit=review_limit)
             try:
-                summary = await tick_fn(store, event_bus=event_bus, limit=review_limit)
+                summary = await tick_fn(
+                    store,
+                    event_bus=event_bus,
+                    limit=review_limit,
+                    due_after=due_after,
+                    review_slot=slot,
+                )
             except asyncio.CancelledError:
                 _scheduler_status.mark_cancelled()
                 raise

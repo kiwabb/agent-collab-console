@@ -734,9 +734,24 @@ class SQLiteStore:
                     warm_tokens INTEGER NOT NULL DEFAULT 0,
                     last_compaction_at TEXT,
                     total_tasks_handled INTEGER NOT NULL DEFAULT 0,
-                    updated_at TEXT
+                    updated_at TEXT,
+                    revision INTEGER NOT NULL DEFAULT 1
                 )
             """)
+            conductor_state_columns = {
+                str(row[1])
+                for row in conn.execute(
+                    "PRAGMA table_info(project_conductor_states)"
+                ).fetchall()
+            }
+            if "revision" not in conductor_state_columns:
+                conn.execute(
+                    "ALTER TABLE project_conductor_states "
+                    "ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"
+                )
+            conn.execute(
+                "UPDATE project_conductor_states SET revision = 1 WHERE revision = 0"
+            )
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS conductor_tasks (
                     id TEXT PRIMARY KEY,
@@ -1923,29 +1938,46 @@ class SQLiteStore:
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    def save_project_conductor_state(self, state: "ProjectConductorState") -> None:
+    def save_project_conductor_state(self, state: "ProjectConductorState") -> bool:
         from app.domain.models import ProjectConductorState
+
         self._ensure_db()
         conn = self._get_conn()
-        conn.execute(
-            """INSERT OR REPLACE INTO project_conductor_states
-               (project_id, hot_thread_json, warm_summaries_json, pinned_text,
-                hot_tokens, warm_tokens, last_compaction_at, total_tasks_handled, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                state.project_id,
-                state.hot_thread_json,
-                state.warm_summaries_json,
-                state.pinned_text,
-                state.hot_tokens,
-                state.warm_tokens,
-                self._format_datetime(state.last_compaction_at),
-                state.total_tasks_handled,
-                self._format_datetime(state.updated_at),
-            ),
+        values = (
+            state.hot_thread_json,
+            state.warm_summaries_json,
+            state.pinned_text,
+            state.hot_tokens,
+            state.warm_tokens,
+            self._format_datetime(state.last_compaction_at),
+            state.total_tasks_handled,
+            self._format_datetime(state.updated_at),
         )
+        if state.revision == 0:
+            cursor = conn.execute(
+                """INSERT INTO project_conductor_states
+                   (project_id, hot_thread_json, warm_summaries_json, pinned_text,
+                    hot_tokens, warm_tokens, last_compaction_at, total_tasks_handled,
+                    updated_at, revision)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                   ON CONFLICT(project_id) DO NOTHING""",
+                (state.project_id, *values),
+            )
+        else:
+            cursor = conn.execute(
+                """UPDATE project_conductor_states
+                   SET hot_thread_json = ?, warm_summaries_json = ?, pinned_text = ?,
+                       hot_tokens = ?, warm_tokens = ?, last_compaction_at = ?,
+                       total_tasks_handled = ?, updated_at = ?, revision = revision + 1
+                   WHERE project_id = ? AND revision = ?""",
+                (*values, state.project_id, state.revision),
+            )
+        saved = cursor.rowcount == 1
         conn.commit()
         conn.close()
+        if saved:
+            state.revision += 1
+        return saved
 
     def load_project_conductor_state(self, project_id: str) -> "ProjectConductorState | None":
         from app.domain.models import ProjectConductorState
@@ -1969,6 +2001,7 @@ class SQLiteStore:
             last_compaction_at=self._parse_datetime(row["last_compaction_at"]),
             total_tasks_handled=int(row["total_tasks_handled"] or 0),
             updated_at=self._parse_datetime(row["updated_at"]),
+            revision=int(row["revision"] or 0),
         )
 
     def _row_to_conductor_task(self, row: sqlite3.Row) -> "ConductorTask":
@@ -2020,6 +2053,51 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
+    def create_conductor_task_if_absent(self, task: "ConductorTask") -> bool:
+        from app.domain.models import ConductorTask
+        self._ensure_db()
+        conn = self._get_conn()
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO conductor_tasks
+               (id, project_id, task_kind, payload_json, issue_id, status, result_json,
+                lease_owner, heartbeat_at, lease_expires_at, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                task.id,
+                task.project_id,
+                task.task_kind,
+                json.dumps(task.payload, ensure_ascii=False, default=str),
+                task.issue_id,
+                task.status,
+                task.result_json,
+                task.lease_owner,
+                self._format_datetime(task.heartbeat_at),
+                self._format_datetime(task.lease_expires_at),
+                self._format_datetime(task.created_at),
+                self._format_datetime(task.updated_at or datetime.now()),
+            ),
+        )
+        conn.commit()
+        created = (cur.rowcount or 0) > 0
+        conn.close()
+        return created
+
+    def load_latest_completed_project_review_at(self, project_id: str) -> datetime | None:
+        self._ensure_db()
+        conn = self._get_conn()
+        row = conn.execute(
+            """SELECT COALESCE(updated_at, created_at)
+               FROM conductor_tasks
+               WHERE project_id = ? AND task_kind = 'scheduled_review' AND status = 'done'
+               ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+               LIMIT 1""",
+            (project_id,),
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        return self._parse_datetime(row[0])
+
     def load_conductor_task(self, task_id: str) -> "ConductorTask | None":
         self._ensure_db()
         conn = self._get_conn()
@@ -2046,16 +2124,35 @@ class SQLiteStore:
             return None
         return self._row_to_conductor_task(row)
 
-    def list_conductor_tasks(self, *, status: str | None = None) -> list["ConductorTask"]:
+    def list_conductor_tasks(
+        self,
+        *,
+        status: str | None = None,
+        issue_id: str | None = None,
+    ) -> list["ConductorTask"]:
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        if status:
+        if status is not None and issue_id is not None:
+            rows = conn.execute(
+                """SELECT * FROM conductor_tasks
+                   WHERE status = ? AND issue_id = ?
+                   ORDER BY created_at ASC, updated_at ASC, id ASC""",
+                (status, issue_id),
+            ).fetchall()
+        elif status is not None:
             rows = conn.execute(
                 """SELECT * FROM conductor_tasks
                    WHERE status = ?
                    ORDER BY created_at ASC, updated_at ASC, id ASC""",
                 (status,),
+            ).fetchall()
+        elif issue_id is not None:
+            rows = conn.execute(
+                """SELECT * FROM conductor_tasks
+                   WHERE issue_id = ?
+                   ORDER BY created_at ASC, updated_at ASC, id ASC""",
+                (issue_id,),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -2501,12 +2598,27 @@ class SQLiteStore:
         conn.commit()
         conn.close()
 
-    def list_project_memory_embeddings(self, project_id: str, limit: int | None = None) -> list["ProjectMemoryEmbedding"]:
+    def list_project_memory_embeddings(
+        self,
+        project_id: str,
+        limit: int | None = None,
+        *,
+        descending: bool = False,
+    ) -> list["ProjectMemoryEmbedding"]:
         from app.domain.models import ProjectMemoryEmbedding
         self._ensure_db()
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
-        sql = "SELECT * FROM project_memory_embeddings WHERE project_id = ? ORDER BY created_at ASC"
+        if descending:
+            sql = (
+                "SELECT * FROM project_memory_embeddings WHERE project_id = ? "
+                "ORDER BY created_at DESC, id DESC"
+            )
+        else:
+            sql = (
+                "SELECT * FROM project_memory_embeddings WHERE project_id = ? "
+                "ORDER BY created_at ASC, id ASC"
+            )
         args: list[object] = [project_id]
         if limit is not None:
             sql += " LIMIT ?"
@@ -2525,6 +2637,16 @@ class SQLiteStore:
             )
             for row in rows
         ]
+
+    def count_project_memory_embeddings(self, project_id: str) -> int:
+        self._ensure_db()
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT COUNT(*) FROM project_memory_embeddings WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()
+        conn.close()
+        return int(row[0]) if row is not None else 0
 
     def save_self_improvement_proposal(self, proposal: "SelfImprovementProposal") -> None:
         from app.domain.models import SelfImprovementProposal

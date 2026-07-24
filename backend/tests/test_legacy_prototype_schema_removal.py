@@ -46,7 +46,7 @@ async def test_schema_v12_drops_legacy_html_prototype_tables(tmp_path: Path) -> 
     finally:
         await store.close()
 
-    assert version == (15,)
+    assert version == (17,)
     assert _table_names(db_path).isdisjoint(LEGACY_PROTOTYPE_TABLES)
 
 

@@ -256,9 +256,13 @@ export async function stopAllProjectServices(
     method: "POST",
   });
 }
-export async function getProjectConductorState(projectId: string): Promise<ProjectConductorState> {
+export async function getProjectConductorState(
+  projectId: string,
+  init?: RequestInit,
+): Promise<ProjectConductorState> {
   return apiRequest<ProjectConductorState>(
-    `${API_BASE}/codex/projects/${projectId}/conductor-state`,
+    `${API_BASE}/codex/projects/${encodeURIComponent(projectId)}/conductor/state`,
+    init,
   );
 }
 export interface ConductorSession {
@@ -294,7 +298,7 @@ export async function askProjectConductor(
   question: string,
 ): Promise<ProjectConductorAskResult> {
   return apiJsonRequest<ProjectConductorAskResult>(
-    `${API_BASE}/codex/projects/${projectId}/conductor/ask`,
+    `${API_BASE}/codex/projects/${encodeURIComponent(projectId)}/conductor/ask`,
     "POST",
     { question },
   );
@@ -303,7 +307,7 @@ export async function scheduleProjectConductorReview(
   projectId: string,
 ): Promise<ProjectConductorAskResult> {
   return apiRequest<ProjectConductorAskResult>(
-    `${API_BASE}/codex/projects/${projectId}/conductor/schedule-review`,
+    `${API_BASE}/codex/projects/${encodeURIComponent(projectId)}/conductor/schedule-review`,
     {
       method: "POST",
     },
@@ -314,7 +318,7 @@ export async function startProjectConductorLoop(
   prompt?: string,
 ): Promise<ProjectConductorLoopResult> {
   return apiJsonRequest<ProjectConductorLoopResult>(
-    `${API_BASE}/codex/projects/${projectId}/conductor/start-loop`,
+    `${API_BASE}/codex/projects/${encodeURIComponent(projectId)}/conductor/start-loop`,
     "POST",
     { prompt },
   );

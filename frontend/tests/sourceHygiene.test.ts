@@ -288,15 +288,15 @@ test("execution process stream hooks parse frames through typed helpers", () => 
   assert.deepEqual(problems, []);
 });
 
-test("project conductor stream dock parses frames through typed helpers", () => {
+test("project conductor loop dock does not subscribe to an unsupported event stream", () => {
   const source = readFileSync(
     join(SRC_ROOT, "features/projects/components/ProjectConductorThreadDock.tsx"),
     "utf-8",
   );
 
   assert.doesNotMatch(source, /JSON\.parse\s*\(/);
-  assert.match(source, /parseProjectConductorRecord/);
-  assert.match(source, /parseProjectConductorToolEvent/);
+  assert.doesNotMatch(source, /EventSource|conductor\/stream/);
+  assert.match(source, /startProjectConductorLoop/);
 });
 
 test("codex log normalizer parses runtime log JSON through shared helpers", () => {

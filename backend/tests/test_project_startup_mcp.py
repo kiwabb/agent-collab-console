@@ -27,9 +27,7 @@ class StartupStore:
         self.task_id = task_id
         self.notes = notes
 
-    async def list_project_startup_services(
-        self, project_id: str
-    ) -> list[ProjectStartupService]:
+    async def list_project_startup_services(self, project_id: str) -> list[ProjectStartupService]:
         return self.services
 
     async def load_project_startup_config_meta(self, project_id: str) -> dict[str, object] | None:
@@ -190,9 +188,7 @@ async def test_mcp_rejects_missing_evidence_without_overwriting_config(repositor
     assert isinstance(services, list)
     backend = services[0]
     assert isinstance(backend, dict)
-    backend["evidence"] = [
-        {"path": "backend/missing.xml", "detail": "missing"}
-    ]
+    backend["evidence"] = [{"path": "backend/missing.xml", "detail": "missing"}]
 
     status, body = await mcp.handle(token=session.token, payload=payload)
 
@@ -314,7 +310,7 @@ async def test_async_store_migrates_legacy_startup_service_as_invalid(repository
             await connection.execute("SELECT version FROM schema_version WHERE id = 1")
         ).fetchone()
         assert version is not None
-        assert version[0] == 15
+        assert version[0] == 17
     finally:
         await store.close()
         if migrated is not None:

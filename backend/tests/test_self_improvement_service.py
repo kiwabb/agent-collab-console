@@ -13,10 +13,13 @@ class MemoryStore:
         self.save_error = save_error
         self.saved: list[SelfImprovementProposal] = []
 
-    async def list_conductor_tasks(self, *, status=None):
-        if status is None:
-            return self.tasks
-        return [task for task in self.tasks if task.status == status]
+    async def list_conductor_tasks(self, *, status=None, issue_id=None):
+        tasks = self.tasks
+        if status is not None:
+            tasks = [task for task in tasks if task.status == status]
+        if issue_id is not None:
+            tasks = [task for task in tasks if task.issue_id == issue_id]
+        return tasks
 
     async def save_self_improvement_proposal(self, proposal):
         if self.save_error is not None:

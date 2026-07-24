@@ -141,6 +141,106 @@ acceptable for primary navigation or visible panels. Use a local `loadError` /
 
 ---
 
+## Scenario: Project Conductor Initial Load and Refresh Failure States
+
+### 1. Scope / Trigger
+
+- Trigger: changing the Project Conductor page, its state API client, its
+  execution-loop dock, or the backend state response consumed by the page.
+- The page is operational UI: an unavailable or mismatched endpoint must be
+  visible, not presented as a legitimate all-zero project state.
+
+### 2. Signatures
+
+- API client:
+  `getProjectConductorState(projectId: string) -> Promise<ProjectConductorState>`.
+- Endpoint:
+  `GET /api/codex/projects/{encodeURIComponent(projectId)}/conductor/state`.
+- Component state:
+  `state: ProjectConductorState | null`, `loading: boolean`, and
+  `loadError: string | null`.
+- Loop action:
+  `startProjectConductorLoop(projectId, prompt?) -> ProjectConductorLoopResult`.
+
+### 3. Contracts
+
+- Initial mount starts with `loading=true` and `state=null`. Until a real state
+  response arrives, render a loading surface; do not render metric cards with
+  fabricated zero defaults.
+- Initial load failure keeps `state=null`, renders a visible error surface with
+  technical detail and Retry, and may also emit a toast.
+- A later refresh failure preserves the last valid `state`, renders a stale-data
+  warning plus Retry, and leaves the existing memory/task data visible.
+- Every load and mutation result is owned by the `projectId` and request
+  generation that started it. Switching projects invalidates earlier requests;
+  late responses, errors, loading flags, answers, and loop history from the old
+  project must not settle the new page.
+- A successful retry clears `loadError` when the request starts and replaces
+  state atomically with the returned typed response.
+- Project IDs are URL encoded and the route is `/conductor/state`; the removed
+  `/conductor-state` spelling is not compatible.
+- The execution loop consumes the returned POST result directly. It must not
+  open an `EventSource` for an endpoint the backend does not implement.
+- Long event, memory, and tool text uses progressive disclosure; the initial
+  page shows recent readable content without expanding the entire history.
+
+### 4. Validation & Error Matrix
+
+- Initial GET 404/500/network failure -> full visible error + Retry; no metrics.
+- Refresh failure after a valid response -> stale-state banner + Retry; previous
+  metrics and memory remain.
+- Old-project request resolves after navigation -> ignore it completely; the
+  current project's loading/error/data state remains authoritative.
+- Retry success -> error disappears and the new response is rendered.
+- Missing state response -> schedule-review action remains disabled.
+- Loop POST failure -> visible action error; no fabricated execution event.
+- Long content -> collapsed preview with an explicit expand/collapse control.
+
+### 5. Good/Base/Bad Cases
+
+- Good: the backend route drifts and the page names the failed request instead
+  of showing four zeros.
+- Good: a transient refresh error leaves the prior project memory readable.
+- Base: an empty but successfully loaded project renders genuine zero metrics
+  and explicit empty-memory copy.
+- Bad: `state?.hot_tokens ?? 0` is rendered before the first response.
+- Bad: `.catch(() => setState(null))` destroys valid data.
+- Bad: opening an SSE connection to `/conductor/stream` when no such backend
+  route exists.
+
+### 6. Tests Required
+
+- API test asserts the encoded `/conductor/state` URL and POST paths/bodies.
+- Source/component contract asserts initial failures are visible, stale state is
+  retained on refresh failure, and scheduled actions require loaded state.
+- Source/component contract asserts request-generation and active-project
+  guards exist, and the loop dock remounts by project identity.
+- Presentation helper tests cover collapse thresholds, reveal bounds, hot-event
+  rendering, and malformed tool-event rejection.
+- i18n parity test asserts every Project Conductor key exists in both locales.
+- Browser verification loads the authenticated route, refreshes it, checks no
+  horizontal overflow, and confirms no console errors or business alerts.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```tsx
+const [state, setState] = useState<ProjectConductorState | null>(null);
+getProjectConductorState(id).then(setState).catch(() => {});
+return <Metric value={state?.hot_tokens ?? 0} />;
+```
+
+Correct:
+
+```tsx
+if (loading && !state) return <InitialLoading />;
+if (loadError && !state) return <LoadError retry={load} detail={loadError} />;
+return <ConductorState state={state} staleError={loadError} retry={load} />;
+```
+
+---
+
 ## Scenario: Active task feedback on routes without a live-event provider
 
 ### 1. Scope / Trigger

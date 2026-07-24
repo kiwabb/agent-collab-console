@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from typing import cast
 
 import pytest
@@ -31,9 +31,26 @@ def _project(project_id: str) -> Project:
 class _Store:
     def __init__(self, projects: list[Project]) -> None:
         self.projects = projects
+        self.tasks: dict[str, ConductorTask] = {}
+        self.latest_completed: dict[str, datetime] = {}
 
     async def list_projects(self) -> list[Project]:
         return self.projects
+
+    async def create_conductor_task_if_absent(self, task: ConductorTask) -> bool:
+        if task.id in self.tasks:
+            return False
+        self.tasks[task.id] = replace(task)
+        return True
+
+    async def load_latest_completed_project_review_at(
+        self,
+        project_id: str,
+    ) -> datetime | None:
+        return self.latest_completed.get(project_id)
+
+    async def save_conductor_task(self, task: ConductorTask) -> None:
+        self.tasks[task.id] = replace(task)
 
 
 @dataclass
@@ -95,6 +112,38 @@ async def test_project_review_tick_isolates_project_failures_and_continues():
 
 
 @pytest.mark.asyncio
+async def test_project_review_tick_isolates_due_lookup_failures_and_continues():
+    calls: list[ConductorTask] = []
+
+    class DueLookupFailureStore(_Store):
+        async def load_latest_completed_project_review_at(
+            self,
+            project_id: str,
+        ) -> datetime | None:
+            if project_id == "project-1":
+                raise ValueError("invalid legacy review timestamp")
+            return None
+
+    store = DueLookupFailureStore([_project("project-1"), _project("project-2")])
+
+    def conductor_factory(*, project_id: str, store, event_bus):
+        return _Conductor(project_id=project_id, calls=calls)
+
+    summary = await run_project_review_tick(
+        store,
+        conductor_factory=conductor_factory,
+        due_after=datetime(2026, 6, 8, 9, 0, 0),
+        review_slot="300:lookup-failure",
+    )
+
+    assert summary.counts == {"failed": 1, "done": 1}
+    assert summary.results[0].error == "invalid legacy review timestamp"
+    assert summary.results[1].status == "done"
+    assert [task.project_id for task in calls] == ["project-2"]
+    assert all(task.project_id != "project-1" for task in store.tasks.values())
+
+
+@pytest.mark.asyncio
 async def test_project_review_tick_limit_bounds_project_selection():
     calls: list[ConductorTask] = []
 
@@ -118,12 +167,66 @@ async def test_project_review_tick_limit_bounds_project_selection():
 
 
 @pytest.mark.asyncio
+async def test_project_review_tick_skips_projects_reviewed_within_interval():
+    calls: list[ConductorTask] = []
+    store = _Store([_project("project-1")])
+    now = datetime(2026, 6, 8, 12, 0, 0)
+    store.latest_completed["project-1"] = now
+
+    def conductor_factory(*, project_id: str, store, event_bus):
+        return _Conductor(project_id=project_id, calls=calls)
+
+    summary = await run_project_review_tick(
+        store,
+        conductor_factory=conductor_factory,
+        due_after=now - timedelta(minutes=5),
+        review_slot="300:1",
+    )
+
+    assert summary.counts == {"skipped_recent": 1}
+    assert calls == []
+    assert store.tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_project_review_tick_claim_prevents_duplicate_restart_run():
+    calls: list[ConductorTask] = []
+    store = _Store([_project("project-1")])
+
+    def conductor_factory(*, project_id: str, store, event_bus):
+        return _Conductor(project_id=project_id, calls=calls)
+
+    first = await run_project_review_tick(
+        store,
+        conductor_factory=conductor_factory,
+        review_slot="300:42",
+    )
+    second = await run_project_review_tick(
+        store,
+        conductor_factory=conductor_factory,
+        review_slot="300:42",
+    )
+
+    assert first.counts == {"done": 1}
+    assert second.counts == {"skipped_claimed": 1}
+    assert len(calls) == 1
+    assert first.results[0].task_id == second.results[0].task_id
+
+
+@pytest.mark.asyncio
 async def test_project_review_scheduler_loop_repeats_after_each_sleep():
     reset_project_review_scheduler_status()
     ticks = 0
     sleeps: list[float] = []
 
-    async def tick(store, *, event_bus=None, limit=None):
+    async def tick(
+        store,
+        *,
+        event_bus=None,
+        limit=None,
+        due_after=None,
+        review_slot=None,
+    ):
         nonlocal ticks
         ticks += 1
         return ProjectReviewTickSummary()
@@ -153,7 +256,14 @@ async def test_project_review_scheduler_loop_survives_tick_exception():
     attempts = 0
     sleeps = 0
 
-    async def tick(store, *, event_bus=None, limit=None):
+    async def tick(
+        store,
+        *,
+        event_bus=None,
+        limit=None,
+        due_after=None,
+        review_slot=None,
+    ):
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -182,7 +292,14 @@ async def test_project_review_scheduler_loop_survives_tick_exception():
 async def test_project_review_scheduler_loop_propagates_cancellation_from_tick():
     reset_project_review_scheduler_status()
 
-    async def tick(store, *, event_bus=None, limit=None):
+    async def tick(
+        store,
+        *,
+        event_bus=None,
+        limit=None,
+        due_after=None,
+        review_slot=None,
+    ):
         raise asyncio.CancelledError
 
     async def sleep(interval: float) -> None:
@@ -200,7 +317,14 @@ async def test_project_review_scheduler_loop_propagates_cancellation_from_tick()
 async def test_project_review_scheduler_status_records_successful_tick():
     reset_project_review_scheduler_status()
 
-    async def tick(store, *, event_bus=None, limit=None):
+    async def tick(
+        store,
+        *,
+        event_bus=None,
+        limit=None,
+        due_after=None,
+        review_slot=None,
+    ):
         assert limit == 3
         return ProjectReviewTickSummary(
             results=[
@@ -240,7 +364,14 @@ async def test_project_review_scheduler_status_records_successful_tick():
 async def test_project_review_scheduler_status_records_failed_tick():
     reset_project_review_scheduler_status()
 
-    async def tick(store, *, event_bus=None, limit=None):
+    async def tick(
+        store,
+        *,
+        event_bus=None,
+        limit=None,
+        due_after=None,
+        review_slot=None,
+    ):
         raise RuntimeError("store temporarily unavailable")
 
     async def sleep(interval: float) -> None:
@@ -267,7 +398,14 @@ async def test_project_review_scheduler_status_records_failed_tick():
 async def test_project_review_scheduler_status_clears_running_on_tick_cancellation():
     reset_project_review_scheduler_status()
 
-    async def tick(store, *, event_bus=None, limit=None):
+    async def tick(
+        store,
+        *,
+        event_bus=None,
+        limit=None,
+        due_after=None,
+        review_slot=None,
+    ):
         raise asyncio.CancelledError
 
     async def sleep(interval: float) -> None:

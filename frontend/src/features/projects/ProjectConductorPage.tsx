@@ -1,89 +1,194 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { BrainCircuit, DatabaseZap, MessageSquareText, RefreshCcw, Send } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Activity,
+  AlertTriangle,
+  Archive,
+  BrainCircuit,
+  DatabaseZap,
+  History,
+  MessageSquareText,
+  Pin,
+  RefreshCcw,
+  Send,
+} from "lucide-react";
 
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
+import { EmptyStateAction, InteractionEmptyState } from "@/components/ui/interaction-empty-state";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
+import { ProjectConductorExpandableText } from "@/features/projects/components/ProjectConductorExpandableText";
+import { ProjectConductorMemorySection } from "@/features/projects/components/ProjectConductorMemorySection";
+import { ProjectConductorThreadDock } from "@/features/projects/components/ProjectConductorThreadDock";
+import { projectConductorHotEventBody } from "@/features/projects/projectConductorPresentation";
 import {
   askProjectConductor,
   getProjectConductorState,
   scheduleProjectConductorReview,
 } from "@/lib/api/projects";
 import type { ProjectConductorState } from "@/lib/types";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { useToast } from "@/components/ui/toast";
-import { ProjectConductorThreadDock } from "@/features/projects/components/ProjectConductorThreadDock";
-import { useI18n } from "@/providers/I18nProvider";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/providers/I18nProvider";
+
+function visibleError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function memorySummary(item: Record<string, unknown>): string {
+  const summary = item["summary"];
+  return typeof summary === "string" ? summary : JSON.stringify(item);
+}
 
 export function ProjectConductorPage({ projectId }: { projectId: string }) {
   const { addToast } = useToast();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [state, setState] = useState<ProjectConductorState | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState<string | null>(null);
+  const [answer, setAnswer] = useState<{ projectId: string; text: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [asking, setAsking] = useState(false);
+  const loadRequestRef = useRef(0);
+  const actionRequestRef = useRef(0);
+  const activeProjectRef = useRef(projectId);
+  activeProjectRef.current = projectId;
 
   const load = useCallback(async () => {
+    const requestId = ++loadRequestRef.current;
+    const requestedProjectId = projectId;
     setLoading(true);
+    setLoadError(null);
     try {
-      setState(await getProjectConductorState(projectId));
-    } catch (err) {
+      const nextState = await getProjectConductorState(requestedProjectId);
+      if (loadRequestRef.current !== requestId || activeProjectRef.current !== requestedProjectId) {
+        return;
+      }
+      setState(nextState);
+    } catch (error) {
+      if (loadRequestRef.current !== requestId || activeProjectRef.current !== requestedProjectId) {
+        return;
+      }
+      const message = visibleError(error);
+      setLoadError(message);
       addToast({
         type: "error",
         title: t("projectConductor.toast.loadFailed"),
-        message: err instanceof Error ? err.message : String(err),
+        message,
       });
     } finally {
-      setLoading(false);
+      if (loadRequestRef.current === requestId && activeProjectRef.current === requestedProjectId) {
+        setLoading(false);
+      }
     }
   }, [projectId, addToast, t]);
 
   useEffect(() => {
+    actionRequestRef.current += 1;
+    setAnswer(null);
+    setQuestion("");
+    setAsking(false);
     void load();
+    return () => {
+      loadRequestRef.current += 1;
+      actionRequestRef.current += 1;
+    };
   }, [load]);
+
+  const handleLoopDone = useCallback(
+    (completedProjectId: string) => {
+      if (activeProjectRef.current !== completedProjectId) return;
+      void load();
+    },
+    [load],
+  );
 
   const handleAsk = useCallback(async () => {
     const text = question.trim();
     if (!text) return;
+    const requestId = ++actionRequestRef.current;
+    const requestedProjectId = projectId;
     setAsking(true);
     try {
-      const result = await askProjectConductor(projectId, text);
-      setAnswer(result.answer);
+      const result = await askProjectConductor(requestedProjectId, text);
+      if (
+        actionRequestRef.current !== requestId ||
+        activeProjectRef.current !== requestedProjectId
+      ) {
+        return;
+      }
+      setAnswer({ projectId: requestedProjectId, text: result.answer });
       setQuestion("");
       await load();
-    } catch (err) {
+    } catch (error) {
+      if (
+        actionRequestRef.current !== requestId ||
+        activeProjectRef.current !== requestedProjectId
+      ) {
+        return;
+      }
       addToast({
         type: "error",
         title: t("projectConductor.toast.askFailed"),
-        message: err instanceof Error ? err.message : String(err),
+        message: visibleError(error),
       });
     } finally {
-      setAsking(false);
+      if (
+        actionRequestRef.current === requestId &&
+        activeProjectRef.current === requestedProjectId
+      ) {
+        setAsking(false);
+      }
     }
   }, [projectId, question, load, addToast, t]);
 
   const handleScheduledReview = useCallback(async () => {
+    const requestId = ++actionRequestRef.current;
+    const requestedProjectId = projectId;
     setAsking(true);
     try {
-      const result = await scheduleProjectConductorReview(projectId);
-      setAnswer(result.answer);
+      const result = await scheduleProjectConductorReview(requestedProjectId);
+      if (
+        actionRequestRef.current !== requestId ||
+        activeProjectRef.current !== requestedProjectId
+      ) {
+        return;
+      }
+      setAnswer({ projectId: requestedProjectId, text: result.answer });
       await load();
-    } catch (err) {
+    } catch (error) {
+      if (
+        actionRequestRef.current !== requestId ||
+        activeProjectRef.current !== requestedProjectId
+      ) {
+        return;
+      }
       addToast({
         type: "error",
         title: t("projectConductor.toast.reviewFailed"),
-        message: err instanceof Error ? err.message : String(err),
+        message: visibleError(error),
       });
     } finally {
-      setAsking(false);
+      if (
+        actionRequestRef.current === requestId &&
+        activeProjectRef.current === requestedProjectId
+      ) {
+        setAsking(false);
+      }
     }
   }, [projectId, load, addToast, t]);
 
-  const latestHot = useMemo(() => state?.hot_thread.slice(-6).reverse() ?? [], [state]);
+  const currentState = state?.project_id === projectId ? state : null;
+  const currentAnswer = answer?.projectId === projectId ? answer.text : null;
+  const latestHot = useMemo(
+    () => (currentState ? [...currentState.hot_thread].reverse() : []),
+    [currentState],
+  );
   const isProjectConductorThinking = asking;
+  const updatedAt = currentState?.updated_at
+    ? new Date(currentState.updated_at).toLocaleString(locale)
+    : t("projectConductor.updated.never");
 
   return (
     <section
@@ -101,28 +206,37 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
           className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
         />
       )}
-      <div className="p-5 border-b border-border-subtle flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="flex items-start gap-3">
+
+      <header className="flex flex-col gap-4 border-b border-border-subtle px-4 py-5 sm:px-6 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
           <div
             className={cn(
-              "size-11 rounded-2xl bg-brand/15 border border-brand/20 flex items-center justify-center text-brand",
+              "flex size-11 shrink-0 items-center justify-center border border-brand/20 bg-brand/10 text-brand",
               isProjectConductorThinking && "motion-essential border-brand/35 bg-brand-muted/15",
             )}
           >
             {isProjectConductorThinking ? (
               <AgentThinkingIndicator phase="thinking" size={20} />
             ) : (
-              <BrainCircuit size={22} />
+              <BrainCircuit size={21} aria-hidden />
             )}
           </div>
-          <div>
-            <h2 className="text-lg font-black tracking-tight">{t("projectConductor.title")}</h2>
-            <p className="text-xs text-text-muted max-w-2xl mt-1">
+          <div className="min-w-0">
+            <h1 className="text-xl font-black tracking-tight text-foreground">
+              {t("projectConductor.title")}
+            </h1>
+            <p className="mt-1 max-w-2xl text-sm leading-6 text-text-muted">
               {t("projectConductor.subtitle")}
             </p>
+            {currentState && (
+              <p className="mt-2 text-[11px] text-text-muted">
+                {t("projectConductor.updated.label", { time: updatedAt })}
+              </p>
+            )}
           </div>
         </div>
-        <div className="flex gap-2">
+
+        <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
             variant="outline"
@@ -131,135 +245,236 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
             data-density={
               loading ? "project-conductor-refresh-thinking" : "project-conductor-refresh"
             }
-            className={cn("gap-2 rounded-xl", loading && "motion-essential")}
+            className={cn("min-h-10 gap-2", loading && "motion-essential")}
           >
             {loading ? (
               <AgentThinkingIndicator phase="thinking" size={14} />
             ) : (
-              <RefreshCcw size={14} />
+              <RefreshCcw size={14} aria-hidden />
             )}
             {t("projectConductor.refresh")}
           </Button>
           <Button
             size="sm"
             onClick={() => void handleScheduledReview()}
-            disabled={asking}
-            className="gap-2 rounded-xl"
+            disabled={asking || !currentState}
+            className="min-h-10 gap-2"
           >
             {asking ? (
               <AgentThinkingIndicator phase="thinking" size={14} />
             ) : (
-              <DatabaseZap size={14} />
+              <DatabaseZap size={14} aria-hidden />
             )}
             {t("projectConductor.scheduleReview")}
           </Button>
         </div>
-      </div>
+      </header>
 
-      <div className="p-5 grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-5">
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 divide-x divide-y divide-border-subtle border-y border-border-subtle bg-surface md:grid-cols-4 md:divide-y-0">
-            <Metric label={t("projectConductor.metric.hotTokens")} value={state?.hot_tokens ?? 0} />
-            <Metric
-              label={t("projectConductor.metric.warmTokens")}
-              value={state?.warm_tokens ?? 0}
-            />
-            <Metric
-              label={t("projectConductor.metric.coldMemories")}
-              value={state?.cold_memories.length ?? 0}
-            />
-            <Metric
-              label={t("projectConductor.metric.tasksHandled")}
-              value={state?.total_tasks_handled ?? 0}
+      <div className="space-y-5 px-4 py-5 sm:px-6">
+        {loading && !currentState ? (
+          <InteractionEmptyState
+            tone="loading"
+            title={t("projectConductor.loading.title")}
+            description={t("projectConductor.loading.description")}
+          />
+        ) : loadError && !currentState ? (
+          <div role="alert">
+            <InteractionEmptyState
+              tone="error"
+              title={t("projectConductor.error.title")}
+              description={
+                <>
+                  {t("projectConductor.error.description")}
+                  <span className="mt-2 block font-mono text-[11px]">{loadError}</span>
+                </>
+              }
+              action={
+                <EmptyStateAction onClick={() => void load()} className="min-h-10 gap-2">
+                  <RefreshCcw size={14} aria-hidden />
+                  {t("projectConductor.error.retry")}
+                </EmptyStateAction>
+              }
             />
           </div>
-
-          <div
-            data-density={
-              isProjectConductorThinking
-                ? "project-conductor-thinking-actions"
-                : "project-conductor-actions"
-            }
-            className={cn(
-              "relative overflow-hidden border-y border-border-subtle bg-surface py-4",
-              isProjectConductorThinking && "motion-essential border-brand/30 bg-brand-muted/10",
-            )}
-          >
-            {isProjectConductorThinking && (
+        ) : currentState ? (
+          <>
+            {loadError && (
               <div
-                aria-hidden
-                className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
-              />
-            )}
-            <div className="flex items-center gap-2 mb-3">
-              <MessageSquareText size={15} className="text-brand" />
-              <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted">
-                {t("projectConductor.askTitle")}
-              </h3>
-            </div>
-            <div className="flex gap-2">
-              <Input
-                value={question}
-                onChange={(event) => setQuestion(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void handleAsk();
-                }}
-                placeholder={t("projectConductor.askPlaceholder")}
-                className="bg-surface-input border-border-subtle"
-              />
-              <Button
-                onClick={() => void handleAsk()}
-                disabled={asking || !question.trim()}
-                className="gap-2"
+                role="alert"
+                className="flex flex-col gap-3 border-y border-status-failed/35 bg-status-failed/5 px-4 py-3 text-sm text-status-failed sm:flex-row sm:items-center sm:justify-between"
               >
-                {asking ? (
-                  <AgentThinkingIndicator phase="thinking" size={14} />
-                ) : (
-                  <Send size={14} />
-                )}
-                {t("projectConductor.askAction")}
-              </Button>
-            </div>
-            {answer && (
-              <pre className="mt-4 whitespace-pre-wrap rounded-2xl border border-brand/15 bg-brand/5 p-4 text-xs leading-relaxed text-text-secondary">
-                {answer}
-              </pre>
+                <div className="flex min-w-0 items-start gap-2">
+                  <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden />
+                  <div className="min-w-0">
+                    <div className="font-semibold">{t("projectConductor.error.staleTitle")}</div>
+                    <div className="mt-1 break-words text-xs opacity-90">{loadError}</div>
+                  </div>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => void load()} className="gap-2">
+                  <RefreshCcw size={14} aria-hidden />
+                  {t("projectConductor.error.retry")}
+                </Button>
+              </div>
             )}
-          </div>
 
-          <MemoryBlock
-            title={t("projectConductor.section.pinned")}
-            body={state?.pinned_text || t("projectConductor.empty.pinned")}
-          />
-          <ProjectConductorThreadDock projectId={projectId} onLoopDone={() => void load()} />
-        </div>
+            <div className="grid grid-cols-2 divide-x divide-y divide-border-subtle border-y border-border-subtle bg-surface md:grid-cols-4 md:divide-y-0">
+              <Metric
+                label={t("projectConductor.metric.hotTokens")}
+                value={currentState.hot_tokens}
+              />
+              <Metric
+                label={t("projectConductor.metric.warmTokens")}
+                value={currentState.warm_tokens}
+              />
+              <Metric
+                label={t("projectConductor.metric.coldMemories")}
+                value={currentState.cold_memories_total}
+              />
+              <Metric
+                label={t("projectConductor.metric.tasksHandled")}
+                value={currentState.total_tasks_handled}
+              />
+            </div>
 
-        <div className="space-y-4">
-          <ListBlock
-            title={t("projectConductor.section.warmSummaries")}
-            empty={t("projectConductor.empty.warm")}
-            items={(state?.warm_summaries ?? []).map((item, index) => ({
-              id: String(item["id"] ?? index),
-              body: String(item["summary"] ?? JSON.stringify(item)),
-            }))}
-          />
-          <ListBlock
-            title={t("projectConductor.section.coldMemory")}
-            empty={t("projectConductor.empty.cold")}
-            items={(state?.cold_memories ?? []).map((item) => ({
-              id: item.id,
-              body: item.summary_text,
-            }))}
-          />
-          <ListBlock
-            title={t("projectConductor.section.hotThread")}
-            empty={loading ? t("projectConductor.loading") : t("projectConductor.empty.hot")}
-            items={latestHot.map((item, index) => ({
-              id: String(item["task_id"] ?? item["created_at"] ?? index),
-              body: `${String(item["role"] ?? "event")}: ${String(item["content"] ?? JSON.stringify(item))}`,
-            }))}
-          />
-        </div>
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
+              <section
+                data-density={
+                  isProjectConductorThinking
+                    ? "project-conductor-thinking-actions"
+                    : "project-conductor-actions"
+                }
+                className={cn(
+                  "relative overflow-hidden border-y border-border-subtle bg-surface px-4 py-5",
+                  isProjectConductorThinking &&
+                    "motion-essential border-brand/30 bg-brand-muted/10",
+                )}
+              >
+                {isProjectConductorThinking && (
+                  <div
+                    aria-hidden
+                    className="motion-essential pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
+                  />
+                )}
+                <div className="flex items-center gap-2">
+                  <MessageSquareText size={16} className="text-brand" aria-hidden />
+                  <h2 className="text-sm font-bold text-foreground">
+                    {t("projectConductor.askTitle")}
+                  </h2>
+                </div>
+                <p className="mt-1 text-xs leading-5 text-text-muted">
+                  {t("projectConductor.askDescription")}
+                </p>
+                <label
+                  htmlFor="project-conductor-question"
+                  className="mt-4 block text-xs font-semibold text-text-secondary"
+                >
+                  {t("projectConductor.askLabel")}
+                </label>
+                <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    id="project-conductor-question"
+                    value={question}
+                    onChange={(event) => setQuestion(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void handleAsk();
+                    }}
+                    placeholder={t("projectConductor.askPlaceholder")}
+                    className="min-h-11 border-border-subtle bg-surface-input"
+                  />
+                  <Button
+                    onClick={() => void handleAsk()}
+                    disabled={asking || !question.trim()}
+                    className="min-h-11 shrink-0 gap-2"
+                  >
+                    {asking ? (
+                      <AgentThinkingIndicator phase="thinking" size={14} />
+                    ) : (
+                      <Send size={14} aria-hidden />
+                    )}
+                    {t("projectConductor.askAction")}
+                  </Button>
+                </div>
+                {currentAnswer && (
+                  <div className="mt-4 border-l-2 border-brand bg-brand/5 px-4 py-3">
+                    <div className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-brand">
+                      {t("projectConductor.answer.latest")}
+                    </div>
+                    <ProjectConductorExpandableText text={currentAnswer} />
+                  </div>
+                )}
+              </section>
+
+              <ProjectConductorMemorySection
+                title={t("projectConductor.section.pinned")}
+                description={t("projectConductor.section.pinnedDescription")}
+                empty={t("projectConductor.empty.pinned")}
+                icon={Pin}
+                items={
+                  currentState.pinned_text
+                    ? [{ id: "pinned-project-memory", body: currentState.pinned_text }]
+                    : []
+                }
+              />
+            </div>
+
+            <div>
+              <div className="mb-3 flex items-start gap-2">
+                <History size={16} className="mt-0.5 text-brand" aria-hidden />
+                <div>
+                  <h2 className="text-sm font-bold text-foreground">
+                    {t("projectConductor.memory.title")}
+                  </h2>
+                  <p className="mt-1 text-xs leading-5 text-text-muted">
+                    {t("projectConductor.memory.description")}
+                  </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                <ProjectConductorMemorySection
+                  title={t("projectConductor.section.hotThread")}
+                  description={t("projectConductor.section.hotDescription")}
+                  empty={t("projectConductor.empty.hot")}
+                  icon={Activity}
+                  truncated={currentState.hot_thread_truncated}
+                  items={latestHot.map((item, index) => ({
+                    id: String(item["task_id"] ?? item["created_at"] ?? `hot-${index}`),
+                    body: projectConductorHotEventBody(item),
+                    meta: typeof item["kind"] === "string" ? item["kind"] : undefined,
+                  }))}
+                />
+                <ProjectConductorMemorySection
+                  title={t("projectConductor.section.warmSummaries")}
+                  description={t("projectConductor.section.warmDescription")}
+                  empty={t("projectConductor.empty.warm")}
+                  icon={Archive}
+                  truncated={currentState.warm_summaries_truncated}
+                  items={currentState.warm_summaries.map((item, index) => ({
+                    id: String(item["id"] ?? `warm-${index}`),
+                    body: memorySummary(item),
+                  }))}
+                />
+                <ProjectConductorMemorySection
+                  title={t("projectConductor.section.coldMemory")}
+                  description={t("projectConductor.section.coldDescription")}
+                  empty={t("projectConductor.empty.cold")}
+                  icon={DatabaseZap}
+                  truncated={currentState.cold_memories_truncated}
+                  items={currentState.cold_memories.map((item) => ({
+                    id: item.id,
+                    body: item.summary_text,
+                    meta: item.source_kind,
+                  }))}
+                />
+              </div>
+            </div>
+
+            <ProjectConductorThreadDock
+              key={projectId}
+              projectId={projectId}
+              onLoopDone={handleLoopDone}
+            />
+          </>
+        ) : null}
       </div>
     </section>
   );
@@ -267,51 +482,13 @@ export function ProjectConductorPage({ projectId }: { projectId: string }) {
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="min-w-0 p-3">
-      <div className="text-[10px] uppercase tracking-[0.2em] text-text-muted">{label}</div>
-      <div className="mt-1 text-2xl font-black tabular-nums">{value}</div>
+    <div className="min-w-0 px-4 py-3">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">
+        {label}
+      </div>
+      <div className="mt-1 text-2xl font-black tabular-nums text-foreground">
+        {value.toLocaleString()}
+      </div>
     </div>
-  );
-}
-
-function MemoryBlock({ title, body }: { title: string; body: string }) {
-  return (
-    <section className="border-y border-border-subtle bg-surface py-4">
-      <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted mb-3">
-        {title}
-      </h3>
-      <pre className="max-h-52 overflow-auto whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">
-        {body}
-      </pre>
-    </section>
-  );
-}
-
-function ListBlock({
-  title,
-  empty,
-  items,
-}: {
-  title: string;
-  empty: string;
-  items: Array<{ id: string; body: string }>;
-}) {
-  return (
-    <section className="border-y border-border-subtle bg-surface py-4">
-      <h3 className="text-xs font-black uppercase tracking-[0.2em] text-text-muted mb-3">
-        {title}
-      </h3>
-      {items.length === 0 ? (
-        <p className="text-xs text-text-muted">{empty}</p>
-      ) : (
-        <ul className="divide-y divide-border-subtle border-y border-border-subtle">
-          {items.map((item) => (
-            <li key={item.id} className="px-1 py-3 text-xs leading-relaxed text-text-secondary">
-              {item.body}
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
   );
 }

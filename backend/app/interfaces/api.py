@@ -44,7 +44,14 @@ from app.application.product_manager_service import (
     ProductManagerArtifactError,
     ProductManagerService,
 )
-from app.application.project_conductor import ProjectConductor, ProjectConductorStore
+from app.application.project_conductor import (
+    PROJECT_CONDUCTOR_INPUT_MAX_CHARS,
+    PROJECT_CONDUCTOR_STATE_COLD_LIMIT,
+    PROJECT_CONDUCTOR_STATE_HOT_LIMIT,
+    PROJECT_CONDUCTOR_STATE_WARM_LIMIT,
+    ProjectConductor,
+    ProjectConductorStore,
+)
 from app.application.project_conductor import _run_subprocess as _project_conductor_run_subprocess
 from app.application.project_run_manager import ProjectRunError, project_run_manager
 from app.application.project_script_suggestions import suggest_project_scripts
@@ -119,6 +126,7 @@ from app.domain.models import (
     Project,
     ProjectConductorState,
     ProjectEnvVar,
+    ProjectMemoryEmbedding,
     ProjectReadinessProbe,
     ProjectStartupService,
     RuntimeCatalog,
@@ -225,7 +233,7 @@ class CodexApiStore(Protocol):
     ) -> list[Agent]: ...
     async def load_workflow_graph_for_issue(self, issue_id: str) -> WorkflowGraph | None: ...
     async def save_conductor_task(self, task: ConductorTask) -> None: ...
-    async def save_project_conductor_state(self, state: ProjectConductorState) -> None: ...
+    async def save_project_conductor_state(self, state: ProjectConductorState) -> bool: ...
 
     async def save_codex_task_message(self, message: CodexTaskMessage) -> None: ...
     async def list_codex_task_messages(
@@ -1825,15 +1833,41 @@ async def codex_issue_agent_mesh(issue_id: str) -> object:
 
 
 class ProjectConductorAskRequest(BaseModel):
-    question: str
+    question: str = Field(min_length=1, max_length=PROJECT_CONDUCTOR_INPUT_MAX_CHARS)
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, value: str) -> str:
+        question = value.strip()
+        if not question:
+            raise ValueError("question must not be blank")
+        return question
 
 
 class ProjectConductorMessageRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=PROJECT_CONDUCTOR_INPUT_MAX_CHARS)
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, value: str) -> str:
+        message = value.strip()
+        if not message:
+            raise ValueError("message must not be blank")
+        return message
 
 
 class ProjectConductorStartLoopRequest(BaseModel):
-    prompt: str | None = None
+    prompt: str | None = Field(default=None, max_length=PROJECT_CONDUCTOR_INPUT_MAX_CHARS)
+
+    @field_validator("prompt")
+    @classmethod
+    def validate_prompt(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        prompt = value.strip()
+        if not prompt:
+            raise ValueError("prompt must not be blank")
+        return prompt
 
 
 class ProjectPRFollowupRequest(BaseModel):
@@ -1844,11 +1878,36 @@ async def _run_subprocess(args: list[str], *, cwd: str, timeout_s: int = 30) -> 
     return await _project_conductor_run_subprocess(args, cwd=cwd, timeout_s=timeout_s)
 
 
-def _serialize_project_conductor_state(state: ProjectConductorState) -> JsonObject:
+def _serialize_project_conductor_state(
+    state: ProjectConductorState,
+    cold_memories: list[ProjectMemoryEmbedding],
+    cold_memories_total: int,
+) -> JsonObject:
+    hot_thread = _safe_json_list(state.hot_thread_json)
+    warm_summaries = _safe_json_list(state.warm_summaries_json)
+    visible_hot = hot_thread[-PROJECT_CONDUCTOR_STATE_HOT_LIMIT:]
+    visible_warm = warm_summaries[-PROJECT_CONDUCTOR_STATE_WARM_LIMIT:]
+    visible_cold = cold_memories[:PROJECT_CONDUCTOR_STATE_COLD_LIMIT]
     return {
         "project_id": state.project_id,
-        "hot_thread": _safe_json_list(state.hot_thread_json),
-        "warm_summaries": _safe_json_list(state.warm_summaries_json),
+        "hot_thread": visible_hot,
+        "hot_thread_total": len(hot_thread),
+        "hot_thread_truncated": len(visible_hot) < len(hot_thread),
+        "warm_summaries": visible_warm,
+        "warm_summaries_total": len(warm_summaries),
+        "warm_summaries_truncated": len(visible_warm) < len(warm_summaries),
+        "cold_memories": [
+            {
+                "id": memory.id,
+                "source_kind": memory.source_kind,
+                "source_id": memory.source_id,
+                "summary_text": memory.summary_text,
+                "created_at": memory.created_at.isoformat() if memory.created_at else None,
+            }
+            for memory in visible_cold
+        ],
+        "cold_memories_total": cold_memories_total,
+        "cold_memories_truncated": len(visible_cold) < cold_memories_total,
         "pinned_text": state.pinned_text,
         "hot_tokens": state.hot_tokens,
         "warm_tokens": state.warm_tokens,
@@ -1869,20 +1928,38 @@ def _require_project_conductor(project_id: str) -> ProjectConductor:
 
 
 @router.get("/codex/projects/{project_id}/conductor/state")
-async def codex_project_conductor_state(project_id: str) -> object:
+async def codex_project_conductor_state(project_id: str) -> JsonObject:
     conductor = _require_project_conductor(project_id)
     state = await conductor.get_or_create_state()
-    return _serialize_project_conductor_state(state)
+    cold_memories = await conductor.list_recent_cold_memories()
+    cold_memories_total = await conductor.count_cold_memories()
+    return _serialize_project_conductor_state(state, cold_memories, cold_memories_total)
 
 
 @router.post("/codex/projects/{project_id}/conductor/ask")
 async def codex_project_conductor_ask(project_id: str, request: ProjectConductorAskRequest) -> object:
     conductor = _require_project_conductor(project_id)
-    state = await conductor.get_or_create_state()
-    answer = await conductor.answer_question(request.question, state=state)
-    await conductor.append_hot_event(role="user", content=request.question)
-    await conductor.append_hot_event(role="project_conductor", content=answer)
-    return {"status": "ok", "answer": answer}
+    task = ConductorTask(
+        id=str(uuid4()),
+        project_id=project_id,
+        task_kind="qa_question",
+        payload={"question": request.question},
+        created_at=datetime.now(),
+    )
+    return await conductor.handle_task(task)
+
+
+@router.post("/codex/projects/{project_id}/conductor/schedule-review")
+async def codex_project_conductor_schedule_review(project_id: str) -> object:
+    conductor = _require_project_conductor(project_id)
+    task = ConductorTask(
+        id=str(uuid4()),
+        project_id=project_id,
+        task_kind="scheduled_review",
+        payload={"question": "Run a scheduled project health review."},
+        created_at=datetime.now(),
+    )
+    return await conductor.handle_task(task)
 
 
 @router.post("/codex/projects/{project_id}/conductor/message")
@@ -1899,14 +1976,13 @@ async def codex_project_conductor_start_loop(
 ) -> JsonObject:
     store = _require_codex_store()
     conductor = _require_project_conductor(project_id)
-    state = await conductor.get_or_create_state()
     prompt = (request.prompt or "Run a deterministic project conductor checkpoint.").strip()
     task = ConductorTask(
         id=str(uuid4()),
         project_id=project_id,
         task_kind="ad_hoc",
         payload={"prompt": prompt},
-        status="done",
+        status="running",
         result_json="{}",
         created_at=datetime.now(),
         updated_at=datetime.now(),
@@ -1916,22 +1992,36 @@ async def codex_project_conductor_start_loop(
         "ProjectConductor deterministic checkpoint complete. "
         "No LLM call was required for this local state update."
     )
-    await conductor._append_hot_without_compaction(
-        state,
-        {"role": "user", "kind": "loop", "content": prompt, "task_id": task.id},
+    await conductor.append_hot_event(
+        role="user",
+        content=prompt,
+        extra={"kind": "loop", "task_id": task.id},
     )
-    await conductor._append_hot_without_compaction(
-        state,
-        {"role": "project_conductor", "kind": "loop", "content": answer, "task_id": task.id},
+    await conductor.append_hot_event(
+        role="project_conductor",
+        content=answer,
+        extra={"kind": "loop", "task_id": task.id},
     )
-    await store.save_project_conductor_state(state)
+    tool_event_id = str(uuid4())
     payload: JsonObject = {
         "status": "done",
         "answer": answer,
         "task_id": task.id,
-        "tool_events": [{"name": "finalize_task", "status": "done"}],
+        "tool_events": [
+            {
+                "id": tool_event_id,
+                "name": "finalize_task",
+                "input": {},
+                "result": {"status": "done"},
+                "is_error": False,
+            }
+        ],
+        "turn_count": 1,
+        "llm": None,
     }
+    task.status = "done"
     task.result_json = json.dumps(payload, ensure_ascii=False)
+    task.updated_at = datetime.now()
     await store.save_conductor_task(task)
     return payload
 

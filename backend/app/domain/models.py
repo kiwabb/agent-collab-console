@@ -684,6 +684,7 @@ class ProjectConductorState:
     last_compaction_at: datetime | None = None
     total_tasks_handled: int = 0
     updated_at: datetime | None = None
+    revision: int = 0
 
 
 ConductorTaskKind = Literal["issue", "qa_question", "scheduled_review", "ad_hoc"]

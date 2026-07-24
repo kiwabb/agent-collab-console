@@ -15,8 +15,14 @@ test("getProjectConductorState hits the conductor state endpoint", async () => {
     {
       project_id: "project-1",
       hot_thread: [],
+      hot_thread_total: 0,
+      hot_thread_truncated: false,
       warm_summaries: [],
+      warm_summaries_total: 0,
+      warm_summaries_truncated: false,
       cold_memories: [],
+      cold_memories_total: 0,
+      cold_memories_truncated: false,
       pinned_text: "",
       hot_tokens: 0,
       warm_tokens: 0,
@@ -30,8 +36,20 @@ test("getProjectConductorState hits the conductor state endpoint", async () => {
       assert.equal(result.project_id, "project-1");
       assert.equal(calls.length, 1);
       const call = at(calls, 0, "fetch call");
-      assert.equal(call.input, "/api/codex/projects/project-1/conductor-state");
+      assert.equal(call.input, "/api/codex/projects/project-1/conductor/state");
       assert.equal(call.init, undefined);
+    },
+  );
+});
+
+test("project conductor endpoints encode project ids", async () => {
+  await withMockJsonFetch(
+    { status: "done", answer: "Checked.", task_id: "task-encoded" },
+    async (calls) => {
+      await askProjectConductor("project/a b", "Check the project.");
+
+      const call = at(calls, 0, "fetch call");
+      assert.equal(call.input, "/api/codex/projects/project%2Fa%20b/conductor/ask");
     },
   );
 });

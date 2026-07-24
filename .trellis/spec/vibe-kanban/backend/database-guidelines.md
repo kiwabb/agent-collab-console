@@ -1240,3 +1240,136 @@ if operation_kind == "forward" and len(commands_json.encode("utf-8")) > MAX_BYTE
     raise CommandBatchTooLarge()
 parse_inverse_command_batch_json(inverse_commands_json)  # canonical and typed, not request-sized
 ```
+
+## Scenario: Bounded Project Conductor State and Durable Review Claims
+
+### 1. Scope / Trigger
+
+- Trigger: changing Project Conductor state, scheduled reviews, conductor task
+  persistence, memory compaction/retrieval, or the Project Conductor HTTP API.
+- This contract exists because a reload-triggered scheduler and a scheduled
+  answer that re-ingested rendered warm/cold context created thousands of
+  duplicate tasks and recursively growing JSON.
+
+### 2. Signatures
+
+- Store:
+  - `create_conductor_task_if_absent(task: ConductorTask) -> bool`.
+  - `load_latest_completed_project_review_at(project_id: str) -> datetime | None`.
+  - `list_conductor_tasks(*, status: str | None = None, issue_id: str | None = None) -> list[ConductorTask]`.
+  - `save_project_conductor_state(state: ProjectConductorState) -> bool` uses
+    `state.revision` as an optimistic compare-and-swap token.
+- Scheduler:
+  `run_project_review_tick(store, *, limit=None, due_after=None, review_slot=None) -> ProjectReviewTickSummary`.
+- API:
+  - `GET /api/codex/projects/{project_id}/conductor/state`.
+  - `POST /api/codex/projects/{project_id}/conductor/ask`.
+  - `POST /api/codex/projects/{project_id}/conductor/schedule-review`.
+  - `POST /api/codex/projects/{project_id}/conductor/start-loop`.
+- State responses expose bounded `hot_thread`, `warm_summaries`, and
+  `cold_memories` plus total/truncated metadata for bounded tiers.
+
+### 3. Contracts
+
+- The background scheduler derives one deterministic task ID per
+  `(project_id, interval slot)` and claims it with `INSERT OR IGNORE`. A second
+  process or reload in the same slot returns `skipped_claimed`.
+- When a completed scheduled review is newer than `due_after`, the project
+  returns `skipped_recent`; backend reload alone never makes a review due.
+- A scheduled review may run the typed GitHub PR sweep, but it MUST NOT call
+  `answer_question()` or render pinned/warm/cold memory into its answer. It
+  persists one bounded delta containing only review outcome and compact PR
+  counts/status.
+- User questions remain the only path that renders retrieved context for an
+  answer. Persisted hot/warm entries strip known legacy rendered-memory
+  sections before reuse.
+- Input, answer, event, summary, hot-count, warm-count, retrieval-count, and
+  state-tail limits are hard application constants. The state endpoint returns
+  at most 20 hot items, 8 warm items, and 20 cold items.
+- Count or token overflow compacts the oldest required prefix into the next
+  memory tier before retaining the bounded tail. Applying `items[-limit:]`
+  before compaction is forbidden because it silently discards history and can
+  make the token thresholds unreachable.
+- Persisted `hot_thread_json` and `warm_summaries_json` are strict JSON arrays.
+  Invalid JSON or a non-array raises `ProjectConductorStateError`; it must not
+  silently become an empty state that later overwrites durable data.
+- Every state update loads a revision, applies its delta, and saves only while
+  that revision is current. A conflict reloads and reapplies the events and
+  task-count increment; bounded exhaustion fails loudly. Long external work,
+  including a PR sweep, must finish before loading the state to mutate.
+- Schema migrations that repair recursive memory validate affected JSON before
+  mutation, remove only scaffolds linked to a confirmed recursive review's
+  project/task/source identity, preserve retained scalar JSON values exactly,
+  recompute token counters, record an audit event, and are idempotent on a
+  second open. Text matching alone must never delete another project's memory.
+- Issue self-improvement reads conductor tasks with an `issue_id` store filter;
+  it must not load the project-wide task ledger and filter in Python.
+
+### 4. Validation & Error Matrix
+
+- Same project and review slot already claimed -> `skipped_claimed`; no second
+  task or memory event.
+- Latest completed review is within the interval -> `skipped_recent`; no claim.
+- Scheduled PR sweep fails -> bounded `github_pr_followup.status="failed"`;
+  the supervisor task still reaches `done` and the next interval remains live.
+- Corrupt state JSON -> typed `ProjectConductorStateError`; no repair overwrite.
+- Question/prompt above 4,000 characters or blank after trimming -> HTTP 422.
+- Legacy repair encounters unparseable target JSON -> migration rolls back and
+  startup fails closed.
+- State compare-and-swap conflict -> reload and reapply the delta; retry-budget
+  exhaustion raises `ProjectConductorStateConflictError` without overwriting a
+  newer row.
+
+### 5. Good/Base/Bad Cases
+
+- Good: two scheduler instances scan the same project in the same interval;
+  exactly one durable task executes and one bounded hot event is written.
+- Good: a manual event lands while a scheduled review is running; both events
+  and the exact task count survive after the review finishes.
+- Base: an operator explicitly requests a manual review and receives the
+  compact result immediately.
+- Good: a state with hundreds of historical rows returns recent tails and
+  truncation metadata without serializing the entire ledger.
+- Bad: run one review immediately on every process start.
+- Bad: construct a scheduled answer from `Pinned`, `Warm summaries`, and
+  `Relevant cold memory`, then compact that rendered answer back into memory.
+- Bad: catch JSON decoding and return `[]` at a persistence boundary.
+- Bad: `INSERT OR REPLACE` an old whole-state snapshot after a long await.
+
+### 6. Tests Required
+
+- Scheduler: recent completion skips; two calls with one interval slot produce
+  one claim; per-project failures remain isolated.
+- Conductor: scheduled review never calls/duplicates question-answer context;
+  repeated reviews keep hot/result payloads bounded.
+- Compaction: the 49th hot event becomes a warm summary while 48 recent events
+  remain; the 25th warm summary moves the oldest summary to cold memory.
+- API: exact endpoint paths, project ID encoding, input validation, task ID
+  correlation, state-tail totals/truncation, and cold-memory serialization.
+- Migration: a real memory row survives; only known recursive scaffolds are
+  removed; a clean project quoting legacy text and a retained integer above
+  int64 survive exactly; token counts are recomputed; corrupt JSON rolls back;
+  second open produces no further mutation.
+- Concurrency: force two writers to load the same revision and prove both
+  deltas survive via compare-and-swap retry.
+- Query scope: self-improvement requests only the matching issue's tasks.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+for project in await store.list_projects():
+    await conductor.handle_task(new_random_scheduled_review(project))
+```
+
+Correct:
+
+```python
+task = scheduled_review_for_interval(project.id, review_slot)
+if latest_completed_at is not None and latest_completed_at >= due_after:
+    return "skipped_recent"
+if not await store.create_conductor_task_if_absent(task):
+    return "skipped_claimed"
+await conductor.handle_task(task)
+```

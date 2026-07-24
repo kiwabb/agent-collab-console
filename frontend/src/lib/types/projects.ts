@@ -135,7 +135,11 @@ export interface ProjectPullResult {
 export interface ProjectConductorState {
   project_id: string;
   hot_thread: Array<Record<string, unknown>>;
+  hot_thread_total: number;
+  hot_thread_truncated: boolean;
   warm_summaries: Array<Record<string, unknown>>;
+  warm_summaries_total: number;
+  warm_summaries_truncated: boolean;
   cold_memories: Array<{
     id: string;
     source_kind: string;
@@ -143,6 +147,8 @@ export interface ProjectConductorState {
     summary_text: string;
     created_at: string | null;
   }>;
+  cold_memories_total: number;
+  cold_memories_truncated: boolean;
   pinned_text: string;
   hot_tokens: number;
   warm_tokens: number;

@@ -65,6 +65,7 @@ from app.json_safety import object_dict_list, object_dict_or_none, parse_json_va
 
 logger = logging.getLogger(__name__)
 
+
 class RowWithKeys(Protocol):
     def keys(self) -> Sequence[str]: ...
 
@@ -186,6 +187,52 @@ def _plan_details(value: str | None) -> PlanDetails | None:
     return PlanDetails(summary=summary, next_steps=next_steps, task_title=task_title)
 
 
+def _preserved_json_array_items(raw: str) -> list[tuple[object, str]]:
+    """Decode array values while preserving each retained element's exact JSON bytes."""
+    decoder = json.JSONDecoder()
+    index = 0
+    length = len(raw)
+
+    while index < length and raw[index].isspace():
+        index += 1
+    if index >= length or raw[index] != "[":
+        raise ValueError("expected a JSON array")
+    index += 1
+
+    items: list[tuple[object, str]] = []
+    while True:
+        while index < length and raw[index].isspace():
+            index += 1
+        if index < length and raw[index] == "]":
+            index += 1
+            break
+        start = index
+        value, index = decoder.raw_decode(raw, index)
+        items.append((value, raw[start:index]))
+        while index < length and raw[index].isspace():
+            index += 1
+        if index < length and raw[index] == ",":
+            index += 1
+            continue
+        if index < length and raw[index] == "]":
+            index += 1
+            break
+        raise ValueError("malformed JSON array separator")
+
+    if raw[index:].strip():
+        raise ValueError("unexpected data after JSON array")
+    return items
+
+
+def _project_conductor_memory_text(value: object) -> str:
+    return str(value.get("summary", "")) if isinstance(value, dict) else str(value)
+
+
+def _contains_legacy_recursive_compaction_signature(summary: str, signature: str) -> bool:
+    """Match a legacy review pair only at a summarizer fragment boundary."""
+    return summary.startswith(signature) or f" | {signature}" in summary
+
+
 class AsyncSQLiteStore:
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = db_path
@@ -210,6 +257,196 @@ class AsyncSQLiteStore:
                 await self._conn.execute("PRAGMA synchronous=NORMAL")
                 await self._conn.execute("PRAGMA busy_timeout=30000")
             return self._conn
+
+    @staticmethod
+    async def _apply_project_conductor_v16_migration(
+        conn: aiosqlite.Connection,
+    ) -> None:
+        """Repair the legacy scheduled-review feedback loop inside one transaction."""
+        invalid_state = await (
+            await conn.execute(
+                """SELECT project_id
+                   FROM project_conductor_states
+                   WHERE json_type(
+                             CASE WHEN json_valid(hot_thread_json)
+                                  THEN hot_thread_json ELSE 'null' END
+                         ) <> 'array'
+                      OR json_type(
+                             CASE WHEN json_valid(warm_summaries_json)
+                                  THEN warm_summaries_json ELSE 'null' END
+                         ) <> 'array'
+                   LIMIT 1"""
+            )
+        ).fetchone()
+        if invalid_state is not None:
+            raise ValueError(
+                f"project conductor state JSON is invalid for project {invalid_state[0]}"
+            )
+        invalid_task = await (
+            await conn.execute(
+                """SELECT id
+                   FROM conductor_tasks
+                   WHERE task_kind = 'scheduled_review'
+                     AND result_json IS NOT NULL
+                     AND instr(result_json, 'ProjectConductor context answer.') > 0
+                     AND instr(result_json, 'Run a scheduled project health review.') > 0
+                     AND NOT json_valid(result_json)
+                   LIMIT 1"""
+            )
+        ).fetchone()
+        if invalid_task is not None:
+            raise ValueError(
+                f"scheduled project review result JSON is invalid for task {invalid_task[0]}"
+            )
+
+        recursive_task_rows = await (
+            await conn.execute(
+                """SELECT id, project_id, json_extract(result_json, '$.answer')
+                   FROM conductor_tasks
+                   WHERE task_kind = 'scheduled_review'
+                     AND status = 'done'
+                     AND json_valid(result_json)
+                     AND instr(
+                         COALESCE(json_extract(result_json, '$.answer'), ''),
+                         'ProjectConductor context answer.'
+                     ) > 0
+                     AND instr(
+                         COALESCE(json_extract(result_json, '$.answer'), ''),
+                         'Run a scheduled project health review.'
+                     ) > 0"""
+            )
+        ).fetchall()
+        recursive_task_ids_by_project: dict[str, set[str]] = {}
+        recursive_compaction_signatures_by_project: dict[str, set[str]] = {}
+        for task_id, project_id, answer in recursive_task_rows:
+            project_key = str(project_id)
+            answer_prefix = str(answer)[:240]
+            recursive_task_ids_by_project.setdefault(project_key, set()).add(str(task_id))
+            recursive_compaction_signatures_by_project.setdefault(project_key, set()).add(
+                f"user: Run a scheduled project health review. | project_conductor: {answer_prefix}"
+            )
+
+        removed_warm_source_ids: dict[str, set[str]] = {}
+        state_rows = await (
+            await conn.execute(
+                """SELECT project_id, hot_thread_json, warm_summaries_json
+                   FROM project_conductor_states"""
+            )
+        ).fetchall()
+        for project_id_value, hot_json_value, warm_json_value in state_rows:
+            project_id = str(project_id_value)
+            recursive_task_ids = recursive_task_ids_by_project.get(project_id)
+            if not recursive_task_ids:
+                continue
+
+            hot_items = _preserved_json_array_items(str(hot_json_value))
+            retained_hot = [
+                raw_item
+                for value, raw_item in hot_items
+                if not (
+                    isinstance(value, dict) and str(value.get("task_id", "")) in recursive_task_ids
+                )
+            ]
+            warm_items = _preserved_json_array_items(str(warm_json_value))
+            retained_warm: list[str] = []
+            removed_ids = removed_warm_source_ids.setdefault(project_id, set())
+            recursive_signatures = recursive_compaction_signatures_by_project[project_id]
+            for value, raw_item in warm_items:
+                summary = _project_conductor_memory_text(value)
+                if any(
+                    _contains_legacy_recursive_compaction_signature(summary, signature)
+                    for signature in recursive_signatures
+                ):
+                    if isinstance(value, dict) and value.get("id"):
+                        removed_ids.add(str(value["id"]))
+                    continue
+                retained_warm.append(raw_item)
+
+            if len(retained_hot) == len(hot_items) and len(retained_warm) == len(warm_items):
+                continue
+            repaired_hot_json = f"[{','.join(retained_hot)}]"
+            repaired_warm_json = f"[{','.join(retained_warm)}]"
+            await conn.execute(
+                """UPDATE project_conductor_states
+                   SET hot_thread_json = ?, warm_summaries_json = ?,
+                       hot_tokens = ?, warm_tokens = ?
+                   WHERE project_id = ?""",
+                (
+                    repaired_hot_json,
+                    repaired_warm_json,
+                    0 if not retained_hot else max(1, len(repaired_hot_json) // 4),
+                    0 if not retained_warm else max(1, len(repaired_warm_json) // 4),
+                    project_id,
+                ),
+            )
+
+        for project_id in recursive_task_ids_by_project:
+            await conn.execute(
+                """INSERT INTO project_audit (project_id, issue_id, event, created_at)
+                   SELECT ?, NULL, 'project_conductor_recursive_memory_repaired', datetime('now')
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM project_audit
+                       WHERE project_id = ?
+                         AND event = 'project_conductor_recursive_memory_repaired'
+                   )""",
+                (project_id, project_id),
+            )
+            for source_id in removed_warm_source_ids.get(project_id, set()):
+                await conn.execute(
+                    """DELETE FROM project_memory_embeddings
+                       WHERE project_id = ? AND source_kind = 'warm_summary' AND source_id = ?""",
+                    (project_id, source_id),
+                )
+            cold_rows = await (
+                await conn.execute(
+                    """SELECT id, source_id, summary_text
+                       FROM project_memory_embeddings
+                       WHERE project_id = ? AND source_kind = 'warm_summary'""",
+                    (project_id,),
+                )
+            ).fetchall()
+            recursive_signatures = recursive_compaction_signatures_by_project[project_id]
+            for memory_id, source_id, summary_text in cold_rows:
+                summary = str(summary_text)
+                if not any(
+                    _contains_legacy_recursive_compaction_signature(summary, signature)
+                    for signature in recursive_signatures
+                ):
+                    continue
+                await conn.execute(
+                    """DELETE FROM project_memory_embeddings
+                       WHERE id = ? AND project_id = ? AND source_kind = 'warm_summary'
+                         AND source_id = ? AND summary_text = ?""",
+                    (str(memory_id), project_id, str(source_id), summary),
+                )
+        await conn.execute(
+            """UPDATE conductor_tasks
+               SET result_json = json_set(
+                   result_json,
+                   '$.answer',
+                   'Scheduled project review completed. '
+                   || 'Historical recursive context was removed.'
+               )
+               WHERE task_kind = 'scheduled_review'
+                 AND status = 'done'
+                 AND json_valid(result_json)
+                 AND instr(
+                     COALESCE(json_extract(result_json, '$.answer'), ''),
+                     'ProjectConductor context answer.'
+                 ) > 0
+                 AND instr(
+                     COALESCE(json_extract(result_json, '$.answer'), ''),
+                     'Run a scheduled project health review.'
+                 ) > 0"""
+        )
+        await conn.execute(
+            """CREATE INDEX IF NOT EXISTS idx_conductor_tasks_project_review_due
+               ON conductor_tasks(project_id, task_kind, status, updated_at DESC)"""
+        )
+        await conn.execute(
+            "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
+            (16,),
+        )
 
     async def _init_db(self) -> None:
         conn = await self._get_conn()
@@ -921,7 +1158,8 @@ class AsyncSQLiteStore:
                 warm_tokens INTEGER NOT NULL DEFAULT 0,
                 last_compaction_at TEXT,
                 total_tasks_handled INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT
+                updated_at TEXT,
+                revision INTEGER NOT NULL DEFAULT 1
             )
         """)
         await conn.execute("""
@@ -1121,6 +1359,49 @@ class AsyncSQLiteStore:
                 (15,),
             )
             current_version = 15
+        if current_version < 16:
+            # Keep the repair isolated from the broader boot schema work. A
+            # typed failure or cancellation must never leave a half-repaired
+            # ledger that a later executescript() could commit implicitly.
+            await conn.commit()
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                await self._apply_project_conductor_v16_migration(conn)
+                await conn.commit()
+            except BaseException:
+                # Transaction boundary: startup cancellation is also rollback-worthy.
+                await conn.rollback()
+                raise
+            current_version = 16
+        if current_version < 17:
+            # Project Conductor state is an optimistic-concurrency aggregate.
+            # Add its compare-and-swap revision in one startup transaction.
+            await conn.commit()
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await conn.execute("PRAGMA table_info(project_conductor_states)")
+                columns = {str(row[1]) for row in await cursor.fetchall()}
+                if "revision" not in columns:
+                    await conn.execute(
+                        "ALTER TABLE project_conductor_states "
+                        "ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"
+                    )
+                await conn.execute(
+                    "UPDATE project_conductor_states SET revision = 1 WHERE revision = 0"
+                )
+                await conn.execute(
+                    "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
+                    (17,),
+                )
+                await conn.commit()
+            except BaseException:
+                # Transaction boundary: startup cancellation is also rollback-worthy.
+                await conn.rollback()
+                raise
+            current_version = 17
+        # Also repairs databases opened by a prerelease v17 build that used
+        # zero as the persisted default; zero is reserved for unsaved objects.
+        await conn.execute("UPDATE project_conductor_states SET revision = 1 WHERE revision = 0")
         # Create indexes for frequently queried columns
         await conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_codex_tasks_session_id ON codex_tasks(session_id)"
@@ -2187,9 +2468,7 @@ class AsyncSQLiteStore:
             raise
         await conn.commit()
 
-    async def list_project_startup_services(
-        self, project_id: str
-    ) -> list[ProjectStartupService]:
+    async def list_project_startup_services(self, project_id: str) -> list[ProjectStartupService]:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -2223,9 +2502,7 @@ class AsyncSQLiteStore:
             for row in rows
         ]
 
-    async def load_project_startup_config_meta(
-        self, project_id: str
-    ) -> dict[str, object] | None:
+    async def load_project_startup_config_meta(self, project_id: str) -> dict[str, object] | None:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
@@ -3469,29 +3746,45 @@ class AsyncSQLiteStore:
             updated_at=self._parse_datetime(row["updated_at"]),
         )
 
-    async def save_project_conductor_state(self, state: "ProjectConductorState") -> None:
+    async def save_project_conductor_state(self, state: "ProjectConductorState") -> bool:
         from app.domain.models import ProjectConductorState  # noqa: F401
 
         await self._ensure_db()
         conn = await self._get_conn()
-        await conn.execute(
-            """INSERT OR REPLACE INTO project_conductor_states
-               (project_id, hot_thread_json, warm_summaries_json, pinned_text,
-                hot_tokens, warm_tokens, last_compaction_at, total_tasks_handled, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                state.project_id,
-                state.hot_thread_json,
-                state.warm_summaries_json,
-                state.pinned_text,
-                state.hot_tokens,
-                state.warm_tokens,
-                self._format_datetime(state.last_compaction_at),
-                state.total_tasks_handled,
-                self._format_datetime(state.updated_at),
-            ),
+        values = (
+            state.hot_thread_json,
+            state.warm_summaries_json,
+            state.pinned_text,
+            state.hot_tokens,
+            state.warm_tokens,
+            self._format_datetime(state.last_compaction_at),
+            state.total_tasks_handled,
+            self._format_datetime(state.updated_at),
         )
+        if state.revision == 0:
+            cursor = await conn.execute(
+                """INSERT INTO project_conductor_states
+                   (project_id, hot_thread_json, warm_summaries_json, pinned_text,
+                    hot_tokens, warm_tokens, last_compaction_at, total_tasks_handled,
+                    updated_at, revision)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                   ON CONFLICT(project_id) DO NOTHING""",
+                (state.project_id, *values),
+            )
+        else:
+            cursor = await conn.execute(
+                """UPDATE project_conductor_states
+                   SET hot_thread_json = ?, warm_summaries_json = ?, pinned_text = ?,
+                       hot_tokens = ?, warm_tokens = ?, last_compaction_at = ?,
+                       total_tasks_handled = ?, updated_at = ?, revision = revision + 1
+                   WHERE project_id = ? AND revision = ?""",
+                (*values, state.project_id, state.revision),
+            )
+        saved = cursor.rowcount == 1
         await conn.commit()
+        if saved:
+            state.revision += 1
+        return saved
 
     async def load_project_conductor_state(self, project_id: str) -> "ProjectConductorState | None":
         from app.domain.models import ProjectConductorState
@@ -3516,6 +3809,7 @@ class AsyncSQLiteStore:
             last_compaction_at=self._parse_datetime(row["last_compaction_at"]),
             total_tasks_handled=int(row["total_tasks_handled"] or 0),
             updated_at=self._parse_datetime(row["updated_at"]),
+            revision=int(row["revision"] or 0),
         )
 
     def _row_to_conductor_task(self, row: aiosqlite.Row) -> "ConductorTask":
@@ -3573,6 +3867,53 @@ class AsyncSQLiteStore:
         )
         await conn.commit()
 
+    async def create_conductor_task_if_absent(self, task: "ConductorTask") -> bool:
+        from app.domain.models import ConductorTask  # noqa: F401
+
+        await self._ensure_db()
+        conn = await self._get_conn()
+        cur = await conn.execute(
+            """INSERT OR IGNORE INTO conductor_tasks
+               (id, project_id, task_kind, payload_json, issue_id, status, result_json,
+                lease_owner, heartbeat_at, lease_expires_at, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                task.id,
+                task.project_id,
+                task.task_kind,
+                json.dumps(task.payload, ensure_ascii=False, default=str),
+                task.issue_id,
+                task.status,
+                task.result_json,
+                task.lease_owner,
+                self._format_datetime(task.heartbeat_at),
+                self._format_datetime(task.lease_expires_at),
+                self._format_datetime(task.created_at),
+                self._format_datetime(task.updated_at or datetime.now()),
+            ),
+        )
+        await conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def load_latest_completed_project_review_at(
+        self,
+        project_id: str,
+    ) -> datetime | None:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        async with conn.execute(
+            """SELECT COALESCE(updated_at, created_at)
+               FROM conductor_tasks
+               WHERE project_id = ? AND task_kind = 'scheduled_review' AND status = 'done'
+               ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+               LIMIT 1""",
+            (project_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return self._parse_datetime(row[0])
+
     async def load_conductor_task(self, task_id: str) -> "ConductorTask | None":
         await self._ensure_db()
         conn = await self._get_conn()
@@ -3599,16 +3940,37 @@ class AsyncSQLiteStore:
             return None
         return self._row_to_conductor_task(row)
 
-    async def list_conductor_tasks(self, *, status: str | None = None) -> list["ConductorTask"]:
+    async def list_conductor_tasks(
+        self,
+        *,
+        status: str | None = None,
+        issue_id: str | None = None,
+    ) -> list["ConductorTask"]:
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
-        if status:
+        if status is not None and issue_id is not None:
+            async with conn.execute(
+                """SELECT * FROM conductor_tasks
+                   WHERE status = ? AND issue_id = ?
+                   ORDER BY created_at ASC, updated_at ASC, id ASC""",
+                (status, issue_id),
+            ) as cur:
+                rows = await cur.fetchall()
+        elif status is not None:
             async with conn.execute(
                 """SELECT * FROM conductor_tasks
                    WHERE status = ?
                    ORDER BY created_at ASC, updated_at ASC, id ASC""",
                 (status,),
+            ) as cur:
+                rows = await cur.fetchall()
+        elif issue_id is not None:
+            async with conn.execute(
+                """SELECT * FROM conductor_tasks
+                   WHERE issue_id = ?
+                   ORDER BY created_at ASC, updated_at ASC, id ASC""",
+                (issue_id,),
             ) as cur:
                 rows = await cur.fetchall()
         else:
@@ -4042,14 +4404,27 @@ class AsyncSQLiteStore:
         await conn.commit()
 
     async def list_project_memory_embeddings(
-        self, project_id: str, limit: int | None = None
+        self,
+        project_id: str,
+        limit: int | None = None,
+        *,
+        descending: bool = False,
     ) -> list["ProjectMemoryEmbedding"]:
         from app.domain.models import ProjectMemoryEmbedding
 
         await self._ensure_db()
         conn = await self._get_conn()
         conn.row_factory = aiosqlite.Row
-        sql = "SELECT * FROM project_memory_embeddings WHERE project_id = ? ORDER BY created_at ASC"
+        if descending:
+            sql = (
+                "SELECT * FROM project_memory_embeddings WHERE project_id = ? "
+                "ORDER BY created_at DESC, id DESC"
+            )
+        else:
+            sql = (
+                "SELECT * FROM project_memory_embeddings WHERE project_id = ? "
+                "ORDER BY created_at ASC, id ASC"
+            )
         args: list[object] = [project_id]
         if limit is not None:
             sql += " LIMIT ?"
@@ -4068,6 +4443,16 @@ class AsyncSQLiteStore:
             )
             for row in rows
         ]
+
+    async def count_project_memory_embeddings(self, project_id: str) -> int:
+        await self._ensure_db()
+        conn = await self._get_conn()
+        async with conn.execute(
+            "SELECT COUNT(*) FROM project_memory_embeddings WHERE project_id = ?",
+            (project_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        return int(row[0]) if row is not None else 0
 
     async def save_self_improvement_proposal(self, proposal: "SelfImprovementProposal") -> None:
         from app.domain.models import SelfImprovementProposal  # noqa: F401

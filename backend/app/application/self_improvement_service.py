@@ -14,11 +14,14 @@ logger = logging.getLogger(__name__)
 
 
 class _ProposalStore(Protocol):
-    async def list_conductor_tasks(self, *, status: str | None = None) -> list[object]:
-        ...
+    async def list_conductor_tasks(
+        self,
+        *,
+        status: str | None = None,
+        issue_id: str | None = None,
+    ) -> list[object]: ...
 
-    async def save_self_improvement_proposal(self, proposal: SelfImprovementProposal) -> None:
-        ...
+    async def save_self_improvement_proposal(self, proposal: SelfImprovementProposal) -> None: ...
 
 
 def _json_text(value: object) -> str:
@@ -36,7 +39,9 @@ def _normalize_fingerprint_part(value: str) -> str:
 
 
 def _fingerprint(issue: CodexIssue, target_kind: str, rule_id: str) -> str:
-    return "|".join([issue.project_id or "", issue.id, target_kind, _normalize_fingerprint_part(rule_id)])
+    return "|".join(
+        [issue.project_id or "", issue.id, target_kind, _normalize_fingerprint_part(rule_id)]
+    )
 
 
 def _proposal(
@@ -68,24 +73,8 @@ def _proposal(
     )
 
 
-def _task_matches_issue(task: object, issue_id: str) -> bool:
-    return getattr(task, "issue_id", None) == issue_id
-
-
 async def _load_issue_tasks(issue: CodexIssue, store: _ProposalStore) -> list[object]:
-    try:
-        tasks = await store.list_conductor_tasks()
-    except TypeError:
-        tasks = []
-        for status in ("failed", "stalled", "done"):
-            try:
-                tasks.extend(await store.list_conductor_tasks(status=status))
-            except Exception as exc:
-                logger.debug("self_improvement task read failed for %s/%s: %s", issue.id, status, exc)
-    except Exception as exc:
-        logger.debug("self_improvement task read failed for %s: %s", issue.id, exc)
-        return []
-    return [task for task in tasks if _task_matches_issue(task, issue.id)]
+    return await store.list_conductor_tasks(issue_id=issue.id)
 
 
 def _task_evidence(task: object, reason: str) -> dict[str, object]:
@@ -171,7 +160,9 @@ def _classify_tasks(issue: CodexIssue, tasks: list[object]) -> list[SelfImprovem
         lowered = text.lower()
         capability_signal = capability_signal or _contains_capability_signal(text)
         has_eval_evidence = has_eval_evidence or _contains_eval_evidence(text)
-        if "qa" in lowered and ("failed" in lowered or "bugs_found" in lowered or "exit_code" in lowered):
+        if "qa" in lowered and (
+            "failed" in lowered or "bugs_found" in lowered or "exit_code" in lowered
+        ):
             proposal = _proposal(
                 issue,
                 target_kind="code_spec",
@@ -275,7 +266,9 @@ def _classify_tasks(issue: CodexIssue, tasks: list[object]) -> list[SelfImprovem
     return list(proposals.values())
 
 
-async def extract_self_improvement_proposals(issue: CodexIssue, store: _ProposalStore) -> list[SelfImprovementProposal]:
+async def extract_self_improvement_proposals(
+    issue: CodexIssue, store: _ProposalStore
+) -> list[SelfImprovementProposal]:
     if not issue.project_id:
         return []
     tasks = await _load_issue_tasks(issue, store)
@@ -291,7 +284,9 @@ async def extract_self_improvement_proposals(issue: CodexIssue, store: _Proposal
     return saved
 
 
-async def record_issue_self_improvement(issue: CodexIssue, store: _ProposalStore) -> list[SelfImprovementProposal]:
+async def record_issue_self_improvement(
+    issue: CodexIssue, store: _ProposalStore
+) -> list[SelfImprovementProposal]:
     try:
         return await extract_self_improvement_proposals(issue, store)
     except Exception as exc:

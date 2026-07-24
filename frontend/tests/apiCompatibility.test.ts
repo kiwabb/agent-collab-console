@@ -379,10 +379,10 @@ test("runtime-critical callers import split api modules directly", () => {
     /from "@\/lib\/api\/projects"/,
     "project conductor loop should come from api/projects",
   );
-  assert.match(
+  assert.doesNotMatch(
     readSource("features/projects/components/ProjectConductorThreadDock.tsx"),
-    /from "@\/lib\/api\/fetch"/,
-    "project conductor stream URL base should come from api/fetch",
+    /EventSource|conductor\/stream/,
+    "project conductor should use the supported loop response instead of a missing SSE route",
   );
   assert.match(
     readSource("features/issues/tabs/CollabFeedTab.tsx"),
