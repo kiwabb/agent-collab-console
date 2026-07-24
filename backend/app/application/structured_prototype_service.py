@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -50,6 +51,9 @@ from app.application.structured_prototype_contracts import (
     parse_inverse_command_batch_json,
     parse_prototype_document_json,
     validate_command_batch_evidence_context,
+)
+from app.application.structured_prototype_deletion_cleanup import (
+    StructuredPrototypeDeletionCleanupError,
 )
 from app.application.structured_prototype_revision_diff import (
     PrototypeRevisionDiff,
@@ -115,6 +119,8 @@ PROTOTYPE_SERVICE_NAMESPACE = UUID("7c196dbd-592b-50a3-908b-6de3288d8829")
 RUNTIME_STATE_SCHEMA_VERSION = 1
 RUNTIME_EVENT_CONTRACT_VERSION = 1
 COMMAND_BATCHES_PER_AUTOMATIC_CHECKPOINT = 50
+
+logger = logging.getLogger(__name__)
 
 SNAP_WORKER_INFRASTRUCTURE_ERROR_CODES = frozenset(
     {
@@ -215,6 +221,7 @@ RETRYABLE_ERROR_CODES = (
             "runtime_worker_timeout",
             "runtime_worker_spawn_failed",
             "operation_outcome_unknown",
+            "prototype_cleanup_pending",
         }
     )
     | SNAP_WORKER_INFRASTRUCTURE_ERROR_CODES
@@ -236,6 +243,8 @@ class StructuredPrototypePersistence(Protocol):
         operation_kind: PrototypeOperationKind,
         client_request_id: str,
     ) -> PrototypeOperation | None: ...
+
+    async def list_active_project_deletion_operations(self) -> tuple[PrototypeOperation, ...]: ...
 
     async def load_operation_observability(
         self,
@@ -286,7 +295,14 @@ class StructuredPrototypePersistence(Protocol):
 
     async def load_draft(self, draft_id: str) -> PrototypeDraftRecord | None: ...
 
-    async def delete_project_prototype(
+    async def prepare_project_prototype_deletion(
+        self,
+        *,
+        project_id: str,
+        deletion_operation_id: str,
+    ) -> PrototypeProjectDeletionCounts: ...
+
+    async def finalize_project_prototype_deletion(
         self,
         *,
         project_id: str,
@@ -296,7 +312,7 @@ class StructuredPrototypePersistence(Protocol):
         completion_event: PrototypeOperationEvent,
         replay_descriptor: PrototypeObjectDescriptor,
         replay_reference: PrototypeObjectReference,
-    ) -> PrototypeProjectDeletionCounts: ...
+    ) -> None: ...
 
     async def load_command_batch_by_request(
         self,
@@ -544,6 +560,11 @@ class StructuredPrototypePersistence(Protocol):
 
     async def recover_interrupted_publications(self, recovered_at: datetime) -> int: ...
 
+    async def recover_interrupted_non_generation_operations(
+        self,
+        recovered_at: datetime,
+    ) -> int: ...
+
     async def append_runtime_event_batch(
         self,
         *,
@@ -590,6 +611,12 @@ class PrototypeObjectStorage(Protocol):
     def write_json(self, project_id: str, value: object) -> PrototypeObjectDescriptor: ...
 
     def read_canonical_bytes(self, descriptor: PrototypeObjectDescriptor) -> bytes: ...
+
+    def purge_project_store(self, project_id: str, deletion_operation_id: str) -> None: ...
+
+
+class PrototypeDeletionResourceCleaner(Protocol):
+    async def purge_generation_resources(self, project_id: str) -> None: ...
 
 
 class PrototypeRuntimeExecution(Protocol):
@@ -961,6 +988,7 @@ class StructuredPrototypeService:
         runtime_worker: PrototypeRuntimeExecution | None = None,
         renderer_worker: PrototypeRendererExecution | None = None,
         artifact_store: PrototypeRenderArtifactStorage | None = None,
+        deletion_resource_cleaner: PrototypeDeletionResourceCleaner | None = None,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         self._store = store
@@ -969,7 +997,9 @@ class StructuredPrototypeService:
         self._runtime_worker = runtime_worker
         self._renderer_worker = renderer_worker
         self._artifact_store = artifact_store
+        self._deletion_resource_cleaner = deletion_resource_cleaner
         self._clock = clock
+        self._project_deletion_lock = asyncio.Lock()
 
     async def get_operation_outcome(
         self,
@@ -1728,35 +1758,101 @@ class StructuredPrototypeService:
         client_request_id: str,
     ) -> DeleteStructuredPrototypeResult:
         _require_client_request_id(client_request_id)
-        request_hash = _manifest_hash(
-            {
-                "kind": "delete_project_prototype",
-                "projectId": project_id,
-                "clientRequestId": client_request_id,
-            }
-        )
-        operation = self._queued_operation(
-            operation_kind="delete_project_prototype",
-            project_id=project_id,
-            resource_kind="project_prototype",
-            resource_id=project_id,
-            client_request_id=client_request_id,
-            request_manifest_hash=request_hash,
-        )
-        created = await self._create_operation(operation)
-        if not created.created:
-            if created.operation.status == "succeeded":
+        async with self._project_deletion_lock:
+            request_hash = _manifest_hash(
+                {
+                    "kind": "delete_project_prototype",
+                    "projectId": project_id,
+                    "clientRequestId": client_request_id,
+                }
+            )
+            operation = self._queued_operation(
+                operation_kind="delete_project_prototype",
+                project_id=project_id,
+                resource_kind="project_prototype",
+                resource_id=project_id,
+                client_request_id=client_request_id,
+                request_manifest_hash=request_hash,
+            )
+            created = await self._create_operation(operation)
+            if not created.created and created.operation.status == "succeeded":
                 return DeleteStructuredPrototypeResult(
                     operation_id=created.operation.id,
                     correlation_id=created.operation.correlation_id,
                     deleted=True,
                 )
-            raise self._existing_operation_error(created.operation)
+            if not created.created and created.operation.status not in {"queued", "running"}:
+                raise self._existing_operation_error(created.operation)
+            return await self._resume_project_prototype_deletion(created.operation)
 
-        running, step = await self._start_operation(operation, "delete_project_prototype")
+    async def recover_pending_project_prototype_deletions(self) -> int:
         try:
+            operations = await self._store.list_active_project_deletion_operations()
+        except StructuredPrototypeStoreError as exc:
+            raise self._service_error(exc.code, str(exc), None) from exc
+
+        recovered = 0
+        for operation in operations:
+            async with self._project_deletion_lock:
+                try:
+                    await self._resume_project_prototype_deletion(operation)
+                except StructuredPrototypeServiceError as exc:
+                    if exc.code != "prototype_cleanup_pending":
+                        raise
+                    logger.warning(
+                        "Structured prototype deletion cleanup remains pending: "
+                        "operation_id=%s project_id=%s",
+                        operation.id,
+                        operation.project_id,
+                    )
+                else:
+                    recovered += 1
+        return recovered
+
+    async def _resume_project_prototype_deletion(
+        self,
+        operation: PrototypeOperation,
+    ) -> DeleteStructuredPrototypeResult:
+        if operation.operation_kind != "delete_project_prototype":
+            raise StructuredPrototypeServiceError(
+                "operation_observability_corrupt",
+                "prototype deletion recovery received another operation kind",
+                operation_id=operation.id,
+            )
+        if operation.status == "queued":
+            running, step = await self._start_operation(operation, "delete_project_prototype")
+        elif operation.status == "running":
+            snapshot = await self._load_operation_observability_snapshot(operation.id)
+            running = snapshot.operation
+            running_steps = tuple(
+                candidate for candidate in snapshot.steps if candidate.status == "running"
+            )
+            if (
+                len(snapshot.steps) != 1
+                or len(running_steps) != 1
+                or running_steps[0].step_kind != "delete_project_prototype"
+                or running_steps[0].step_ordinal != 0
+                or running_steps[0].attempt != 1
+            ):
+                raise StructuredPrototypeServiceError(
+                    "operation_observability_corrupt",
+                    "running prototype deletion has an invalid durable step",
+                    operation_id=operation.id,
+                )
+            step = running_steps[0]
+        else:
+            raise self._existing_operation_error(operation)
+
+        prepared = False
+        try:
+            await self._store.prepare_project_prototype_deletion(
+                project_id=running.project_id,
+                deletion_operation_id=running.id,
+            )
+            prepared = True
+            await self._purge_project_prototype_resources(running)
             replay_artifact = await self._write_replay_manifest(
-                operation=operation,
+                operation=running,
                 created_at=self._now(),
                 ordered_input_object_hashes=(),
             )
@@ -1765,30 +1861,80 @@ class StructuredPrototypeService:
                 step,
                 result_hash=replay_artifact.descriptor.content_hash,
                 evidence_kind="project_prototype_deleted",
-                evidence_ref=project_id,
+                evidence_ref=running.project_id,
             )
-            await self._store.delete_project_prototype(
-                project_id=project_id,
-                deletion_operation_id=operation.id,
+            await self._store.finalize_project_prototype_deletion(
+                project_id=running.project_id,
+                deletion_operation_id=running.id,
                 completed_operation=completed,
                 completion_step=completed_step,
                 completion_event=event,
                 replay_descriptor=replay_artifact.descriptor,
                 replay_reference=replay_artifact.reference,
             )
+        except asyncio.CancelledError:
+            # The running deletion operation is the durable retry tombstone.
+            raise
         except PrototypeObjectStoreError as exc:
+            if prepared:
+                raise self._cleanup_pending_error(running.id) from exc
             await self._fail_operation(running, step, exc.code)
-            raise self._service_error(exc.code, str(exc), operation.id) from exc
+            raise self._service_error(exc.code, str(exc), running.id) from exc
+        except StructuredPrototypeDeletionCleanupError as exc:
+            if prepared:
+                raise self._cleanup_pending_error(running.id) from exc
+            await self._fail_operation(running, step, exc.code)
+            raise self._service_error(exc.code, str(exc), running.id) from exc
         except StructuredPrototypeStoreError as exc:
+            if prepared:
+                raise self._cleanup_pending_error(running.id) from exc
             await self._fail_operation(running, step, exc.code)
-            raise self._service_error(exc.code, str(exc), operation.id) from exc
+            raise self._service_error(exc.code, str(exc), running.id) from exc
         except StructuredPrototypeServiceError as exc:
+            if prepared:
+                raise self._cleanup_pending_error(running.id) from exc
             await self._fail_operation(running, step, exc.code)
             raise
         return DeleteStructuredPrototypeResult(
-            operation_id=operation.id,
-            correlation_id=operation.correlation_id,
+            operation_id=running.id,
+            correlation_id=running.correlation_id,
             deleted=True,
+        )
+
+    async def _purge_project_prototype_resources(
+        self,
+        operation: PrototypeOperation,
+    ) -> None:
+        async def purge() -> None:
+            await asyncio.to_thread(
+                self._object_store.purge_project_store,
+                operation.project_id,
+                operation.id,
+            )
+            if self._deletion_resource_cleaner is not None:
+                await self._deletion_resource_cleaner.purge_generation_resources(
+                    operation.project_id
+                )
+
+        purge_task = asyncio.create_task(purge())
+        cancellation_error: asyncio.CancelledError | None = None
+        while not purge_task.done():
+            try:
+                await asyncio.shield(purge_task)
+            except asyncio.CancelledError as exc:
+                # Physical deletion must finish before the tombstone can release concurrency.
+                cancellation_error = exc
+        purge_task.result()
+        if cancellation_error is not None:
+            raise cancellation_error
+
+    @staticmethod
+    def _cleanup_pending_error(operation_id: str) -> StructuredPrototypeServiceError:
+        return StructuredPrototypeServiceError(
+            "prototype_cleanup_pending",
+            "prototype records were detached, but physical cleanup is still pending; "
+            "retry the same delete request",
+            operation_id=operation_id,
         )
 
     async def recover_draft(
@@ -3524,6 +3670,12 @@ class StructuredPrototypeService:
     async def recover_interrupted_publications(self) -> int:
         try:
             return await self._store.recover_interrupted_publications(self._now())
+        except StructuredPrototypeStoreError as exc:
+            raise self._service_error(exc.code, str(exc), None) from exc
+
+    async def recover_interrupted_non_generation_operations(self) -> int:
+        try:
+            return await self._store.recover_interrupted_non_generation_operations(self._now())
         except StructuredPrototypeStoreError as exc:
             raise self._service_error(exc.code, str(exc), None) from exc
 

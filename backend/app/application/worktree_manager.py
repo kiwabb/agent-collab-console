@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TypedDict
 
-from app.application.git_service import GitError, GitService
+from app.application.git_service import GENERATION_SNAPSHOT_REF_PREFIX, GitError, GitService
 from app.application.project_command import (
     ProjectCommandError,
     build_project_child_env,
@@ -77,7 +77,6 @@ class AgentMergeSummary(TypedDict):
 _SAFE_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 _PROTOTYPE_BRANCH_RE = re.compile(r"^prototype/([0-9a-f]{20})$")
 _PROTOTYPE_WORKTREE_DIR_RE = re.compile(r"^prototype-([0-9a-f]{20})$")
-_GENERATION_SNAPSHOT_REF_PREFIX = "refs/agent-collab/prototype-generation/"
 logger = logging.getLogger(__name__)
 
 
@@ -627,7 +626,7 @@ class WorktreeManager:
             for snapshot_ref, object_id in await self.git.list_generation_snapshot_refs(
                 project.repo_path
             ):
-                job_id = snapshot_ref.removeprefix(_GENERATION_SNAPSHOT_REF_PREFIX)
+                job_id = snapshot_ref.removeprefix(GENERATION_SNAPSHOT_REF_PREFIX)
                 if job_id in owned_snapshot_job_ids:
                     continue
                 await self.git.delete_generation_snapshot_ref(

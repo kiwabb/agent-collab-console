@@ -7,6 +7,7 @@ import re
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import aiosqlite
 
@@ -107,6 +108,41 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_prototype_runtime_sessions_replaces_sessio
     ON prototype_runtime_sessions(replaces_session_id)
     WHERE replaces_session_id IS NOT NULL
 """
+
+
+async def _rollback_to_completion(conn: aiosqlite.Connection) -> None:
+    rollback_task = asyncio.create_task(conn.rollback())
+    while not rollback_task.done():
+        try:
+            await asyncio.shield(rollback_task)
+        except BaseException:
+            # Transaction boundary: retain rollback until its result is observable.
+            continue
+    rollback_task.result()
+
+
+async def _commit_to_completion(conn: aiosqlite.Connection) -> None:
+    commit_task = asyncio.create_task(conn.commit())
+    try:
+        await asyncio.shield(commit_task)
+    except asyncio.CancelledError as cancellation_error:
+        while not commit_task.done():
+            try:
+                await asyncio.shield(commit_task)
+            except BaseException:
+                # Transaction boundary: retain the task until its result is observable.
+                continue
+        try:
+            commit_task.result()
+        except BaseException as commit_error:
+            # Transaction boundary: rollback only after commit reports failure.
+            await _rollback_to_completion(conn)
+            raise commit_error from cancellation_error
+        raise
+    except BaseException:
+        # Transaction boundary: a reported commit failure remains reversible.
+        await _rollback_to_completion(conn)
+        raise
 
 
 def _hash_canonical_json(value: object) -> str:
@@ -1122,6 +1158,23 @@ class AsyncStructuredPrototypeStore:
                     self._assert_idempotent_operation(existing, operation)
                     result = PrototypeOperationCreateResult(operation=existing, created=False)
                 else:
+                    async with conn.execute(
+                        """
+                        SELECT id
+                        FROM prototype_operations
+                        WHERE project_id = ?
+                          AND operation_kind = 'delete_project_prototype'
+                          AND status IN ('queued', 'running')
+                        LIMIT 1
+                        """,
+                        (operation.project_id,),
+                    ) as cursor:
+                        active_delete_row = await cursor.fetchone()
+                    if active_delete_row is not None:
+                        raise StructuredPrototypeStoreError(
+                            "prototype_busy",
+                            "prototype deletion cleanup is already in progress",
+                        )
                     await self._insert_operation(conn, operation)
                     await self._insert_operation_event(conn, initial_event)
                     result = PrototypeOperationCreateResult(operation=operation, created=True)
@@ -1152,6 +1205,45 @@ class AsyncStructuredPrototypeStore:
             client_request_id,
         )
         return self._operation_from_row(row) if row is not None else None
+
+    async def list_active_project_deletion_operations(self) -> tuple[PrototypeOperation, ...]:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with conn.execute(
+            """
+            SELECT
+                id, operation_kind, project_id, resource_kind, resource_id,
+                client_request_id, correlation_id, parent_operation_id, status,
+                phase, attempt, request_manifest_hash, config_manifest_hash,
+                result_manifest_hash, failure_evidence_hash, error_code,
+                created_at, started_at, completed_at
+            FROM prototype_operations
+            WHERE operation_kind = 'delete_project_prototype'
+              AND status IN ('queued', 'running')
+            ORDER BY created_at, id
+            """
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return tuple(self._operation_from_row(row) for row in rows)
+
+    async def list_generation_snapshot_owner_ids(self) -> frozenset[str]:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with conn.execute(
+            """
+            SELECT id AS owner_id
+            FROM prototype_document_generation_jobs
+            UNION
+            SELECT resource_id AS owner_id
+            FROM prototype_operations
+            WHERE operation_kind = 'generation_job'
+              AND resource_kind = 'generation_job'
+              AND resource_id IS NOT NULL
+              AND status IN ('queued', 'running')
+            """
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return frozenset(_required_str(row[0], "generation_snapshot_owner.id") for row in rows)
 
     async def load_operation_observability(
         self,
@@ -1269,6 +1361,389 @@ class AsyncStructuredPrototypeStore:
         ) as cursor:
             rows = await cursor.fetchall()
         return [self._operation_step_from_row(row) for row in rows]
+
+    async def recover_interrupted_non_generation_operations(
+        self,
+        recovered_at: datetime,
+    ) -> int:
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            try:
+                await conn.execute("BEGIN IMMEDIATE")
+                async with conn.execute(
+                    """
+                    WITH RECURSIVE generation_tree(id) AS (
+                        SELECT id
+                        FROM prototype_operations
+                        WHERE operation_kind = 'generation_job'
+                          AND resource_kind = 'generation_job'
+                          AND parent_operation_id IS NULL
+                        UNION
+                        SELECT child.id
+                        FROM prototype_operations AS child
+                        JOIN generation_tree AS parent
+                          ON child.parent_operation_id = parent.id
+                    )
+                    SELECT
+                        operation.id, operation.operation_kind, operation.project_id,
+                        operation.resource_kind, operation.resource_id,
+                        operation.client_request_id, operation.correlation_id,
+                        operation.parent_operation_id, operation.status, operation.phase,
+                        operation.attempt, operation.request_manifest_hash,
+                        operation.config_manifest_hash, operation.result_manifest_hash,
+                        operation.failure_evidence_hash, operation.error_code,
+                        operation.created_at, operation.started_at, operation.completed_at
+                    FROM prototype_operations AS operation
+                    WHERE operation.status IN ('queued', 'running')
+                      AND operation.operation_kind <> 'delete_project_prototype'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM generation_tree
+                          WHERE generation_tree.id = operation.id
+                      )
+                    ORDER BY operation.created_at, operation.id
+                    """
+                ) as cursor:
+                    operation_rows = list(await cursor.fetchall())
+
+                for operation_row in operation_rows:
+                    operation = self._operation_from_row(operation_row)
+                    if operation.operation_kind in {"generation_job", "generation_item"}:
+                        raise StructuredPrototypeStoreError(
+                            "operation_recovery_corrupt",
+                            "active generation operation is outside its restart recovery tree",
+                        )
+                    try:
+                        operation_id_is_canonical = str(UUID(operation.id)) == operation.id
+                    except ValueError:
+                        operation_id_is_canonical = False
+                    if not operation_id_is_canonical:
+                        raise StructuredPrototypeStoreError(
+                            "operation_recovery_corrupt",
+                            "active prototype operation has a non-canonical identity",
+                        )
+                    if any(
+                        value is not None
+                        for value in (
+                            operation.result_manifest_hash,
+                            operation.failure_evidence_hash,
+                            operation.error_code,
+                            operation.completed_at,
+                        )
+                    ):
+                        raise StructuredPrototypeStoreError(
+                            "operation_recovery_corrupt",
+                            "active prototype operation contains terminal evidence",
+                        )
+                    if (operation.status == "queued" and operation.started_at is not None) or (
+                        operation.status == "running" and operation.started_at is None
+                    ):
+                        raise StructuredPrototypeStoreError(
+                            "operation_recovery_corrupt",
+                            "active prototype operation has invalid lifecycle timestamps",
+                        )
+                    if operation.created_at > recovered_at or (
+                        operation.started_at is not None and operation.started_at > recovered_at
+                    ):
+                        raise StructuredPrototypeStoreError(
+                            "operation_recovery_corrupt",
+                            "active prototype operation begins after restart recovery",
+                        )
+
+                    async with conn.execute(
+                        """
+                        SELECT
+                            id, operation_id, parent_step_id, step_kind, step_ordinal,
+                            attempt, status, phase, input_manifest_hash,
+                            config_manifest_hash, output_manifest_hash,
+                            completion_evidence_kind, completion_evidence_ref,
+                            error_code, started_at, completed_at
+                        FROM prototype_operation_steps
+                        WHERE operation_id = ? AND status IN ('pending', 'running')
+                        ORDER BY step_ordinal, attempt
+                        """,
+                        (operation.id,),
+                    ) as cursor:
+                        active_step_rows = list(await cursor.fetchall())
+                    if len(active_step_rows) > 1:
+                        raise StructuredPrototypeStoreError(
+                            "operation_recovery_corrupt",
+                            "active prototype operation has multiple active steps",
+                        )
+                    active_step = (
+                        self._operation_step_from_row(active_step_rows[0])
+                        if active_step_rows
+                        else None
+                    )
+                    if operation.status == "queued" and active_step is not None:
+                        raise StructuredPrototypeStoreError(
+                            "operation_recovery_corrupt",
+                            "queued prototype operation unexpectedly has an active step",
+                        )
+                    if active_step is not None:
+                        try:
+                            step_id_is_canonical = str(UUID(active_step.id)) == active_step.id
+                        except ValueError:
+                            step_id_is_canonical = False
+                        if not step_id_is_canonical:
+                            raise StructuredPrototypeStoreError(
+                                "operation_recovery_corrupt",
+                                "active prototype operation step has a non-canonical identity",
+                            )
+                        if active_step.status == "pending":
+                            invalid_step_evidence = any(
+                                value is not None
+                                for value in (
+                                    active_step.started_at,
+                                    active_step.completed_at,
+                                    active_step.output_manifest_hash,
+                                    active_step.completion_evidence_kind,
+                                    active_step.completion_evidence_ref,
+                                    active_step.error_code,
+                                )
+                            )
+                        else:
+                            invalid_step_evidence = (
+                                active_step.started_at is None
+                                or active_step.completed_at is not None
+                                or active_step.output_manifest_hash is not None
+                                or active_step.completion_evidence_kind is not None
+                                or active_step.completion_evidence_ref is not None
+                                or active_step.error_code is not None
+                            )
+                        if invalid_step_evidence or (
+                            active_step.started_at is not None
+                            and active_step.started_at > recovered_at
+                        ):
+                            raise StructuredPrototypeStoreError(
+                                "operation_recovery_corrupt",
+                                "active prototype operation step has invalid lifecycle evidence",
+                            )
+
+                    async with conn.execute(
+                        """
+                        SELECT COALESCE(MAX(step_ordinal), -1) + 1
+                        FROM prototype_operation_steps
+                        WHERE operation_id = ?
+                        """,
+                        (operation.id,),
+                    ) as cursor:
+                        ordinal_row = await cursor.fetchone()
+                    if ordinal_row is None:
+                        raise StructuredPrototypeStoreError(
+                            "operation_recovery_corrupt",
+                            "prototype restart recovery step ordinal could not be loaded",
+                        )
+                    next_step_ordinal = _required_non_negative_int(
+                        ordinal_row[0],
+                        "operation_recovery.next_step_ordinal",
+                    )
+                    next_event_no = await self._next_operation_event_no(conn, operation.id)
+                    if next_event_no == 0:
+                        raise StructuredPrototypeStoreError(
+                            "operation_recovery_corrupt",
+                            "active prototype operation has no queued event",
+                        )
+
+                    prior_status = operation.status
+                    prior_phase = operation.phase
+                    prior_step_id = active_step.id if active_step is not None else None
+                    recovery_phase = "service_restart_recovery"
+                    if active_step is None or active_step.status == "pending":
+                        running_operation = replace(
+                            operation,
+                            status="running",
+                            phase=recovery_phase,
+                            started_at=operation.started_at or recovered_at,
+                        )
+                        running_step = (
+                            replace(
+                                active_step,
+                                status="running",
+                                phase=recovery_phase,
+                                started_at=recovered_at,
+                            )
+                            if active_step is not None
+                            else PrototypeOperationStep(
+                                id=str(
+                                    uuid5(
+                                        NAMESPACE_URL,
+                                        "\x1f".join(
+                                            (
+                                                "structured-prototype-restart-recovery",
+                                                operation.id,
+                                                str(next_step_ordinal),
+                                            )
+                                        ),
+                                    )
+                                ),
+                                operation_id=operation.id,
+                                parent_step_id=None,
+                                step_kind=recovery_phase,
+                                step_ordinal=next_step_ordinal,
+                                attempt=1,
+                                status="running",
+                                phase=recovery_phase,
+                                input_manifest_hash=operation.request_manifest_hash,
+                                config_manifest_hash=operation.config_manifest_hash,
+                                output_manifest_hash=None,
+                                completion_evidence_kind=None,
+                                completion_evidence_ref=None,
+                                error_code=None,
+                                started_at=recovered_at,
+                                completed_at=None,
+                            )
+                        )
+                        running_event = PrototypeOperationEvent(
+                            operation_id=operation.id,
+                            event_no=next_event_no,
+                            step_id=running_step.id,
+                            event_kind="recovery_step_started",
+                            status="running",
+                            phase=recovery_phase,
+                            input_hash=running_step.input_manifest_hash,
+                            output_hash=None,
+                            evidence_hash=None,
+                            error_code=None,
+                            occurred_at=recovered_at,
+                        )
+                        self._validate_operation_transition_payload(
+                            running_operation,
+                            running_step,
+                            running_event,
+                        )
+                        await self._apply_operation_transition(
+                            conn,
+                            running_operation,
+                            running_step,
+                            running_event,
+                        )
+                        operation = running_operation
+                        active_step = running_step
+                        next_event_no += 1
+                    if active_step is None or active_step.status != "running":
+                        raise StructuredPrototypeStoreError(
+                            "operation_recovery_corrupt",
+                            "prototype operation has no running step to interrupt",
+                        )
+
+                    failure_hash = _hash_canonical_json(
+                        {
+                            "operationInterruptionEvidenceVersion": 1,
+                            "operationId": operation.id,
+                            "priorStatus": prior_status,
+                            "priorPhase": prior_phase,
+                            "priorActiveStepId": prior_step_id,
+                            "errorCode": "service_restart",
+                        }
+                    )
+                    interrupted_operation = replace(
+                        operation,
+                        status="interrupted",
+                        phase=recovery_phase,
+                        failure_evidence_hash=failure_hash,
+                        error_code="service_restart",
+                        completed_at=recovered_at,
+                    )
+                    interrupted_step = replace(
+                        active_step,
+                        status="interrupted",
+                        phase=recovery_phase,
+                        output_manifest_hash=failure_hash,
+                        completion_evidence_kind="failure_manifest_hash",
+                        completion_evidence_ref=failure_hash,
+                        error_code="service_restart",
+                        completed_at=recovered_at,
+                    )
+                    interrupted_event = PrototypeOperationEvent(
+                        operation_id=operation.id,
+                        event_no=next_event_no,
+                        step_id=interrupted_step.id,
+                        event_kind="operation_interrupted",
+                        status="interrupted",
+                        phase=recovery_phase,
+                        input_hash=interrupted_step.input_manifest_hash,
+                        output_hash=failure_hash,
+                        evidence_hash=failure_hash,
+                        error_code="service_restart",
+                        occurred_at=recovered_at,
+                    )
+                    self._validate_operation_transition_payload(
+                        interrupted_operation,
+                        interrupted_step,
+                        interrupted_event,
+                    )
+                    await self._apply_operation_transition(
+                        conn,
+                        interrupted_operation,
+                        interrupted_step,
+                        interrupted_event,
+                    )
+                async with conn.execute(
+                    """
+                    WITH RECURSIVE generation_tree(id) AS (
+                        SELECT id
+                        FROM prototype_operations
+                        WHERE operation_kind = 'generation_job'
+                          AND resource_kind = 'generation_job'
+                          AND parent_operation_id IS NULL
+                        UNION
+                        SELECT child.id
+                        FROM prototype_operations AS child
+                        JOIN generation_tree AS parent
+                          ON child.parent_operation_id = parent.id
+                    )
+                    SELECT COUNT(*)
+                    FROM prototype_operations AS operation
+                    WHERE operation.status IN ('queued', 'running')
+                      AND operation.operation_kind <> 'delete_project_prototype'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM generation_tree
+                          WHERE generation_tree.id = operation.id
+                      )
+                    """
+                ) as cursor:
+                    remaining_row = await cursor.fetchone()
+                if (
+                    remaining_row is None
+                    or _required_non_negative_int(
+                        remaining_row[0],
+                        "operation_recovery.remaining_count",
+                    )
+                    != 0
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "operation_recovery_incomplete",
+                        "prototype restart recovery left active ordinary operations",
+                    )
+            except BaseException:
+                # Before commit is queued, DB errors and cancellation remain reversible.
+                await _rollback_to_completion(conn)
+                raise
+
+            # Queuing commit is the point of no return; resolve it before rollback.
+            commit_task = asyncio.create_task(conn.commit())
+            try:
+                await asyncio.shield(commit_task)
+            except asyncio.CancelledError as cancellation_error:
+                while not commit_task.done():
+                    try:
+                        await asyncio.shield(commit_task)
+                    except BaseException:
+                        # Transaction boundary: retain the task until its result is observable.
+                        continue
+                try:
+                    commit_task.result()
+                except BaseException as commit_error:
+                    # Transaction boundary: rollback only after commit reports failure.
+                    await _rollback_to_completion(conn)
+                    raise commit_error from cancellation_error
+                raise
+            except BaseException:
+                # Transaction boundary: a reported commit failure remains reversible.
+                await _rollback_to_completion(conn)
+                raise
+        return len(operation_rows)
 
     async def create_generation_job(
         self,
@@ -2691,49 +3166,17 @@ class AsyncStructuredPrototypeStore:
             )
         return self._document_from_row(document_row)
 
-    async def delete_project_prototype(
+    async def prepare_project_prototype_deletion(
         self,
         *,
         project_id: str,
         deletion_operation_id: str,
-        completed_operation: PrototypeOperation,
-        completion_step: PrototypeOperationStep,
-        completion_event: PrototypeOperationEvent,
-        replay_descriptor: PrototypeObjectDescriptor,
-        replay_reference: PrototypeObjectReference,
     ) -> PrototypeProjectDeletionCounts:
-        self._validate_operation_transition_payload(
-            completed_operation,
-            completion_step,
-            completion_event,
-        )
-        if (
-            completed_operation.id != deletion_operation_id
-            or completed_operation.operation_kind != "delete_project_prototype"
-            or completed_operation.project_id != project_id
-            or completed_operation.resource_kind != "project_prototype"
-            or completed_operation.resource_id != project_id
-            or completed_operation.status != "succeeded"
-            or completion_step.completion_evidence_kind != "project_prototype_deleted"
-            or completion_step.completion_evidence_ref != project_id
-        ):
-            raise StructuredPrototypeStoreError(
-                "prototype_delete_identity_mismatch",
-                "prototype deletion operation identity is inconsistent",
-            )
-        self._validate_replay_manifest_registration(
-            descriptor=replay_descriptor,
-            reference=replay_reference,
-            operation=completed_operation,
-            step=completion_step,
-            event=completion_event,
-        )
-
         await self.initialize()
         conn = await self._get_conn()
         async with self._transaction_lock:
-            await conn.execute("BEGIN IMMEDIATE")
             try:
+                await conn.execute("BEGIN IMMEDIATE")
                 await conn.execute("PRAGMA defer_foreign_keys = ON")
                 operation_row = await self._load_operation_row(conn, deletion_operation_id)
                 if operation_row is None:
@@ -2763,6 +3206,7 @@ class AsyncStructuredPrototypeStore:
                       AND operation.status IN ('queued', 'running')
                       AND NOT (
                           operation.operation_kind = 'generation_job'
+                          AND generation_job.operation_id IS NOT NULL
                           AND generation_job.status IN ('awaiting_confirmation', 'ready')
                       )
                     LIMIT 1
@@ -2947,10 +3391,10 @@ class AsyncStructuredPrototypeStore:
                     WHERE operation_id IN (
                         SELECT id FROM prototype_operations
                         WHERE project_id = ?
-                          AND operation_kind <> 'delete_project_prototype'
+                          AND id <> ?
                     )
                     """,
-                    (project_id,),
+                    (project_id, deletion_operation_id),
                 )
                 await conn.execute(
                     """
@@ -2958,17 +3402,126 @@ class AsyncStructuredPrototypeStore:
                     WHERE operation_id IN (
                         SELECT id FROM prototype_operations
                         WHERE project_id = ?
-                          AND operation_kind <> 'delete_project_prototype'
+                          AND id <> ?
                     )
                     """,
-                    (project_id,),
+                    (project_id, deletion_operation_id),
                 )
                 await conn.execute(
                     """
                     DELETE FROM prototype_operations
                     WHERE project_id = ?
-                      AND operation_kind <> 'delete_project_prototype'
+                      AND id <> ?
                     """,
+                    (project_id, deletion_operation_id),
+                )
+            except StructuredPrototypeStoreError:
+                await _rollback_to_completion(conn)
+                raise
+            except aiosqlite.Error as exc:
+                await _rollback_to_completion(conn)
+                raise StructuredPrototypeStoreError(
+                    "prototype_delete_failed",
+                    "prototype records could not be prepared for deletion atomically",
+                ) from exc
+            except BaseException:
+                # Transaction boundary: cancellation must not leave an open write transaction.
+                await _rollback_to_completion(conn)
+                raise
+            try:
+                await _commit_to_completion(conn)
+            except aiosqlite.Error as exc:
+                raise StructuredPrototypeStoreError(
+                    "prototype_delete_failed",
+                    "prototype records could not be prepared for deletion atomically",
+                ) from exc
+        return counts
+
+    async def finalize_project_prototype_deletion(
+        self,
+        *,
+        project_id: str,
+        deletion_operation_id: str,
+        completed_operation: PrototypeOperation,
+        completion_step: PrototypeOperationStep,
+        completion_event: PrototypeOperationEvent,
+        replay_descriptor: PrototypeObjectDescriptor,
+        replay_reference: PrototypeObjectReference,
+    ) -> None:
+        self._validate_operation_transition_payload(
+            completed_operation,
+            completion_step,
+            completion_event,
+        )
+        if (
+            completed_operation.id != deletion_operation_id
+            or completed_operation.operation_kind != "delete_project_prototype"
+            or completed_operation.project_id != project_id
+            or completed_operation.resource_kind != "project_prototype"
+            or completed_operation.resource_id != project_id
+            or completed_operation.status != "succeeded"
+            or completion_step.completion_evidence_kind != "project_prototype_deleted"
+            or completion_step.completion_evidence_ref != project_id
+        ):
+            raise StructuredPrototypeStoreError(
+                "prototype_delete_identity_mismatch",
+                "prototype deletion operation identity is inconsistent",
+            )
+        self._validate_replay_manifest_registration(
+            descriptor=replay_descriptor,
+            reference=replay_reference,
+            operation=completed_operation,
+            step=completion_step,
+            event=completion_event,
+        )
+
+        await self.initialize()
+        conn = await self._get_conn()
+        async with self._transaction_lock:
+            try:
+                await conn.execute("BEGIN IMMEDIATE")
+                operation_row = await self._load_operation_row(conn, deletion_operation_id)
+                if operation_row is None:
+                    raise StructuredPrototypeStoreError(
+                        "operation_missing",
+                        "prototype deletion operation does not exist",
+                    )
+                current_operation = self._operation_from_row(operation_row)
+                if (
+                    current_operation.operation_kind != "delete_project_prototype"
+                    or current_operation.project_id != project_id
+                    or current_operation.status != "running"
+                ):
+                    raise StructuredPrototypeStoreError(
+                        "prototype_delete_conflict",
+                        "prototype deletion operation is not running for this project",
+                    )
+                async with conn.execute(
+                    """
+                    SELECT
+                        EXISTS(SELECT 1 FROM prototype_documents WHERE project_id = ?),
+                        EXISTS(
+                            SELECT 1 FROM prototype_document_generation_jobs
+                            WHERE project_id = ?
+                        ),
+                        EXISTS(
+                            SELECT 1 FROM prototype_object_references WHERE project_id = ?
+                        ),
+                        EXISTS(
+                            SELECT 1 FROM prototype_operations
+                            WHERE project_id = ? AND id <> ?
+                        )
+                    """,
+                    (project_id, project_id, project_id, project_id, deletion_operation_id),
+                ) as cursor:
+                    prepared_row = await cursor.fetchone()
+                if prepared_row is None or any(int(value) != 0 for value in prepared_row):
+                    raise StructuredPrototypeStoreError(
+                        "prototype_delete_not_prepared",
+                        "prototype deletion cannot finish before its records are prepared",
+                    )
+                await conn.execute(
+                    "DELETE FROM prototype_objects WHERE project_id = ?",
                     (project_id,),
                 )
                 await self._register_object_tx(conn, replay_descriptor)
@@ -2979,17 +3532,26 @@ class AsyncStructuredPrototypeStore:
                     completion_step,
                     completion_event,
                 )
-                await conn.commit()
             except StructuredPrototypeStoreError:
-                await conn.rollback()
+                await _rollback_to_completion(conn)
                 raise
             except aiosqlite.Error as exc:
-                await conn.rollback()
+                await _rollback_to_completion(conn)
                 raise StructuredPrototypeStoreError(
                     "prototype_delete_failed",
-                    "prototype records could not be deleted atomically",
+                    "prototype deletion could not be finalized atomically",
                 ) from exc
-        return counts
+            except BaseException:
+                # Transaction boundary: cancellation must not leave an open write transaction.
+                await _rollback_to_completion(conn)
+                raise
+            try:
+                await _commit_to_completion(conn)
+            except aiosqlite.Error as exc:
+                raise StructuredPrototypeStoreError(
+                    "prototype_delete_failed",
+                    "prototype deletion could not be finalized atomically",
+                ) from exc
 
     async def load_draft(self, draft_id: str) -> PrototypeDraftRecord | None:
         await self.initialize()
@@ -7003,7 +7565,11 @@ class AsyncStructuredPrototypeStore:
     @staticmethod
     async def _next_operation_event_no(conn: aiosqlite.Connection, operation_id: str) -> int:
         async with conn.execute(
-            "SELECT COALESCE(MAX(event_no), -1) + 1 FROM prototype_operation_events WHERE operation_id = ?",
+            """
+            SELECT COUNT(*), COALESCE(MAX(event_no), -1) + 1
+            FROM prototype_operation_events
+            WHERE operation_id = ?
+            """,
             (operation_id,),
         ) as cursor:
             row = await cursor.fetchone()
@@ -7012,7 +7578,14 @@ class AsyncStructuredPrototypeStore:
                 "operation_event_corrupt",
                 "prototype operation event sequence could not be read",
             )
-        return _required_non_negative_int(row[0], "operation_event.next_no")
+        event_count = _required_non_negative_int(row[0], "operation_event.count")
+        next_event_no = _required_non_negative_int(row[1], "operation_event.next_no")
+        if event_count != next_event_no:
+            raise StructuredPrototypeStoreError(
+                "operation_event_corrupt",
+                "prototype operation event history is not gap-free",
+            )
+        return next_event_no
 
     @staticmethod
     async def _insert_operation(conn: aiosqlite.Connection, operation: PrototypeOperation) -> None:

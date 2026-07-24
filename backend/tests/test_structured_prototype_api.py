@@ -79,6 +79,10 @@ def test_snap_worker_infrastructure_errors_map_to_service_unavailable(code: str)
     assert structured_api._status_for_error(code) == 503
 
 
+def test_pending_prototype_cleanup_maps_to_service_unavailable() -> None:
+    assert structured_api._status_for_error("prototype_cleanup_pending") == 503
+
+
 def test_freeform_move_evidence_context_mismatch_returns_422_with_durable_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

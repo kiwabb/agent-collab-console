@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import threading
 import warnings
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -10,6 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
+import aiosqlite
 import pytest
 from structured_prototype_fixtures import (
     fixture_id,
@@ -61,6 +63,7 @@ from app.domain.structured_prototype import (
     PrototypeObjectReference,
     PrototypeOperation,
     PrototypeOperationEvent,
+    PrototypeOperationKind,
     PrototypeOperationStep,
     PrototypeRendererWorkerIdentity,
     PrototypeRendererWorkerResult,
@@ -118,6 +121,37 @@ class _SnapAttesterSpy:
         if self.failure_code is not None:
             raise PrototypeSnapWorkerError(self.failure_code, "snap attestation failed")
         return tuple(self._result(evidence_json) for evidence_json in evidence_jsons)
+
+
+class _FailOncePurgeObjectStore(PrototypeObjectStore):
+    def __init__(self, data_root: Path) -> None:
+        super().__init__(data_root)
+        self.purge_attempts = 0
+
+    def purge_project_store(self, project_id: str, deletion_operation_id: str) -> None:
+        self.purge_attempts += 1
+        if self.purge_attempts == 1:
+            raise PrototypeObjectStoreError(
+                "object_purge_failed",
+                "intentional project store purge failure",
+            )
+        super().purge_project_store(project_id, deletion_operation_id)
+
+
+class _BlockingPurgeObjectStore(PrototypeObjectStore):
+    def __init__(self, data_root: Path) -> None:
+        super().__init__(data_root)
+        self.purge_started = threading.Event()
+        self.release_purge = threading.Event()
+
+    def purge_project_store(self, project_id: str, deletion_operation_id: str) -> None:
+        self.purge_started.set()
+        if not self.release_purge.wait(timeout=2):
+            raise PrototypeObjectStoreError(
+                "object_purge_failed",
+                "timed out waiting to finish project store purge",
+            )
+        super().purge_project_store(project_id, deletion_operation_id)
 
 
 @pytest.mark.parametrize("code", sorted(SNAP_WORKER_INFRASTRUCTURE_ERROR_CODES))
@@ -492,11 +526,12 @@ def _service(
     object_root: Path,
     *,
     snap_attester: _SnapAttesterSpy | None = None,
+    object_store: PrototypeObjectStore | None = None,
 ) -> tuple[AsyncStructuredPrototypeStore, StructuredPrototypeService]:
     store = AsyncStructuredPrototypeStore(db_path)
     service = StructuredPrototypeService(
         store=store,
-        object_store=PrototypeObjectStore(object_root),
+        object_store=object_store or PrototypeObjectStore(object_root),
         snap_attester=snap_attester or _SnapAttesterSpy(),
         clock=lambda: FIXED_NOW,
     )
@@ -515,6 +550,60 @@ def _runtime_service(
         clock=lambda: FIXED_NOW,
     )
     return store, service
+
+
+def _queued_operation(
+    label: str,
+    *,
+    operation_kind: PrototypeOperationKind,
+    resource_kind: str,
+    parent_operation_id: str | None = None,
+    operation_id: str | None = None,
+) -> PrototypeOperation:
+    return PrototypeOperation(
+        id=operation_id or fixture_id(f"{label}-operation"),
+        operation_kind=operation_kind,
+        project_id="project-1",
+        resource_kind=resource_kind,
+        resource_id=fixture_id(f"{label}-resource"),
+        client_request_id=fixture_id(f"{label}-request"),
+        correlation_id=fixture_id(f"{label}-correlation"),
+        parent_operation_id=parent_operation_id,
+        status="queued",
+        phase="queued",
+        attempt=1,
+        request_manifest_hash="sha256:" + "a" * 64,
+        config_manifest_hash="sha256:" + "b" * 64,
+        result_manifest_hash=None,
+        failure_evidence_hash=None,
+        error_code=None,
+        created_at=FIXED_NOW,
+        started_at=None,
+        completed_at=None,
+    )
+
+
+async def _persist_queued_operation(
+    store: AsyncStructuredPrototypeStore,
+    operation: PrototypeOperation,
+) -> None:
+    created = await store.create_operation(
+        operation,
+        PrototypeOperationEvent(
+            operation_id=operation.id,
+            event_no=0,
+            step_id=None,
+            event_kind="operation_queued",
+            status="queued",
+            phase="queued",
+            input_hash=operation.request_manifest_hash,
+            output_hash=None,
+            evidence_hash=None,
+            error_code=None,
+            occurred_at=FIXED_NOW,
+        ),
+    )
+    assert created.created
 
 
 async def _persist_runtime_replay_cause(
@@ -2106,52 +2195,264 @@ async def test_recovery_marks_a_history_target_payload_mismatch_as_corrupt(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_delete_project_prototype_purges_historical_objects_and_render_files(
+    tmp_path: Path,
+) -> None:
+    object_root = tmp_path / "managed-data"
+    store, service = _service(tmp_path / "console.db", object_root)
+    try:
+        created = await service.create_document(
+            project_id="project-1",
+            client_request_id=fixture_id("delete-physical-document"),
+            document=_new_document(),
+        )
+        await service.apply_command_batch(
+            draft_id=created.state.draft.id,
+            client_request_id=fixture_id("delete-physical-command"),
+            expected_head_sequence_no=0,
+            expected_document_hash=created.state.draft.head_document_hash,
+            batch=_text_insert_batch(),
+        )
+        project_store = object_root / "projects/project-1/prototype-store"
+        render_file = project_store / "renders/document-1/artifact-1/index.html"
+        render_file.parent.mkdir(parents=True)
+        render_file.write_text("historical render", encoding="utf-8")
+        assert len(tuple(project_store.rglob("*.json.zst"))) > 1
+
+        request_id = fixture_id("delete-physical-request")
+        deleted = await service.delete_project_prototype(
+            project_id="project-1",
+            client_request_id=request_id,
+        )
+
+        assert deleted.deleted is True
+        assert await store.load_document(created.state.document_record.id) is None
+        assert not (project_store / "renders").exists()
+        assert len(tuple(project_store.rglob("*.json.zst"))) == 1
+        detail = await service.get_operation_detail(deleted.operation_id)
+        assert detail.snapshot.operation.status == "succeeded"
+        assert detail.replay_manifest is not None
+        conn = await store._get_conn()
+        async with conn.execute(
+            "SELECT COUNT(*) FROM prototype_objects WHERE project_id = ?",
+            ("project-1",),
+        ) as cursor:
+            object_count = await cursor.fetchone()
+        async with conn.execute(
+            "SELECT COUNT(*) FROM prototype_object_references WHERE project_id = ?",
+            ("project-1",),
+        ) as cursor:
+            reference_count = await cursor.fetchone()
+        assert object_count is not None and int(object_count[0]) == 1
+        assert reference_count is not None and int(reference_count[0]) == 1
+
+        replayed = await service.delete_project_prototype(
+            project_id="project-1",
+            client_request_id=request_id,
+        )
+        assert replayed == deleted
+
+        replacement = await service.delete_project_prototype(
+            project_id="project-1",
+            client_request_id=fixture_id("delete-physical-replacement-request"),
+        )
+        assert replacement.operation_id != deleted.operation_id
+        assert await store.load_operation(deleted.operation_id) is None
+        assert len(tuple(project_store.rglob("*.json.zst"))) == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_delete_project_prototype_recovers_physical_cleanup_before_releasing_gate(
+    tmp_path: Path,
+) -> None:
+    object_store = _FailOncePurgeObjectStore(tmp_path / "managed-data")
+    store, service = _service(
+        tmp_path / "console.db",
+        tmp_path / "managed-data",
+        object_store=object_store,
+    )
+    request_id = fixture_id("delete-cleanup-retry-request")
+    try:
+        created = await service.create_document(
+            project_id="project-1",
+            client_request_id=fixture_id("delete-cleanup-retry-document"),
+            document=_new_document(),
+        )
+
+        with pytest.raises(StructuredPrototypeServiceError) as exc_info:
+            await service.delete_project_prototype(
+                project_id="project-1",
+                client_request_id=request_id,
+            )
+
+        assert exc_info.value.code == "prototype_cleanup_pending"
+        assert exc_info.value.retryable is True
+        assert exc_info.value.operation_id is not None
+        running = await store.load_operation(exc_info.value.operation_id)
+        assert running is not None and running.status == "running"
+        assert await store.load_document(created.state.document_record.id) is None
+        assert await service.recover_interrupted_non_generation_operations() == 0
+
+        with pytest.raises(StructuredPrototypeServiceError) as busy_info:
+            await service.create_document(
+                project_id="project-1",
+                client_request_id=fixture_id("delete-cleanup-retry-blocked-create"),
+                document=_new_document(),
+            )
+        assert busy_info.value.code == "prototype_busy"
+
+        assert await service.recover_pending_project_prototype_deletions() == 1
+        completed = await service.delete_project_prototype(
+            project_id="project-1",
+            client_request_id=request_id,
+        )
+        assert completed.operation_id == running.id
+        assert object_store.purge_attempts == 2
+        persisted = await store.load_operation(running.id)
+        assert persisted is not None and persisted.status == "succeeded"
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_delete_project_prototype_waits_for_physical_cleanup_when_cancelled(
+    tmp_path: Path,
+) -> None:
+    object_store = _BlockingPurgeObjectStore(tmp_path / "managed-data")
+    store, service = _service(
+        tmp_path / "console.db",
+        tmp_path / "managed-data",
+        object_store=object_store,
+    )
+    request_id = fixture_id("delete-cleanup-cancel-request")
+    try:
+        await service.create_document(
+            project_id="project-1",
+            client_request_id=fixture_id("delete-cleanup-cancel-document"),
+            document=_new_document(),
+        )
+        delete_task = asyncio.create_task(
+            service.delete_project_prototype(
+                project_id="project-1",
+                client_request_id=request_id,
+            )
+        )
+        assert await asyncio.wait_for(
+            asyncio.to_thread(object_store.purge_started.wait, 1),
+            timeout=1,
+        )
+
+        assert delete_task.cancel()
+        await asyncio.sleep(0)
+        assert not delete_task.done()
+        object_store.release_purge.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await delete_task
+
+        running = await store.load_operation_by_request(
+            "project-1",
+            "delete_project_prototype",
+            request_id,
+        )
+        assert running is not None and running.status == "running"
+        assert await service.recover_pending_project_prototype_deletions() == 1
+    finally:
+        object_store.release_purge.set()
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_delete_project_prototype_fails_closed_while_an_operation_is_active(
     tmp_path: Path,
 ) -> None:
     store, service = _service(tmp_path / "console.db", tmp_path / "managed-data")
-    active_operation = PrototypeOperation(
-        id=fixture_id("delete-busy-active-operation"),
-        operation_kind="gc_run",
-        project_id="project-1",
-        resource_kind="project_prototype",
-        resource_id="project-1",
-        client_request_id=fixture_id("delete-busy-active-request"),
-        correlation_id=fixture_id("delete-busy-active-correlation"),
-        parent_operation_id=None,
-        status="queued",
-        phase="queued",
-        attempt=1,
-        request_manifest_hash="sha256:" + "a" * 64,
-        config_manifest_hash="sha256:" + "b" * 64,
-        result_manifest_hash=None,
-        failure_evidence_hash=None,
-        error_code=None,
-        created_at=FIXED_NOW,
-        started_at=None,
-        completed_at=None,
-    )
-    active_event = PrototypeOperationEvent(
-        operation_id=active_operation.id,
-        event_no=0,
-        step_id=None,
-        event_kind="operation_queued",
-        status="queued",
-        phase="queued",
-        input_hash=active_operation.request_manifest_hash,
-        output_hash=None,
-        evidence_hash=None,
-        error_code=None,
-        occurred_at=FIXED_NOW,
-    )
-
     try:
         created = await service.create_document(
             project_id="project-1",
             client_request_id=fixture_id("delete-busy-document"),
             document=_new_document(),
         )
-        await store.create_operation(active_operation, active_event)
+        active_operation = PrototypeOperation(
+            id=fixture_id("delete-busy-active-operation"),
+            operation_kind="apply_command_batch",
+            project_id="project-1",
+            resource_kind="draft",
+            resource_id=created.state.draft.id,
+            client_request_id=fixture_id("delete-busy-active-request"),
+            correlation_id=fixture_id("delete-busy-active-correlation"),
+            parent_operation_id=None,
+            status="queued",
+            phase="queued",
+            attempt=1,
+            request_manifest_hash="sha256:" + "a" * 64,
+            config_manifest_hash="sha256:" + "b" * 64,
+            result_manifest_hash=None,
+            failure_evidence_hash=None,
+            error_code=None,
+            created_at=FIXED_NOW,
+            started_at=None,
+            completed_at=None,
+        )
+        await store.create_operation(
+            active_operation,
+            PrototypeOperationEvent(
+                operation_id=active_operation.id,
+                event_no=0,
+                step_id=None,
+                event_kind="operation_queued",
+                status="queued",
+                phase="queued",
+                input_hash=active_operation.request_manifest_hash,
+                output_hash=None,
+                evidence_hash=None,
+                error_code=None,
+                occurred_at=FIXED_NOW,
+            ),
+        )
+        active_step = PrototypeOperationStep(
+            id=fixture_id("delete-busy-active-step"),
+            operation_id=active_operation.id,
+            parent_step_id=None,
+            step_kind="apply_commands",
+            step_ordinal=0,
+            attempt=1,
+            status="running",
+            phase="apply_commands",
+            input_manifest_hash=active_operation.request_manifest_hash,
+            config_manifest_hash=active_operation.config_manifest_hash,
+            output_manifest_hash=None,
+            completion_evidence_kind=None,
+            completion_evidence_ref=None,
+            error_code=None,
+            started_at=FIXED_NOW,
+            completed_at=None,
+        )
+        running_operation = replace(
+            active_operation,
+            status="running",
+            phase="apply_commands",
+            started_at=FIXED_NOW,
+        )
+        await store.record_operation_transition(
+            running_operation,
+            active_step,
+            PrototypeOperationEvent(
+                operation_id=active_operation.id,
+                event_no=1,
+                step_id=active_step.id,
+                event_kind="step_started",
+                status="running",
+                phase="apply_commands",
+                input_hash=active_operation.request_manifest_hash,
+                output_hash=None,
+                evidence_hash=None,
+                error_code=None,
+                occurred_at=FIXED_NOW,
+            ),
+        )
 
         with pytest.raises(StructuredPrototypeServiceError) as exc_info:
             await service.delete_project_prototype(
@@ -2167,6 +2468,512 @@ async def test_delete_project_prototype_fails_closed_while_an_operation_is_activ
         assert failed_delete is not None
         assert failed_delete.status == "failed"
         assert failed_delete.error_code == "prototype_busy"
+
+        assert await service.recover_interrupted_non_generation_operations() == 1
+        recovered = await service.get_operation_detail(active_operation.id)
+        assert recovered.snapshot.operation.status == "interrupted"
+        assert recovered.snapshot.operation.phase == "service_restart_recovery"
+        assert recovered.snapshot.operation.error_code == "service_restart"
+        assert recovered.snapshot.steps == (
+            replace(
+                active_step,
+                status="interrupted",
+                phase="service_restart_recovery",
+                output_manifest_hash=recovered.snapshot.operation.failure_evidence_hash,
+                completion_evidence_kind="failure_manifest_hash",
+                completion_evidence_ref=recovered.snapshot.operation.failure_evidence_hash,
+                error_code="service_restart",
+                completed_at=FIXED_NOW,
+            ),
+        )
+        assert [event.status for event in recovered.snapshot.events] == [
+            "queued",
+            "running",
+            "interrupted",
+        ]
+        assert recovered.snapshot.events[-1].event_kind == "operation_interrupted"
+
+        deleted = await service.delete_project_prototype(
+            project_id="project-1",
+            client_request_id=fixture_id("delete-after-restart-recovery"),
+        )
+        assert deleted.deleted is True
+        assert await store.load_document(created.state.document_record.id) is None
+        assert await store.load_operation(active_operation.id) is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation_kind", "resource_kind"),
+    [
+        ("generation_job", "generation_job"),
+        ("generation_item", "generation_item"),
+    ],
+)
+async def test_delete_project_prototype_treats_unmatched_generation_operation_as_busy(
+    tmp_path: Path,
+    operation_kind: Literal["generation_job", "generation_item"],
+    resource_kind: str,
+) -> None:
+    store, service = _service(tmp_path / "console.db", tmp_path / "managed-data")
+    active_operation = _queued_operation(
+        f"delete-busy-unmatched-{operation_kind}",
+        operation_kind=operation_kind,
+        resource_kind=resource_kind,
+    )
+    try:
+        await _persist_queued_operation(store, active_operation)
+
+        with pytest.raises(StructuredPrototypeServiceError) as exc_info:
+            await service.delete_project_prototype(
+                project_id="project-1",
+                client_request_id=fixture_id(f"delete-busy-unmatched-{operation_kind}-request"),
+            )
+
+        assert exc_info.value.code == "prototype_busy"
+        loaded = await store.load_operation(active_operation.id)
+        assert loaded is not None
+        assert loaded.status == "queued"
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_restart_recovery_completes_queued_operation_but_skips_recursive_generation_tree(
+    tmp_path: Path,
+) -> None:
+    store, service = _service(tmp_path / "console.db", tmp_path / "managed-data")
+    ordinary = _queued_operation(
+        "restart-queued-ordinary",
+        operation_kind="gc_run",
+        resource_kind="project_prototype",
+    )
+    generation_root = _queued_operation(
+        "restart-generation-root",
+        operation_kind="generation_job",
+        resource_kind="generation_job",
+    )
+    generation_child = _queued_operation(
+        "restart-generation-child",
+        operation_kind="create_document",
+        resource_kind="document",
+        parent_operation_id=generation_root.id,
+    )
+    generation_grandchild = _queued_operation(
+        "restart-generation-grandchild",
+        operation_kind="gc_run",
+        resource_kind="project_prototype",
+        parent_operation_id=generation_child.id,
+    )
+    try:
+        for item in (ordinary, generation_root, generation_child, generation_grandchild):
+            await _persist_queued_operation(store, item)
+
+        assert await service.recover_interrupted_non_generation_operations() == 1
+        recovered = await service.get_operation_detail(ordinary.id)
+        assert recovered.snapshot.operation.status == "interrupted"
+        assert [event.status for event in recovered.snapshot.events] == [
+            "queued",
+            "running",
+            "interrupted",
+        ]
+        assert len(recovered.snapshot.steps) == 1
+        assert recovered.snapshot.steps[0].status == "interrupted"
+        assert recovered.snapshot.steps[0].step_kind == "service_restart_recovery"
+        assert await service.recover_interrupted_non_generation_operations() == 0
+
+        for item in (generation_root, generation_child, generation_grandchild):
+            loaded = await store.load_operation(item.id)
+            assert loaded is not None
+            assert loaded.status == "queued"
+            assert [event.status for event in await store.list_operation_events(item.id)] == [
+                "queued"
+            ]
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation_kind", "resource_kind", "has_broken_parent"),
+    [
+        ("generation_job", "generation_job", True),
+        ("generation_item", "generation_item", False),
+    ],
+)
+async def test_restart_recovery_rejects_generation_operations_outside_owned_tree(
+    tmp_path: Path,
+    operation_kind: Literal["generation_job", "generation_item"],
+    resource_kind: str,
+    has_broken_parent: bool,
+) -> None:
+    store, service = _service(tmp_path / "console.db", tmp_path / "managed-data")
+    ordinary = _queued_operation(
+        "restart-rollback-ordinary",
+        operation_kind="gc_run",
+        resource_kind="project_prototype",
+        operation_id="00000000-0000-4000-8000-000000000001",
+    )
+    unowned = _queued_operation(
+        f"restart-unowned-{operation_kind}",
+        operation_kind=operation_kind,
+        resource_kind=resource_kind,
+        parent_operation_id=ordinary.id if has_broken_parent else None,
+        operation_id="ffffffff-ffff-4fff-bfff-ffffffffffff",
+    )
+    try:
+        await _persist_queued_operation(store, ordinary)
+        await _persist_queued_operation(store, unowned)
+
+        with pytest.raises(StructuredPrototypeServiceError) as exc_info:
+            await service.recover_interrupted_non_generation_operations()
+
+        assert exc_info.value.code == "operation_recovery_corrupt"
+        loaded_ordinary = await store.load_operation(ordinary.id)
+        assert loaded_ordinary is not None
+        assert loaded_ordinary.status == "queued"
+        assert await store.list_operation_steps(ordinary.id) == []
+        assert [event.event_no for event in await store.list_operation_events(ordinary.id)] == [0]
+        loaded_unowned = await store.load_operation(unowned.id)
+        assert loaded_unowned is not None
+        assert loaded_unowned.status == "queued"
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_restart_recovery_rejects_gapped_operation_event_history(
+    tmp_path: Path,
+) -> None:
+    store, service = _service(tmp_path / "console.db", tmp_path / "managed-data")
+    operation = _queued_operation(
+        "restart-gapped-events",
+        operation_kind="gc_run",
+        resource_kind="project_prototype",
+    )
+    try:
+        await _persist_queued_operation(store, operation)
+        conn = await store._get_conn()
+        await conn.execute(
+            """
+            INSERT INTO prototype_operation_events (
+                operation_id, event_no, step_id, event_kind, status, phase,
+                input_hash, output_hash, evidence_hash, error_code, occurred_at
+            ) VALUES (?, 2, NULL, 'operation_queued', 'queued', 'queued', ?, NULL, NULL, NULL, ?)
+            """,
+            (operation.id, operation.request_manifest_hash, FIXED_NOW.isoformat()),
+        )
+        await conn.commit()
+
+        with pytest.raises(StructuredPrototypeServiceError) as exc_info:
+            await service.recover_interrupted_non_generation_operations()
+
+        assert exc_info.value.code == "operation_event_corrupt"
+        loaded = await store.load_operation(operation.id)
+        assert loaded is not None
+        assert loaded.status == "queued"
+        assert await store.list_operation_steps(operation.id) == []
+        assert [event.event_no for event in await store.list_operation_events(operation.id)] == [
+            0,
+            2,
+        ]
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_restart_recovery_rolls_back_when_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, service = _service(tmp_path / "console.db", tmp_path / "managed-data")
+    operation = _queued_operation(
+        "restart-cancelled-transaction",
+        operation_kind="gc_run",
+        resource_kind="project_prototype",
+    )
+    try:
+        await _persist_queued_operation(store, operation)
+        conn = await store._get_conn()
+        original_apply = store._apply_operation_transition
+        apply_calls = 0
+
+        async def cancel_first_transition(
+            connection: aiosqlite.Connection,
+            incoming_operation: PrototypeOperation,
+            step: PrototypeOperationStep,
+            event: PrototypeOperationEvent,
+        ) -> None:
+            nonlocal apply_calls
+            await original_apply(connection, incoming_operation, step, event)
+            apply_calls += 1
+            if apply_calls == 1:
+                raise asyncio.CancelledError
+
+        monkeypatch.setattr(store, "_apply_operation_transition", cancel_first_transition)
+
+        with pytest.raises(asyncio.CancelledError):
+            await service.recover_interrupted_non_generation_operations()
+
+        assert conn.in_transaction is False
+        loaded = await store.load_operation(operation.id)
+        assert loaded is not None
+        assert loaded.status == "queued"
+        assert await store.list_operation_steps(operation.id) == []
+        assert [event.event_no for event in await store.list_operation_events(operation.id)] == [0]
+        assert await service.recover_interrupted_non_generation_operations() == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_restart_recovery_cancellation_while_worker_commit_is_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, service = _service(tmp_path / "console.db", tmp_path / "managed-data")
+    operation = _queued_operation(
+        "restart-cancelled-worker-commit",
+        operation_kind="gc_run",
+        resource_kind="project_prototype",
+    )
+    release_worker = threading.Event()
+    try:
+        await _persist_queued_operation(store, operation)
+        conn = await store._get_conn()
+        raw_connection = conn._conn
+        assert raw_connection is not None
+        raw_commit = raw_connection.commit
+        original_rollback = conn.rollback
+        loop = asyncio.get_running_loop()
+        worker_started = asyncio.Event()
+        rollback_calls = 0
+
+        async def worker_gated_commit() -> None:
+            def blocked_commit() -> None:
+                loop.call_soon_threadsafe(worker_started.set)
+                if not release_worker.wait(timeout=2):
+                    raise TimeoutError("timed out waiting to release worker commit")
+                raw_commit()
+
+            await conn._execute(blocked_commit)
+
+        async def track_rollback() -> None:
+            nonlocal rollback_calls
+            rollback_calls += 1
+            await original_rollback()
+
+        monkeypatch.setattr(conn, "commit", worker_gated_commit)
+        monkeypatch.setattr(conn, "rollback", track_rollback)
+
+        recovery_task = asyncio.create_task(service.recover_interrupted_non_generation_operations())
+        await asyncio.wait_for(worker_started.wait(), timeout=1)
+        assert recovery_task.cancel()
+        await asyncio.sleep(0)
+        assert not recovery_task.done()
+        release_worker.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await recovery_task
+
+        assert rollback_calls == 0
+        assert conn.in_transaction is False
+        loaded = await store.load_operation(operation.id)
+        assert loaded is not None
+        assert loaded.status == "interrupted"
+        assert loaded.error_code == "service_restart"
+        assert [event.status for event in await store.list_operation_events(operation.id)] == [
+            "queued",
+            "running",
+            "interrupted",
+        ]
+    finally:
+        release_worker.set()
+        await store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cancel_count",
+    [1, 2],
+    ids=["single-cancel", "double-cancel"],
+)
+async def test_restart_recovery_cancellation_during_commit_preserves_committed_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cancel_count: Literal[1, 2],
+) -> None:
+    store, service = _service(tmp_path / "console.db", tmp_path / "managed-data")
+    operation = _queued_operation(
+        "restart-cancelled-commit",
+        operation_kind="gc_run",
+        resource_kind="project_prototype",
+    )
+    try:
+        await _persist_queued_operation(store, operation)
+        conn = await store._get_conn()
+        original_commit = conn.commit
+        original_rollback = conn.rollback
+        commit_applied = asyncio.Event()
+        release_commit_result = asyncio.Event()
+        rollback_calls = 0
+
+        async def commit_then_hold_result() -> None:
+            await original_commit()
+            commit_applied.set()
+            await release_commit_result.wait()
+
+        async def track_rollback() -> None:
+            nonlocal rollback_calls
+            rollback_calls += 1
+            await original_rollback()
+
+        monkeypatch.setattr(conn, "commit", commit_then_hold_result)
+        monkeypatch.setattr(conn, "rollback", track_rollback)
+
+        recovery_task = asyncio.create_task(service.recover_interrupted_non_generation_operations())
+        await asyncio.wait_for(commit_applied.wait(), timeout=1)
+        for _ in range(cancel_count):
+            assert recovery_task.cancel()
+            await asyncio.sleep(0)
+            assert not recovery_task.done()
+        release_commit_result.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await recovery_task
+
+        assert rollback_calls == 0
+        assert conn.in_transaction is False
+        loaded = await store.load_operation(operation.id)
+        assert loaded is not None
+        assert loaded.status == "interrupted"
+        assert loaded.error_code == "service_restart"
+        assert [event.status for event in await store.list_operation_events(operation.id)] == [
+            "queued",
+            "running",
+            "interrupted",
+        ]
+        assert await service.recover_interrupted_non_generation_operations() == 0
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_restart_recovery_propagates_commit_failure_after_cancellation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, service = _service(tmp_path / "console.db", tmp_path / "managed-data")
+    operation = _queued_operation(
+        "restart-cancelled-failed-commit",
+        operation_kind="gc_run",
+        resource_kind="project_prototype",
+    )
+    release_commit_failure = asyncio.Event()
+    release_rollback = asyncio.Event()
+    try:
+        await _persist_queued_operation(store, operation)
+        conn = await store._get_conn()
+        original_commit = conn.commit
+        original_rollback = conn.rollback
+        commit_started = asyncio.Event()
+        rollback_started = asyncio.Event()
+        rollback_completed = asyncio.Event()
+        rollback_calls = 0
+
+        async def fail_commit_after_release() -> None:
+            commit_started.set()
+            await release_commit_failure.wait()
+            raise aiosqlite.OperationalError("injected delayed commit failure")
+
+        async def track_rollback() -> None:
+            nonlocal rollback_calls
+            rollback_calls += 1
+            rollback_started.set()
+            await release_rollback.wait()
+            await original_rollback()
+            rollback_completed.set()
+
+        monkeypatch.setattr(conn, "commit", fail_commit_after_release)
+        monkeypatch.setattr(conn, "rollback", track_rollback)
+
+        recovery_task = asyncio.create_task(service.recover_interrupted_non_generation_operations())
+        await asyncio.wait_for(commit_started.wait(), timeout=1)
+        assert recovery_task.cancel()
+        await asyncio.sleep(0)
+        assert not recovery_task.done()
+        assert recovery_task.cancel()
+        await asyncio.sleep(0)
+        assert not recovery_task.done()
+        release_commit_failure.set()
+        await asyncio.wait_for(rollback_started.wait(), timeout=1)
+        assert not recovery_task.done()
+        assert recovery_task.cancel()
+        await asyncio.sleep(0)
+        assert not recovery_task.done()
+        release_rollback.set()
+
+        with pytest.raises(
+            aiosqlite.OperationalError, match="injected delayed commit failure"
+        ) as exc:
+            await recovery_task
+
+        assert isinstance(exc.value.__cause__, asyncio.CancelledError)
+        assert rollback_calls == 1
+        assert rollback_completed.is_set()
+        assert conn.in_transaction is False
+        loaded = await store.load_operation(operation.id)
+        assert loaded is not None
+        assert loaded.status == "queued"
+        assert await store.list_operation_steps(operation.id) == []
+        assert [event.event_no for event in await store.list_operation_events(operation.id)] == [0]
+
+        monkeypatch.setattr(conn, "commit", original_commit)
+        assert await service.recover_interrupted_non_generation_operations() == 1
+    finally:
+        release_commit_failure.set()
+        release_rollback.set()
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_restart_recovery_rolls_back_when_commit_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, service = _service(tmp_path / "console.db", tmp_path / "managed-data")
+    operation = _queued_operation(
+        "restart-commit-failure",
+        operation_kind="gc_run",
+        resource_kind="project_prototype",
+    )
+    try:
+        await _persist_queued_operation(store, operation)
+        conn = await store._get_conn()
+        original_commit = conn.commit
+        commit_calls = 0
+
+        async def fail_first_commit() -> None:
+            nonlocal commit_calls
+            commit_calls += 1
+            if commit_calls == 1:
+                raise aiosqlite.OperationalError("injected commit failure")
+            await original_commit()
+
+        monkeypatch.setattr(conn, "commit", fail_first_commit)
+
+        with pytest.raises(aiosqlite.OperationalError, match="injected commit failure"):
+            await service.recover_interrupted_non_generation_operations()
+
+        assert conn.in_transaction is False
+        loaded = await store.load_operation(operation.id)
+        assert loaded is not None
+        assert loaded.status == "queued"
+        assert await store.list_operation_steps(operation.id) == []
+        assert [event.event_no for event in await store.list_operation_events(operation.id)] == [0]
+        assert await service.recover_interrupted_non_generation_operations() == 1
     finally:
         await store.close()
 

@@ -32,7 +32,7 @@ class GitError(RuntimeError):
 # Branch names: standard git ref characters plus a few safe punctuation marks.
 # Disallows leading dash so the value can never be interpreted as a flag.
 _BRANCH_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
-_GENERATION_SNAPSHOT_REF_PREFIX = "refs/agent-collab/prototype-generation/"
+GENERATION_SNAPSHOT_REF_PREFIX = "refs/agent-collab/prototype-generation/"
 _GENERATION_SNAPSHOT_REF_RE = re.compile(
     r"^refs/agent-collab/prototype-generation/"
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
@@ -732,7 +732,7 @@ class GitService:
     ) -> PrototypeGenerationCommittedHeadCapture:
         """Pin and describe the committed project tree while excluding local edits."""
         _validate_path(repo_path)
-        snapshot_ref = f"{_GENERATION_SNAPSHOT_REF_PREFIX}{job_id}"
+        snapshot_ref = f"{GENERATION_SNAPSHOT_REF_PREFIX}{job_id}"
         if _GENERATION_SNAPSHOT_REF_RE.fullmatch(snapshot_ref) is None:
             raise GitError("invalid prototype generation snapshot ref")
 
@@ -880,7 +880,7 @@ class GitService:
             [
                 "for-each-ref",
                 "--format=%(refname) %(objectname)",
-                _GENERATION_SNAPSHOT_REF_PREFIX,
+                GENERATION_SNAPSHOT_REF_PREFIX,
             ],
             cwd=repo_path,
             check=False,

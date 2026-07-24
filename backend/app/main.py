@@ -158,8 +158,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "Recovered %d interrupted structured prototype AI run(s)",
                 interrupted_ai_runs,
             )
-    from app.bootstrap import structured_prototype_generation_service
+    from app.application.structured_prototype_generation_service import (
+        StructuredPrototypeGenerationServiceError,
+    )
+    from app.bootstrap import (
+        structured_prototype_generation_service,
+        structured_prototype_store,
+    )
 
+    if (
+        structured_prototype_store is not None
+        and structured_prototype_service is not None
+        and structured_prototype_generation_service is None
+    ):
+        logger.error("Structured prototype generation recovery service is unavailable")
+        raise StructuredPrototypeGenerationServiceError(
+            "generation_recovery_unavailable",
+            "structured prototype generation recovery is unavailable",
+        )
     if structured_prototype_generation_service is not None:
         interrupted_generation_jobs = (
             await structured_prototype_generation_service.recover_interrupted_jobs()
@@ -168,6 +184,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.info(
                 "Recovered %d interrupted structured prototype generation job(s)",
                 interrupted_generation_jobs,
+            )
+    if structured_prototype_service is not None:
+        try:
+            completed_deletions = (
+                await structured_prototype_service.recover_pending_project_prototype_deletions()
+            )
+        except StructuredPrototypeServiceError as exc:
+            logger.error(
+                "Structured prototype deletion recovery failed: code=%s",
+                exc.code,
+            )
+            raise
+        if completed_deletions:
+            logger.info(
+                "Completed %d pending structured prototype deletion(s)",
+                completed_deletions,
+            )
+        try:
+            interrupted_operations = (
+                await structured_prototype_service.recover_interrupted_non_generation_operations()
+            )
+        except StructuredPrototypeServiceError as exc:
+            logger.error(
+                "Structured prototype operation recovery failed: code=%s",
+                exc.code,
+            )
+            raise
+        if interrupted_operations:
+            logger.info(
+                "Recovered %d interrupted structured prototype operation(s)",
+                interrupted_operations,
             )
     # Recover specialist parents stuck in waiting_for_specialist with terminal/missing children.
     try:

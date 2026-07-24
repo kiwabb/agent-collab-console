@@ -561,15 +561,168 @@ return operation
 
 ---
 
-## Scenario: Atomic Project Structured Prototype Deletion
+## Scenario: Structured Prototype Restart Operation Reconciliation
+
+### 1. Scope / Trigger
+
+- Trigger: changing structured-prototype operation lifecycle persistence,
+  backend startup order, or a workflow-specific restart recovery path.
+- A backend process loss must not leave an ordinary `queued` or `running`
+  operation permanently holding the project-wide `prototype_busy` gate.
+
+### 2. Signatures
+
+- Store:
+  `recover_interrupted_non_generation_operations(recovered_at: datetime) -> int`.
+- Service:
+  `recover_interrupted_non_generation_operations() -> int`.
+- Recovered operation terminal contract:
+  `status="interrupted"`, `phase="service_restart_recovery"`, and
+  `error_code="service_restart"`.
+- Startup order:
+  publication recovery -> AI run recovery -> generation job recovery -> pending
+  project deletion recovery -> ordinary operation reconciliation.
+
+### 3. Contracts
+
+- One SQLite `BEGIN IMMEDIATE` transaction reconciles all ordinary active
+  operations and verifies that none remain before commit.
+- Generic reconciliation excludes the complete recursive operation tree rooted
+  at a top-level `generation_job` resource because the generation recovery
+  service owns that lifecycle. An active `generation_job` or `generation_item`
+  outside that tree is corrupt ownership, not another exclusion.
+- A queued operation receives an auditable `running` transition before its
+  `interrupted` transition. Reuse a valid active running step; otherwise create
+  the recovery step with a deterministic UUIDv5 identity.
+- The terminal operation, step, and `operation_interrupted` event share the
+  failure evidence hash and `service_restart` error code. Existing operation,
+  correlation, request, attempt, and manifest identities remain unchanged.
+- Recovery validates canonical UUIDs, lifecycle timestamps, active-step
+  cardinality, terminal evidence absence, and a gap-free event sequence.
+  Cancellation, commit failure, or invalid durable state rolls back the entire
+  reconciliation and aborts startup.
+- Queuing the SQLite commit is the transaction point of no return. Cancellation,
+  including repeated cancellation, must remain shielded until the commit worker
+  reports its real result. A successful commit is never followed by rollback;
+  a reported commit failure is rolled back before the error escapes.
+- Workflow-specific recovery runs first so it can persist its richer domain
+  outcome. Generic recovery only closes operations those owners did not consume.
+- Generic recovery excludes active `delete_project_prototype` operations because
+  deletion recovery owns their resumable filesystem/database saga. The final
+  verification query must apply the same exclusion as the selection query.
+- If the structured-prototype store and ordinary service are available but the
+  generation recovery service is not, startup fails with
+  `generation_recovery_unavailable` before the generic pass. It must not serve
+  requests while a generation tree could remain active and excluded.
+
+### 4. Validation & Error Matrix
+
+- Ordinary `queued` operation -> `queued -> running -> interrupted` with a
+  `service_restart_recovery` step.
+- Ordinary `running` operation with one valid running step -> reuse that step
+  and append `operation_interrupted`.
+- Top-level generation root and every recursive child -> generic recovery leaves
+  it unchanged for the generation owner.
+- Active `generation_job`/`generation_item` outside the owned recursive tree ->
+  `operation_recovery_corrupt`; roll back and abort startup.
+- Non-canonical operation/step UUID, terminal evidence on an active row,
+  impossible timestamp, multiple active steps, missing queued event, or event
+  number gap ->
+  `operation_recovery_corrupt`; roll back and abort startup.
+- Any ordinary active operation remains after the scan ->
+  `operation_recovery_incomplete`; roll back and abort startup.
+- Store recovery error -> preserve the typed error code through the service and
+  abort backend startup; never log-and-continue past a broken concurrency gate.
+- Generation recovery service unavailable while structured persistence is
+  active -> `generation_recovery_unavailable`; abort startup before generic
+  reconciliation.
+- Cancellation before commit is queued -> roll back and propagate cancellation.
+- Cancellation while commit is pending -> wait through repeated cancellation;
+  commit success persists the reconciliation without rollback, while commit
+  failure rolls back and propagates the database error.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a process dies during `apply_command_batch`; the next startup records
+  `service_restart`, deletion no longer sees `prototype_busy`, and a fresh
+  delete request succeeds.
+- Base: no ordinary active operation exists; recovery returns `0` without
+  writing rows.
+- Good: a generation root with nested `create_document` work is handled by the
+  generation recovery service before the generic pass.
+- Bad: age-filter active rows and leave a recent orphan blocking the project.
+- Bad: catch reconciliation failure and start serving requests with an unknown
+  operation ledger.
+- Bad: exclude only the generation root while interrupting its recursive child.
+- Bad: exclude an orphan generation-kind row by label even though no generation
+  root owns it.
+
+### 6. Tests Required
+
+- Store/service regression: a running ordinary operation blocks deletion,
+  startup reconciliation interrupts it with complete observability, and a new
+  deletion succeeds.
+- Queued regression: event states are exactly
+  `queued`, `running`, `interrupted`; a second recovery is idempotent.
+- Ownership regression: generation root, child, and grandchild remain active for
+  the generation owner.
+- Corruption regression: a generation-kind row outside the tree, invalid active
+  lifecycle evidence, or a gapped event history rolls back all transitions and
+  raises the typed recovery error.
+- Transaction regression: cancellation during a transition, repeated
+  cancellation while commit is pending, and commit failure leave the documented
+  durable state with no open transaction; a later recovery starts normally.
+- Lifespan regression: workflow-specific recovery precedes generic operation
+  reconciliation, including deletion before the generic pass; unavailable
+  generation recovery and a typed recovery failure both abort startup.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```sql
+UPDATE prototype_operations
+SET status = 'interrupted'
+WHERE status IN ('queued', 'running')
+  AND operation_kind != 'generation_job';
+```
+
+Correct:
+
+```sql
+WITH RECURSIVE generation_tree(id) AS (
+  SELECT id FROM prototype_operations
+  WHERE operation_kind = 'generation_job'
+    AND resource_kind = 'generation_job'
+    AND parent_operation_id IS NULL
+  UNION
+  SELECT child.id
+  FROM prototype_operations AS child
+  JOIN generation_tree AS parent ON child.parent_operation_id = parent.id
+)
+SELECT operation.id
+FROM prototype_operations AS operation
+WHERE operation.status IN ('queued', 'running')
+  AND NOT EXISTS (
+    SELECT 1 FROM generation_tree WHERE generation_tree.id = operation.id
+  );
+```
+
+The selected set is then validated before mutation: a generation-kind row in
+this set has no valid owner and raises `operation_recovery_corrupt`.
+
+---
+
+## Scenario: Recoverable Physical Project Structured Prototype Deletion
 
 ### 1. Scope / Trigger
 
 - Trigger: changing project-level structured prototype deletion, generation job
-  lifecycle states, operation concurrency gates, or the Studio/generation delete
-  controls.
-- Deletion spans every structured-prototype aggregate and must either remove the
-  complete project prototype or preserve it unchanged.
+  lifecycle states, managed object/render storage, generation snapshot refs,
+  operation recovery, or the Studio/generation delete controls.
+- SQLite and the filesystem cannot share one transaction. The durable deletion
+  operation therefore owns a resumable saga and must not report success until
+  database rows and physical prototype content are both gone.
 
 ### 2. Signatures
 
@@ -578,85 +731,180 @@ return operation
   -> `{ contractVersion: 1, operationId, correlationId, deleted: true }`.
 - Service:
   `delete_project_prototype(project_id, client_request_id) -> DeleteStructuredPrototypeResult`.
-- Store:
-  `delete_project_prototype(project_id, deletion_operation_id, completed_operation, completion_step, completion_event) -> PrototypeProjectDeletionCounts`.
+- Startup service:
+  `recover_pending_project_prototype_deletions() -> int`.
+- Store prepare:
+  `prepare_project_prototype_deletion(project_id, deletion_operation_id) -> PrototypeProjectDeletionCounts`.
+- Managed storage:
+  `purge_project_store(project_id, deletion_operation_id) -> None`.
+- Generation resource cleaner:
+  `purge_generation_resources(project_id) -> None`.
+- Store finalize:
+  `finalize_project_prototype_deletion(project_id, deletion_operation_id, completed_operation, completion_step, completion_event, replay_descriptor, replay_reference) -> None`.
 - Evidence kind: `project_prototype_deleted`; operation kind:
   `delete_project_prototype`.
 
 ### 3. Contracts
 
-- One SQLite `BEGIN IMMEDIATE` transaction removes the project's documents,
+- The prepare `BEGIN IMMEDIATE` transaction removes the project's documents,
   drafts, checkpoints, command batches, revisions, publications/render rows,
   runtime sessions/events/checkpoints, AI threads/messages/edit runs, generation
-  jobs/runs/items, object references, and superseded non-deletion operations.
-- Immutable object bytes are not deleted in the transaction. Removing their
-  references makes them eligible for the managed object-store GC.
-- The successful deletion operation and its queued/running/succeeded evidence
-  remain durable. Reusing the same `clientRequestId` returns that result.
+  jobs/runs/items, every object reference, and every prior operation. It retains
+  only the current running deletion operation/step/events and the project's
+  object descriptors.
+- A queued/running deletion operation is the project tombstone. Store-level
+  operation creation rejects every other prototype mutation with
+  `prototype_busy`, including requests from another backend process. A
+  service-local lock only serializes duplicate in-process delete calls.
+- Physical cleanup validates the managed root/project tree without following
+  symlinks, atomically renames `prototype-store` to the deterministic
+  `prototype-store-deleting-{operation_id}` tombstone, and removes its complete
+  `objects`, `renders`, and `tmp` contents. Missing active/tombstone directories
+  are successful idempotent retries; unsafe paths fail closed.
+- Generation snapshot cleanup first observes the repo's
+  `refs/agent-collab/prototype-generation/{job_id}` refs, then loads the global
+  durable owner set, and CAS-deletes only observed unowned refs. A ref created
+  after the first read cannot be swept, and an active job in any project remains
+  protected.
+- After physical cleanup, the service writes a new replay manifest for the
+  current deletion. The finalize `BEGIN IMMEDIATE` transaction verifies that
+  prepare is complete, deletes every old project object descriptor, registers
+  only that replay object/reference, and transitions the deletion to
+  `succeeded`.
+- Final durable state contains one current deletion replay object and its
+  operation evidence, but no historical prototype object, render bundle,
+  object descriptor/reference, job, document, runtime, AI, publication, or old
+  operation evidence.
+- Reusing a successful `clientRequestId` returns the original result. Reusing a
+  queued/running deletion request resumes prepare -> physical cleanup -> replay
+  -> finalize rather than returning `operation_in_progress`.
+- Cancellation must wait for an already-started physical cleanup thread to
+  finish before releasing the caller. Cancellation or any post-prepare failure
+  leaves the operation running so the same request or startup recovery can
+  safely retry.
+- Both prepare and finalize shield SQLite commit/rollback to a known outcome.
+  A successful worker commit is never rolled back after caller cancellation.
+- Startup owns active deletion recovery after generation recovery and before
+  generic reconciliation. Generic recovery excludes deletion operations in both
+  its scan and final remaining-count verification.
 - A root `generation_job` operation may remain `running` while its durable job
   waits for the user. Only `awaiting_confirmation` and `ready` are quiescent and
   exempt from the busy gate. Planning, generating, assembling, validating, and
-  preview rendering remain active and block deletion.
-- The frontend persists one delete request identity through failures, clears it
-  only after success, and preserves the last loaded prototype on any error.
+  preview rendering remain active and block deletion. A generation operation
+  without a matching durable job is not quiescent and also blocks deletion.
+- The frontend retains one delete request identity while the transport outcome
+  is unknown, the operation is non-terminal, or successful resource recovery
+  cannot yet be verified. It clears the pending operation and request identity
+  after an authoritative terminal failure, and clears them after a successful
+  deletion is verified. The last loaded prototype remains visible on any error.
 
 ### 4. Validation & Error Matrix
 
 - Invalid `clientRequestId` -> `422 client_request_id_invalid`; no operation.
 - Another queued/running non-quiescent project operation -> `409 prototype_busy`,
   retryable; no prototype row or object reference is removed.
+- Unmatched queued/running `generation_job` or `generation_item` operation ->
+  `409 prototype_busy`; SQL `NULL` from the left join must not exempt it.
 - Deletion operation identity/evidence mismatch ->
   `prototype_delete_identity_mismatch`; refuse the transaction.
-- SQLite failure during deletion -> `prototype_delete_failed`; roll back every
-  delete and persist failed deletion evidence.
+- SQLite failure before prepare commits -> `prototype_delete_failed`; roll back
+  every mutation and persist terminal failed deletion evidence.
+- Managed path/symlink error, object purge failure, Git ref list/CAS failure,
+  replay write/read-back failure, or finalize failure after prepare ->
+  `503 prototype_cleanup_pending`, retryable. Keep the deletion running and do
+  not manufacture terminal failure evidence.
+- Cancellation before prepare commits -> roll back and leave the deletion
+  running; cancellation after cleanup starts -> wait for cleanup, then leave the
+  deletion running.
+- Running deletion with anything other than its one canonical running step ->
+  `operation_observability_corrupt`; fail closed instead of guessing recovery.
 - Same successful `clientRequestId` -> `200` with the original operation and
   correlation IDs.
+- Authoritative `failed`, `interrupted`, or `cancelled` outcome -> clear the
+  browser's pending delete/request identity before surfacing the error; the next
+  user click creates a new UUID.
+- Unknown outcome, active outcome, request deadline, or failed resource read ->
+  retain the pending delete/request identity for reconciliation.
 
 ### 5. Good/Base/Bad Cases
 
-- Good: a ready generated candidate is deleted before acceptance; current
-  generation and current document both return `null` afterward.
-- Good: a published draft with runtime and AI history is deleted atomically, and
-  its published artifact route is no longer addressable.
-- Base: deleting a project with no prototype succeeds as an observable no-op.
+- Good: a published draft with runtime, AI, render, and object history leaves
+  only the current deletion replay file/descriptor/reference.
+- Good: the process dies after prepare; startup resumes physical cleanup and
+  finalize with the original operation/request identity.
+- Good: a snapshot ref changes between observation and CAS deletion; cleanup
+  remains pending and the newer ref is preserved.
+- Base: deleting a project with no prototype and no managed directory succeeds
+  as an observable no-op with one deletion replay receipt.
 - Bad: treating every running generation root as active, which makes the visible
   delete control fail while the job is waiting for user confirmation.
+- Bad: mark the operation succeeded after deleting only SQLite references while
+  historical object and render files remain on disk.
+- Bad: mark a post-prepare cleanup failure terminal; a new request could bypass
+  the tombstone and race regeneration against unfinished deletion.
+- Bad: recursively delete a path before rejecting symlinks or proving it remains
+  under the managed root.
 - Bad: clearing frontend state before the server confirms success.
+- Bad: retaining a request identity after a known `prototype_busy` terminal
+  failure, which makes every later click replay the same failed operation.
 
 ### 6. Tests Required
 
 - API: deletion removes editable, published, and runtime reads; retry with the
-  same request ID returns the identical response and terminal event sequence.
+  same request ID returns the identical response and terminal event sequence;
+  `prototype_cleanup_pending` maps to retryable `503`.
 - Store/service: an unrelated active operation returns retryable
   `prototype_busy` and leaves the document readable.
+- Object store: project purge removes object, render, and tmp files, preserves
+  another project, finishes an interrupted deterministic tombstone, is
+  idempotent when absent, and refuses nested symlinks without touching targets.
+- Saga: injected physical cleanup failure leaves one running delete tombstone,
+  blocks new mutations, survives generic recovery, and completes through the
+  deletion recovery owner using the same operation ID.
+- Final state: exactly one object descriptor/reference/file remains for the
+  current deletion replay; a later new delete removes the prior receipt and
+  replaces it with its own.
+- Git cleanup: refs are observed before owners, owned refs remain, unowned refs
+  use expected-object CAS, and a changed ref yields cleanup pending.
 - Generation regression: both `awaiting_confirmation` and `ready` jobs delete
   successfully and their root operations disappear with the job.
+- Generation regression: unmatched active generation-job/item operations remain
+  busy and cannot pass through the quiescent-job exemption.
 - Frontend: project IDs are encoded, the request uses `DELETE`, both entry points
-  reuse the persisted delete identity, and state is cleared only after success.
+  reuse the identity while the outcome is ambiguous, clear it after a known
+  terminal failure, and clear project state only after verified success.
+- Lifespan: publication -> AI -> generation -> deletion -> generic recovery;
+  typed deletion-recovery corruption aborts startup.
 
 ### 7. Wrong vs Correct
 
 Wrong:
 
-```sql
-SELECT id FROM prototype_operations
-WHERE project_id = ? AND status IN ('queued', 'running');
+```python
+await store.delete_project_prototype_rows(project_id)
+completed = succeed_operation(operation)
+await store.record_operation_transition(completed)
+schedule_best_effort_object_gc(project_id)
 ```
 
 Correct:
 
-```sql
-SELECT operation.id
-FROM prototype_operations AS operation
-LEFT JOIN prototype_document_generation_jobs AS job
-  ON job.operation_id = operation.id
-WHERE operation.project_id = ?
-  AND operation.status IN ('queued', 'running')
-  AND NOT (
-    operation.operation_kind = 'generation_job'
-    AND job.status IN ('awaiting_confirmation', 'ready')
-  );
+```python
+await store.prepare_project_prototype_deletion(project_id, operation.id)
+await purge_project_store_to_completion(project_id, operation.id)
+await purge_unowned_generation_snapshot_refs(project_id)
+replay = await write_current_deletion_replay(operation)
+await store.finalize_project_prototype_deletion(
+    project_id,
+    operation.id,
+    completed_operation=succeed_operation(operation, replay.content_hash),
+    replay_descriptor=replay.descriptor,
+    replay_reference=replay.reference,
+)
 ```
+
+The operation stays `running` between prepare and finalize. Only finalize may
+make `deleted: true` durable and observable.
 
 ---
 

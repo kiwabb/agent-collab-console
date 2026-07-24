@@ -616,6 +616,7 @@ def _status_for_error(code: str) -> int:
         return 422
     if code in {
         "object_write_failed",
+        "prototype_cleanup_pending",
         "checkpoint_required_unavailable",
         "operation_evidence_unavailable",
         "renderer_worker_unavailable",

@@ -181,3 +181,57 @@ def test_read_rejects_descriptor_bound_to_another_storage_key(tmp_path: Path) ->
         store.read_canonical_bytes(wrong_descriptor)
 
     assert error.value.code == "object_path_invalid"
+
+
+def test_purge_project_store_removes_objects_renders_and_tmp_only_for_target_project(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data"
+    store = PrototypeObjectStore(data_root)
+    target = store.write_json("project-1", {"value": "delete-me"})
+    retained = store.write_json("project-2", {"value": "keep-me"})
+    target_store = data_root / "projects/project-1/prototype-store"
+    render_file = target_store / "renders/document-1/artifact-1/index.html"
+    render_file.parent.mkdir(parents=True)
+    render_file.write_text("historical render", encoding="utf-8")
+    (target_store / "tmp/orphan.partial").write_bytes(b"orphan")
+
+    store.purge_project_store("project-1", "delete-operation-1")
+
+    assert not target_store.exists()
+    assert not (data_root / target.storage_key).exists()
+    assert store.read_canonical_bytes(retained) == canonical_json_bytes({"value": "keep-me"})
+    store.purge_project_store("project-1", "delete-operation-1")
+
+
+def test_purge_project_store_finishes_an_interrupted_tombstone(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    store = PrototypeObjectStore(data_root)
+    store.write_json("project-1", {"value": "delete-me"})
+    project = data_root / "projects/project-1"
+    tombstone = project / "prototype-store-deleting-delete-operation-1"
+    (project / "prototype-store").rename(tombstone)
+
+    store.purge_project_store("project-1", "delete-operation-1")
+
+    assert not tombstone.exists()
+    assert not (project / "prototype-store").exists()
+
+
+def test_purge_project_store_rejects_nested_symlink_without_touching_target(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data"
+    store = PrototypeObjectStore(data_root)
+    store.write_json("project-1", {"value": "delete-me"})
+    outside = tmp_path / "outside.txt"
+    outside.write_text("keep", encoding="utf-8")
+    target_store = data_root / "projects/project-1/prototype-store"
+    (target_store / "outside-link").symlink_to(outside)
+
+    with pytest.raises(PrototypeObjectStoreError) as error:
+        store.purge_project_store("project-1", "delete-operation-1")
+
+    assert error.value.code == "object_path_invalid"
+    assert outside.read_text(encoding="utf-8") == "keep"
+    assert target_store.is_dir()

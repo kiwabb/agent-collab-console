@@ -169,6 +169,19 @@ union, while the backend still parsed strict JSON and applied the same schema.
 
 - [ ] Persist the complete user-visible snapshot and lifecycle counters; React
   state is a cache, not the workflow owner
+- [ ] Assign every durable active row to exactly one startup recovery owner. If
+  that owner is unavailable, fail startup before a generic sweep can exclude the
+  row and leave a governance or concurrency gate permanently occupied
+- [ ] Treat asynchronous database commit as a point of no return once queued to
+  its worker. Shield commit and rollback cleanup through repeated cancellation,
+  resolve the worker's actual result, and test cancellation before, during, and
+  after commit as well as commit failure during cancellation
+- [ ] For delete flows, enumerate every authority surface: database rows,
+  content-addressed files, render/output directories, external refs, and the
+  browser's cached/pending identity. "No longer queryable" is not physical deletion
+- [ ] When database and filesystem deletion cannot be atomic, keep a durable
+  tombstone active across the saga, block new mutations, report success only
+  after physical cleanup, and make the same request plus startup recovery resume it
 - [ ] Put stable resource identity and contract version on snapshots and
   heartbeats, then reject cross-resource frames before state mutation
 - [ ] Define one status/phase/counter matrix and validate it at the frontend

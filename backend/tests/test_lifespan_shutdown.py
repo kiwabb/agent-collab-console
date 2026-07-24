@@ -41,6 +41,173 @@ async def test_lifespan_awaits_async_process_manager_shutdown(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_lifespan_recovers_structured_prototype_operations_after_owned_workflows(
+    monkeypatch,
+):
+    import app.bootstrap as bootstrap_module
+
+    calls: list[str] = []
+
+    class StructuredService:
+        async def recover_interrupted_publications(self) -> int:
+            calls.append("publication")
+            return 1
+
+        async def recover_pending_project_prototype_deletions(self) -> int:
+            calls.append("deletion")
+            return 1
+
+        async def recover_interrupted_non_generation_operations(self) -> int:
+            calls.append("ordinary_operations")
+            return 1
+
+    class AiService:
+        async def recover_interrupted_runs(self) -> int:
+            calls.append("ai")
+            return 1
+
+    class GenerationService:
+        async def recover_interrupted_jobs(self) -> int:
+            calls.append("generation")
+            return 1
+
+    monkeypatch.setattr(bootstrap_module, "async_store", None)
+    monkeypatch.setattr(bootstrap_module, "codex_process_manager", _AwaitableProcessManager())
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_store", None)
+    monkeypatch.setattr(bootstrap_module, "external_prototype_agent_store", None)
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_service", StructuredService())
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_ai_service", AiService())
+    monkeypatch.setattr(
+        bootstrap_module,
+        "structured_prototype_generation_service",
+        GenerationService(),
+    )
+
+    async with lifespan(FastAPI()):
+        pass
+
+    assert calls == ["publication", "ai", "generation", "deletion", "ordinary_operations"]
+
+
+@pytest.mark.asyncio
+async def test_lifespan_aborts_when_generation_recovery_service_is_unavailable(
+    monkeypatch,
+):
+    import app.bootstrap as bootstrap_module
+    from app.application.structured_prototype_generation_service import (
+        StructuredPrototypeGenerationServiceError,
+    )
+
+    calls: list[str] = []
+
+    class StructuredService:
+        async def recover_interrupted_publications(self) -> int:
+            calls.append("publication")
+            return 0
+
+        async def recover_interrupted_non_generation_operations(self) -> int:
+            calls.append("ordinary_operations")
+            return 0
+
+    monkeypatch.setattr(bootstrap_module, "async_store", None)
+    monkeypatch.setattr(bootstrap_module, "codex_process_manager", _AwaitableProcessManager())
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_store", object())
+    monkeypatch.setattr(bootstrap_module, "external_prototype_agent_store", None)
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_service", StructuredService())
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_ai_service", None)
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_generation_service", None)
+
+    with pytest.raises(StructuredPrototypeGenerationServiceError) as exc_info:
+        async with lifespan(FastAPI()):
+            pass
+
+    assert exc_info.value.code == "generation_recovery_unavailable"
+    assert calls == ["publication"]
+
+
+@pytest.mark.asyncio
+async def test_lifespan_aborts_when_structured_prototype_operation_recovery_fails(
+    monkeypatch,
+):
+    import app.bootstrap as bootstrap_module
+    from app.application.structured_prototype_service import StructuredPrototypeServiceError
+
+    calls: list[str] = []
+
+    class StructuredService:
+        async def recover_interrupted_publications(self) -> int:
+            calls.append("publication")
+            return 0
+
+        async def recover_pending_project_prototype_deletions(self) -> int:
+            calls.append("deletion")
+            return 0
+
+        async def recover_interrupted_non_generation_operations(self) -> int:
+            calls.append("ordinary_operations")
+            raise StructuredPrototypeServiceError(
+                "operation_recovery_corrupt",
+                "active operation ledger is corrupt",
+            )
+
+    monkeypatch.setattr(bootstrap_module, "async_store", None)
+    monkeypatch.setattr(bootstrap_module, "codex_process_manager", _AwaitableProcessManager())
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_store", None)
+    monkeypatch.setattr(bootstrap_module, "external_prototype_agent_store", None)
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_service", StructuredService())
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_ai_service", None)
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_generation_service", None)
+
+    with pytest.raises(StructuredPrototypeServiceError) as exc_info:
+        async with lifespan(FastAPI()):
+            pass
+
+    assert exc_info.value.code == "operation_recovery_corrupt"
+    assert calls == ["publication", "deletion", "ordinary_operations"]
+
+
+@pytest.mark.asyncio
+async def test_lifespan_aborts_when_structured_prototype_deletion_recovery_is_corrupt(
+    monkeypatch,
+):
+    import app.bootstrap as bootstrap_module
+    from app.application.structured_prototype_service import StructuredPrototypeServiceError
+
+    calls: list[str] = []
+
+    class StructuredService:
+        async def recover_interrupted_publications(self) -> int:
+            calls.append("publication")
+            return 0
+
+        async def recover_pending_project_prototype_deletions(self) -> int:
+            calls.append("deletion")
+            raise StructuredPrototypeServiceError(
+                "operation_observability_corrupt",
+                "active deletion ledger is corrupt",
+            )
+
+        async def recover_interrupted_non_generation_operations(self) -> int:
+            calls.append("ordinary_operations")
+            return 0
+
+    monkeypatch.setattr(bootstrap_module, "async_store", None)
+    monkeypatch.setattr(bootstrap_module, "codex_process_manager", _AwaitableProcessManager())
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_store", None)
+    monkeypatch.setattr(bootstrap_module, "external_prototype_agent_store", None)
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_service", StructuredService())
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_ai_service", None)
+    monkeypatch.setattr(bootstrap_module, "structured_prototype_generation_service", None)
+
+    with pytest.raises(StructuredPrototypeServiceError) as exc_info:
+        async with lifespan(FastAPI()):
+            pass
+
+    assert exc_info.value.code == "operation_observability_corrupt"
+    assert calls == ["publication", "deletion"]
+
+
+@pytest.mark.asyncio
 async def test_lifespan_recovers_conductors_and_runs_watchdog(monkeypatch):
     import asyncio  # noqa: I001
     import app.bootstrap as bootstrap_module

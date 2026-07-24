@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -166,6 +167,69 @@ def _fsync_directory(directory: Path) -> None:
         os.close(descriptor)
 
 
+def _existing_managed_directory(parent: Path, name: str, root: Path) -> Path | None:
+    candidate = parent / name
+    if candidate.is_symlink():
+        raise PrototypeObjectStoreError(
+            "object_path_invalid",
+            "prototype managed storage contains a symlink",
+        )
+    try:
+        resolved = candidate.resolve(strict=True)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise PrototypeObjectStoreError(
+            "object_purge_failed",
+            "prototype managed storage could not be resolved for deletion",
+        ) from exc
+    if resolved != candidate or not resolved.is_dir() or not resolved.is_relative_to(root):
+        raise PrototypeObjectStoreError(
+            "object_path_invalid",
+            "prototype managed storage escaped the managed data root",
+        )
+    return resolved
+
+
+def _assert_deletable_tree(directory: Path, root: Path) -> None:
+    if directory.is_symlink():
+        raise PrototypeObjectStoreError(
+            "object_path_invalid",
+            "prototype managed storage contains a symlink",
+        )
+
+    def _raise_walk_error(error: OSError) -> None:
+        raise error
+
+    try:
+        for current_text, directory_names, file_names in os.walk(
+            directory,
+            topdown=True,
+            followlinks=False,
+            onerror=_raise_walk_error,
+        ):
+            current = Path(current_text)
+            resolved = current.resolve(strict=True)
+            if resolved != current or not resolved.is_relative_to(root):
+                raise PrototypeObjectStoreError(
+                    "object_path_invalid",
+                    "prototype managed storage escaped the managed data root",
+                )
+            for name in (*directory_names, *file_names):
+                if (current / name).is_symlink():
+                    raise PrototypeObjectStoreError(
+                        "object_path_invalid",
+                        "prototype managed storage contains a symlink",
+                    )
+    except PrototypeObjectStoreError:
+        raise
+    except OSError as exc:
+        raise PrototypeObjectStoreError(
+            "object_purge_failed",
+            "prototype managed storage could not be inspected for deletion",
+        ) from exc
+
+
 class PrototypeObjectStore:
     def __init__(self, data_root: Path) -> None:
         self._data_root = data_root
@@ -267,6 +331,74 @@ class PrototypeObjectStore:
                 "prototype object content hash does not match its descriptor",
             )
         return canonical_bytes
+
+    def purge_project_store(self, project_id: str, deletion_operation_id: str) -> None:
+        """Remove one project's managed prototype objects, renders, and temporary files."""
+        safe_project_id = _safe_project_id(project_id)
+        if SAFE_PATH_COMPONENT_RE.fullmatch(deletion_operation_id) is None:
+            raise PrototypeObjectStoreError(
+                "object_path_invalid",
+                "prototype deletion operation ID is not safe for managed storage",
+            )
+        if self._data_root.is_symlink():
+            raise PrototypeObjectStoreError(
+                "object_path_invalid",
+                "prototype managed data root must not be a symlink",
+            )
+        try:
+            root = self._data_root.resolve(strict=True)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise PrototypeObjectStoreError(
+                "object_purge_failed",
+                "prototype managed data root could not be resolved for deletion",
+            ) from exc
+        if not root.is_dir():
+            raise PrototypeObjectStoreError(
+                "object_path_invalid",
+                "prototype managed data root is not a directory",
+            )
+        projects = _existing_managed_directory(root, "projects", root)
+        if projects is None:
+            return
+        project = _existing_managed_directory(projects, safe_project_id, root)
+        if project is None:
+            return
+
+        active_store = project / "prototype-store"
+        tombstone = project / f"prototype-store-deleting-{deletion_operation_id}"
+        existing_tombstone = _existing_managed_directory(
+            project,
+            tombstone.name,
+            root,
+        )
+        try:
+            if existing_tombstone is not None:
+                _assert_deletable_tree(existing_tombstone, root)
+                shutil.rmtree(existing_tombstone)
+                _fsync_directory(project)
+
+            existing_store = _existing_managed_directory(
+                project,
+                active_store.name,
+                root,
+            )
+            if existing_store is None:
+                return
+            _assert_deletable_tree(existing_store, root)
+            existing_store.rename(tombstone)
+            _fsync_directory(project)
+            _assert_deletable_tree(tombstone, root)
+            shutil.rmtree(tombstone)
+            _fsync_directory(project)
+        except PrototypeObjectStoreError:
+            raise
+        except OSError as exc:
+            raise PrototypeObjectStoreError(
+                "object_purge_failed",
+                "prototype managed storage could not be deleted",
+            ) from exc
 
     def _paths(self, project_id: str, content_hash: str) -> _ObjectPaths:
         safe_project_id = _safe_project_id(project_id)

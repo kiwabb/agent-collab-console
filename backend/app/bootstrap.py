@@ -47,6 +47,9 @@ from app.application.project_startup_mcp import (
 from app.application.project_startup_service import ProjectStartupConfigService
 from app.application.prototype_ui_engineer_runner import PrototypeUiEngineerRunner
 from app.application.structured_prototype_service import StructuredPrototypeService
+from app.application.structured_prototype_deletion_cleanup import (
+    StructuredPrototypeDeletionResourceCleaner,
+)
 from app.application.structured_prototype_ai_mcp import (
     PROTOTYPE_AI_MCP_DESCRIPTOR,
     PrototypeAiMcpService,
@@ -175,6 +178,16 @@ structured_prototype_object_store = (
 structured_prototype_artifact_store = (
     PrototypeRenderArtifactStore(structured_prototype_data_root) if use_sqlite else None
 )
+git_service = GitService()
+structured_prototype_deletion_cleaner = (
+    StructuredPrototypeDeletionResourceCleaner(
+        project_store=async_store,
+        owner_store=structured_prototype_store,
+        source_control=git_service,
+    )
+    if async_store is not None and structured_prototype_store is not None
+    else None
+)
 try:
     structured_prototype_snap_worker = (
         PrototypeSnapWorker(
@@ -218,6 +231,7 @@ structured_prototype_service = (
         runtime_worker=structured_prototype_runtime_worker,
         renderer_worker=structured_prototype_renderer_worker,
         artifact_store=structured_prototype_artifact_store,
+        deletion_resource_cleaner=structured_prototype_deletion_cleaner,
     )
     if structured_prototype_store is not None and structured_prototype_object_store is not None
     else None
@@ -293,7 +307,6 @@ approval_service = ApprovalService(session_service=session_service)
 codex_store = effective_store  # Use async_store if available
 
 # Git project + worktree services.
-git_service = GitService()
 project_service = (
     ProjectService(store=async_store, git=git_service) if async_store is not None else None
 )
