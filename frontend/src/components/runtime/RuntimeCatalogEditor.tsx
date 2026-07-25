@@ -27,9 +27,29 @@ interface RuntimeCatalogEditorProps {
 // api_endpoint defaults to empty so a freshly-added executor runs the local CLI
 // (the backend treats "no endpoint + no key" as local-CLI mode). The user can
 // still type a remote endpoint + key to target a hosted API.
+const ACP_DEFAULT: {
+  command: string;
+  args: string[];
+  env_allowlist: string[];
+  permission_timeout_s: number;
+  model_config_id: string;
+} = {
+  command: "",
+  args: [],
+  env_allowlist: [],
+  permission_timeout_s: 300,
+  model_config_id: "model",
+};
+
 const EXECUTOR_DEFAULTS: Record<
-  "claude" | "codex",
-  { label: string; api_endpoint: string; default_model: string; protocol: "anthropic" | "openai" }
+  "claude" | "codex" | "acp",
+  {
+    label: string;
+    api_endpoint: string;
+    default_model: string;
+    protocol: "anthropic" | "openai";
+    acp?: typeof ACP_DEFAULT;
+  }
 > = {
   claude: {
     label: "Claude",
@@ -43,6 +63,13 @@ const EXECUTOR_DEFAULTS: Record<
     default_model: "gpt-5-codex",
     protocol: "openai",
   },
+  acp: {
+    label: "ACP",
+    api_endpoint: "",
+    default_model: "model",
+    protocol: "anthropic",
+    acp: ACP_DEFAULT,
+  },
 };
 
 function normalizeCatalog(catalog: RuntimeCatalog): RuntimeCatalog {
@@ -53,6 +80,16 @@ function normalizeCatalog(catalog: RuntimeCatalog): RuntimeCatalog {
       api_endpoint: executor.api_endpoint ?? null,
       api_key_configured: executor.api_key_configured ?? Boolean(executor.api_key),
       default_model: executor.default_model ?? null,
+      acp:
+        executor.executor_type === "acp"
+          ? {
+              command: executor.acp?.command ?? "",
+              args: executor.acp?.args ?? [],
+              env_allowlist: executor.acp?.env_allowlist ?? [],
+              permission_timeout_s: executor.acp?.permission_timeout_s ?? 300,
+              model_config_id: executor.acp?.model_config_id ?? "model",
+            }
+          : executor.acp ?? null,
     })),
   };
 }
@@ -73,17 +110,44 @@ export function RuntimeCatalogEditor({ catalog, onChange, className }: RuntimeCa
   const [localCatalog, setLocalCatalog] = useState<RuntimeCatalog>(() => normalizeCatalog(catalog));
   const [addingNew, setAddingNew] = useState(false);
   const [newExecutorLabel, setNewExecutorLabel] = useState(EXECUTOR_DEFAULTS.claude.label);
-  const [newExecutorType, setNewExecutorType] = useState<"claude" | "codex">("claude");
+  const [newExecutorType, setNewExecutorType] = useState<"claude" | "codex" | "acp">("claude");
   const [newApiEndpoint, setNewApiEndpoint] = useState(EXECUTOR_DEFAULTS.claude.api_endpoint);
   const [newApiKey, setNewApiKey] = useState("");
   const [newDefaultModel, setNewDefaultModel] = useState(EXECUTOR_DEFAULTS.claude.default_model);
+  const [newAcpCommand, setNewAcpCommand] = useState(ACP_DEFAULT.command);
+  const [newAcpArgs, setNewAcpArgs] = useState(ACP_DEFAULT.args.join(", "));
+  const [newAcpEnvAllowlist, setNewAcpEnvAllowlist] = useState(
+    ACP_DEFAULT.env_allowlist.join(", "),
+  );
+  const [newAcpPermissionTimeout, setNewAcpPermissionTimeout] = useState(
+    ACP_DEFAULT.permission_timeout_s,
+  );
+  const [newAcpModelConfigId, setNewAcpModelConfigId] = useState(
+    ACP_DEFAULT.model_config_id,
+  );
 
-  const handleExecutorTypeChange = (nextType: "claude" | "codex") => {
+  const handleExecutorTypeChange = (nextType: "claude" | "codex" | "acp") => {
     const prevDefaults = EXECUTOR_DEFAULTS[newExecutorType];
     const nextDefaults = EXECUTOR_DEFAULTS[nextType];
     setNewExecutorType(nextType);
     if (!newExecutorLabel.trim() || newExecutorLabel === prevDefaults.label) {
       setNewExecutorLabel(nextDefaults.label);
+    }
+    // Clear endpoint/key/model when switching to ACP (it has no API fields).
+    if (nextType === "acp") {
+      if (!newApiEndpoint.trim() || newApiEndpoint === prevDefaults.api_endpoint) {
+        setNewApiEndpoint("");
+      }
+      if (!newDefaultModel.trim() || newDefaultModel === prevDefaults.default_model) {
+        setNewDefaultModel("");
+      }
+      if (!newApiKey.trim()) setNewApiKey("");
+      setNewAcpCommand(ACP_DEFAULT.command);
+      setNewAcpArgs(ACP_DEFAULT.args.join(", "));
+      setNewAcpEnvAllowlist(ACP_DEFAULT.env_allowlist.join(", "));
+      setNewAcpPermissionTimeout(ACP_DEFAULT.permission_timeout_s);
+      setNewAcpModelConfigId(ACP_DEFAULT.model_config_id);
+      return;
     }
     if (!newApiEndpoint.trim() || newApiEndpoint === prevDefaults.api_endpoint) {
       setNewApiEndpoint(nextDefaults.api_endpoint);
@@ -158,18 +222,46 @@ export function RuntimeCatalogEditor({ catalog, onChange, className }: RuntimeCa
   const handleAddExecutor = () => {
     const label = newExecutorLabel.trim() || EXECUTOR_DEFAULTS[newExecutorType].label;
 
-    const newExecutor: RuntimeExecutorConfig = {
-      id: crypto.randomUUID(),
-      label,
-      enabled: true,
-      executor_type: newExecutorType,
-      api_endpoint: newApiEndpoint.trim() || null,
-      api_key: newApiKey.trim() || null,
-      default_model: newDefaultModel.trim() || null,
-      protocol: EXECUTOR_DEFAULTS[newExecutorType].protocol,
-      providers: [],
-      default_provider_id: null,
-    };
+    const parseList = (raw: string): string[] =>
+      raw
+        .split(",")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+
+    const newExecutor: RuntimeExecutorConfig =
+      newExecutorType === "acp"
+        ? {
+            id: crypto.randomUUID(),
+            label,
+            enabled: true,
+            executor_type: "acp",
+            api_endpoint: null,
+            api_key: null,
+            default_model: null,
+            providers: [],
+            default_provider_id: null,
+            acp: {
+              command: newAcpCommand.trim(),
+              args: parseList(newAcpArgs),
+              env_allowlist: parseList(newAcpEnvAllowlist),
+              permission_timeout_s: Number.isFinite(newAcpPermissionTimeout)
+                ? newAcpPermissionTimeout
+                : 300,
+              model_config_id: newAcpModelConfigId.trim() || "model",
+            },
+          }
+        : {
+            id: crypto.randomUUID(),
+            label,
+            enabled: true,
+            executor_type: newExecutorType,
+            api_endpoint: newApiEndpoint.trim() || null,
+            api_key: newApiKey.trim() || null,
+            default_model: newDefaultModel.trim() || null,
+            protocol: EXECUTOR_DEFAULTS[newExecutorType].protocol,
+            providers: [],
+            default_provider_id: null,
+          };
 
     const updatedCatalog = {
       ...localCatalog,
@@ -183,6 +275,11 @@ export function RuntimeCatalogEditor({ catalog, onChange, className }: RuntimeCa
     setNewApiEndpoint(EXECUTOR_DEFAULTS.claude.api_endpoint);
     setNewApiKey("");
     setNewDefaultModel(EXECUTOR_DEFAULTS.claude.default_model);
+    setNewAcpCommand(ACP_DEFAULT.command);
+    setNewAcpArgs(ACP_DEFAULT.args.join(", "));
+    setNewAcpEnvAllowlist(ACP_DEFAULT.env_allowlist.join(", "));
+    setNewAcpPermissionTimeout(ACP_DEFAULT.permission_timeout_s);
+    setNewAcpModelConfigId(ACP_DEFAULT.model_config_id);
     setAddingNew(false);
   };
 
@@ -192,6 +289,11 @@ export function RuntimeCatalogEditor({ catalog, onChange, className }: RuntimeCa
     setNewApiEndpoint(EXECUTOR_DEFAULTS.claude.api_endpoint);
     setNewApiKey("");
     setNewDefaultModel(EXECUTOR_DEFAULTS.claude.default_model);
+    setNewAcpCommand(ACP_DEFAULT.command);
+    setNewAcpArgs(ACP_DEFAULT.args.join(", "));
+    setNewAcpEnvAllowlist(ACP_DEFAULT.env_allowlist.join(", "));
+    setNewAcpPermissionTimeout(ACP_DEFAULT.permission_timeout_s);
+    setNewAcpModelConfigId(ACP_DEFAULT.model_config_id);
     setAddingNew(false);
   };
 
@@ -315,44 +417,121 @@ export function RuntimeCatalogEditor({ catalog, onChange, className }: RuntimeCa
                       />
                       {t("runtime.executor.codexCli")}
                     </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        name="newExecutorType"
+                        value="acp"
+                        checked={newExecutorType === "acp"}
+                        onChange={() => handleExecutorTypeChange("acp")}
+                      />
+                      {t("runtime.executor.acpCli")}
+                    </label>
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div className="min-w-0 space-y-1">
-                  <label className="text-xs text-muted-foreground">
-                    {t("runtime.executor.apiEndpoint")}
-                  </label>
-                  <Input
-                    value={newApiEndpoint}
-                    onChange={(e) => setNewApiEndpoint(e.target.value)}
-                    placeholder={t("runtime.executor.endpointPlaceholder")}
-                  />
+              {newExecutorType === "acp" ? (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="min-w-0 space-y-1">
+                      <label className="text-xs text-muted-foreground">
+                        {t("runtime.executor.acpCommand")}
+                      </label>
+                      <Input
+                        value={newAcpCommand}
+                        onChange={(e) => setNewAcpCommand(e.target.value)}
+                        placeholder="acp-agent"
+                      />
+                    </div>
+                    <div className="min-w-0 space-y-1">
+                      <label className="text-xs text-muted-foreground">
+                        {t("runtime.executor.acpArgs")}
+                      </label>
+                      <Input
+                        value={newAcpArgs}
+                        onChange={(e) => setNewAcpArgs(e.target.value)}
+                        placeholder="--stdio,--port,1234"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="min-w-0 space-y-1">
+                      <label className="text-xs text-muted-foreground">
+                        {t("runtime.executor.acpEnvAllowlist")}
+                      </label>
+                      <Input
+                        value={newAcpEnvAllowlist}
+                        onChange={(e) => setNewAcpEnvAllowlist(e.target.value)}
+                        placeholder="ANTHROPIC_API_KEY,HOME"
+                      />
+                      <p className="text-[11px] text-muted-foreground">
+                        {t("runtime.executor.acpEnvAllowlistHint")}
+                      </p>
+                    </div>
+                    <div className="min-w-0 space-y-1">
+                      <label className="text-xs text-muted-foreground">
+                        {t("runtime.executor.acpPermissionTimeout")}
+                      </label>
+                      <Input
+                        type="number"
+                        value={newAcpPermissionTimeout}
+                        onChange={(e) =>
+                          setNewAcpPermissionTimeout(Number(e.target.value))
+                        }
+                        placeholder="300"
+                      />
+                    </div>
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <label className="text-xs text-muted-foreground">
+                      {t("runtime.executor.acpModelConfigId")}
+                    </label>
+                    <Input
+                      value={newAcpModelConfigId}
+                      onChange={(e) => setNewAcpModelConfigId(e.target.value)}
+                      placeholder="model"
+                    />
+                  </div>
                 </div>
-                <div className="min-w-0 space-y-1">
-                  <label className="text-xs text-muted-foreground">
-                    {t("runtime.executor.apiKey")}
-                  </label>
-                  <Input
-                    type="password"
-                    value={newApiKey}
-                    onChange={(e) => setNewApiKey(e.target.value)}
-                    placeholder={t("runtime.executor.keyPlaceholder")}
-                  />
-                </div>
-              </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="min-w-0 space-y-1">
+                      <label className="text-xs text-muted-foreground">
+                        {t("runtime.executor.apiEndpoint")}
+                      </label>
+                      <Input
+                        value={newApiEndpoint}
+                        onChange={(e) => setNewApiEndpoint(e.target.value)}
+                        placeholder={t("runtime.executor.endpointPlaceholder")}
+                      />
+                    </div>
+                    <div className="min-w-0 space-y-1">
+                      <label className="text-xs text-muted-foreground">
+                        {t("runtime.executor.apiKey")}
+                      </label>
+                      <Input
+                        type="password"
+                        value={newApiKey}
+                        onChange={(e) => setNewApiKey(e.target.value)}
+                        placeholder={t("runtime.executor.keyPlaceholder")}
+                      />
+                    </div>
+                  </div>
 
-              <div className="min-w-0 space-y-1">
-                <label className="text-xs text-muted-foreground">
-                  {t("runtime.executor.defaultModel")}
-                </label>
-                <Input
-                  value={newDefaultModel}
-                  onChange={(e) => setNewDefaultModel(e.target.value)}
-                  placeholder={t("runtime.executor.modelPlaceholder")}
-                />
-              </div>
+                  <div className="min-w-0 space-y-1">
+                    <label className="text-xs text-muted-foreground">
+                      {t("runtime.executor.defaultModel")}
+                    </label>
+                    <Input
+                      value={newDefaultModel}
+                      onChange={(e) => setNewDefaultModel(e.target.value)}
+                      placeholder={t("runtime.executor.modelPlaceholder")}
+                    />
+                  </div>
+                </>
+              )}
 
               <div className="flex gap-2">
                 <Button size="sm" onClick={handleAddExecutor}>
@@ -404,11 +583,13 @@ function ConductorLLMSection({ catalog, onUpdate, t }: ConductorLLMSectionProps)
               className="h-9 w-full rounded-md border border-border-subtle bg-surface-input px-3 text-sm"
             >
               <option value="">{t("runtime.conductor.autoPick")}</option>
-              {catalog.executors.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.label} ({e.protocol ?? "anthropic"})
-                </option>
-              ))}
+              {catalog.executors
+                .filter((e) => e.executor_type !== "acp")
+                .map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.label} ({e.protocol ?? "anthropic"})
+                  </option>
+                ))}
             </select>
           </div>
           <div className="min-w-0 space-y-1">
@@ -471,8 +652,10 @@ function ExecutorCard({
   } | null>(null);
 
   // No key configured (neither freshly typed nor persisted on the backend) means
-  // this executor runs the local CLI with its own default login.
-  const isLocalMode = !executor.api_key && !executor.api_key_configured;
+  // this executor runs the local CLI with its own default login. ACP executors
+  // launch a managed subprocess instead, so the local-CLI badge does not apply.
+  const isLocalMode =
+    executor.executor_type !== "acp" && !executor.api_key && !executor.api_key_configured;
 
   const handleTest = async () => {
     setTesting(true);
@@ -508,7 +691,9 @@ function ExecutorCard({
             <span className="font-medium">
               {executor.executor_type === "claude"
                 ? t("runtime.executor.claudeCli")
-                : t("runtime.executor.codexCli")}
+                : executor.executor_type === "codex"
+                  ? t("runtime.executor.codexCli")
+                  : t("runtime.executor.acpCli")}
             </span>
             <span className="text-sm text-muted-foreground">{executor.label}</span>
             <span className="text-xs text-muted-foreground">({executor.id})</span>
@@ -522,57 +707,61 @@ function ExecutorCard({
             <Button variant="outline" size="sm" onClick={onToggleEnabled}>
               {executor.enabled ? t("runtime.executor.enabled") : t("runtime.executor.disabled")}
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleTest}
-              disabled={testing}
-              data-density={testing ? "runtime-catalog-test-tool" : "runtime-catalog-test"}
-              className={cn("gap-1.5", testing && "motion-essential")}
-            >
-              {testing ? (
-                <AgentThinkingIndicator phase="tool" size={12} />
-              ) : testResult ? (
-                testResult.success ? (
-                  <CheckCircle className="h-3 w-3 text-green-500" />
-                ) : (
-                  <XCircle className="h-3 w-3 text-destructive" />
-                )
-              ) : null}
-              {t("runtime.catalog.testApi")}
-            </Button>
-            {executor.executor_type === "claude" && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleCliTest}
-                disabled={testingCli}
-                data-density={
-                  testingCli ? "runtime-catalog-test-cli-tool" : "runtime-catalog-test-cli"
-                }
-                className={cn("gap-1.5", testingCli && "motion-essential")}
-              >
-                {testingCli ? (
-                  <AgentThinkingIndicator phase="tool" size={12} />
-                ) : cliTestResult ? (
-                  cliTestResult.success ? (
-                    <CheckCircle className="h-3 w-3 text-green-500" />
-                  ) : (
-                    <XCircle className="h-3 w-3 text-destructive" />
-                  )
-                ) : null}
-                {t("runtime.catalog.testCli")}
-              </Button>
-            )}
-            {testResult?.success && (
-              <span className="text-xs text-green-500">
-                {testResult.mode === "local_cli"
-                  ? t("runtime.catalog.testLocalOk")
-                  : `${testResult.latency_ms}ms`}
-              </span>
-            )}
-            {cliTestResult?.success && (
-              <span className="text-xs text-green-500">{t("runtime.catalog.testCliOk")}</span>
+            {executor.executor_type !== "acp" && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleTest}
+                  disabled={testing}
+                  data-density={testing ? "runtime-catalog-test-tool" : "runtime-catalog-test"}
+                  className={cn("gap-1.5", testing && "motion-essential")}
+                >
+                  {testing ? (
+                    <AgentThinkingIndicator phase="tool" size={12} />
+                  ) : testResult ? (
+                    testResult.success ? (
+                      <CheckCircle className="h-3 w-3 text-green-500" />
+                    ) : (
+                      <XCircle className="h-3 w-3 text-destructive" />
+                    )
+                  ) : null}
+                  {t("runtime.catalog.testApi")}
+                </Button>
+                {executor.executor_type === "claude" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCliTest}
+                    disabled={testingCli}
+                    data-density={
+                      testingCli ? "runtime-catalog-test-cli-tool" : "runtime-catalog-test-cli"
+                    }
+                    className={cn("gap-1.5", testingCli && "motion-essential")}
+                  >
+                    {testingCli ? (
+                      <AgentThinkingIndicator phase="tool" size={12} />
+                    ) : cliTestResult ? (
+                      cliTestResult.success ? (
+                        <CheckCircle className="h-3 w-3 text-green-500" />
+                      ) : (
+                        <XCircle className="h-3 w-3 text-destructive" />
+                      )
+                    ) : null}
+                    {t("runtime.catalog.testCli")}
+                  </Button>
+                )}
+                {testResult?.success && (
+                  <span className="text-xs text-green-500">
+                    {testResult.mode === "local_cli"
+                      ? t("runtime.catalog.testLocalOk")
+                      : `${testResult.latency_ms}ms`}
+                  </span>
+                )}
+                {cliTestResult?.success && (
+                  <span className="text-xs text-green-500">{t("runtime.catalog.testCliOk")}</span>
+                )}
+              </>
             )}
             <Button
               variant="ghost"
@@ -604,113 +793,209 @@ function ExecutorCard({
             placeholder={t("runtime.executor.namePlaceholder")}
           />
         </div>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div className="min-w-0 space-y-1">
-            <label className="text-xs text-muted-foreground">
-              {t("runtime.executor.apiEndpoint")}
-            </label>
-            <Input
-              value={executor.api_endpoint || ""}
-              onChange={(e) => onUpdate({ api_endpoint: e.target.value || null })}
-              placeholder={t("runtime.executor.endpointPlaceholder")}
-            />
-          </div>
-          <div className="min-w-0 space-y-1">
-            <label className="text-xs text-muted-foreground">{t("runtime.executor.apiKey")}</label>
-            <Input
-              type="password"
-              value={executor.api_key || ""}
-              onChange={(e) => onUpdate({ api_key: e.target.value || null })}
-              placeholder={
-                executor.api_key_configured
-                  ? t("runtime.executor.keyConfiguredPlaceholder")
-                  : t("runtime.executor.keyPlaceholder")
-              }
-            />
-            {executor.api_key_configured && !executor.api_key && (
-              <p className="text-[11px] text-muted-foreground">
-                {t("runtime.executor.keyHiddenHint")}
-              </p>
-            )}
-            {isLocalMode && (
-              <p className="text-[11px] text-brand/80">{t("runtime.executor.localCliHint")}</p>
-            )}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div className="min-w-0 space-y-1">
-            <label className="text-xs text-muted-foreground">
-              {t("runtime.executor.defaultModel")}
-            </label>
-            <Input
-              value={executor.default_model || ""}
-              onChange={(e) => onUpdate({ default_model: e.target.value || null })}
-              placeholder={t("runtime.executor.modelPlaceholder")}
-            />
-          </div>
-          <div className="min-w-0 space-y-1">
-            <label className="text-xs text-muted-foreground">
-              {t("runtime.executor.protocol")}
-            </label>
-            <select
-              value={executor.protocol ?? "anthropic"}
-              onChange={(e) => onUpdate({ protocol: e.target.value as "anthropic" | "openai" })}
-              className="h-9 w-full rounded-md border border-border-subtle bg-surface-input px-3 text-sm"
-            >
-              <option value="anthropic">{t("runtime.executor.protocolAnthropic")}</option>
-              <option value="openai">{t("runtime.executor.protocolOpenai")}</option>
-            </select>
-            <p className="text-[11px] text-muted-foreground">
-              {t("runtime.executor.protocolHint")}
-            </p>
-          </div>
-        </div>
-
-        <div className="border-t border-border-subtle/50 pt-4">
-          <button
-            type="button"
-            onClick={() => setShowAdvanced(!showAdvanced)}
-            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <span className="text-brand">{showAdvanced ? "▼" : "▶"}</span>
-            {t("runtime.executor.advanced")}
-          </button>
-          {showAdvanced && (
-            <div className="mt-3 space-y-3 pl-2">
+        {executor.executor_type === "acp" ? (
+          <AcpExecutorFields executor={executor} onUpdate={onUpdate} t={t} />
+        ) : (
+          <>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div className="min-w-0 space-y-1">
                 <label className="text-xs text-muted-foreground">
-                  {t("runtime.provider.commandTemplate")}{" "}
-                  <span className="text-[10px]">
-                    (e.g., &quot;model=&#123;model&#125; provider=&#123;provider&#125;&quot;)
-                  </span>
+                  {t("runtime.executor.apiEndpoint")}
                 </label>
-                {executor.providers.map((provider, providerIndex) => (
-                  <div key={provider.id}>
-                    <label className="text-xs text-muted-foreground">
-                      {provider.label} - {t("runtime.provider.commandTemplate")}
-                    </label>
-                    <Input
-                      value={provider.command_template || ""}
-                      onChange={(e) => {
-                        const newProviders = [...executor.providers];
-                        const existingProvider = newProviders[providerIndex];
-                        if (!existingProvider) return;
-                        newProviders[providerIndex] = {
-                          ...existingProvider,
-                          command_template: e.target.value || null,
-                        };
-                        onUpdate({ providers: newProviders });
-                      }}
-                      placeholder={t("runtime.placeholder.command")}
-                    />
-                  </div>
-                ))}
+                <Input
+                  value={executor.api_endpoint || ""}
+                  onChange={(e) => onUpdate({ api_endpoint: e.target.value || null })}
+                  placeholder={t("runtime.executor.endpointPlaceholder")}
+                />
+              </div>
+              <div className="min-w-0 space-y-1">
+                <label className="text-xs text-muted-foreground">
+                  {t("runtime.executor.apiKey")}
+                </label>
+                <Input
+                  type="password"
+                  value={executor.api_key || ""}
+                  onChange={(e) => onUpdate({ api_key: e.target.value || null })}
+                  placeholder={
+                    executor.api_key_configured
+                      ? t("runtime.executor.keyConfiguredPlaceholder")
+                      : t("runtime.executor.keyPlaceholder")
+                  }
+                />
+                {executor.api_key_configured && !executor.api_key && (
+                  <p className="text-[11px] text-muted-foreground">
+                    {t("runtime.executor.keyHiddenHint")}
+                  </p>
+                )}
+                {isLocalMode && (
+                  <p className="text-[11px] text-brand/80">{t("runtime.executor.localCliHint")}</p>
+                )}
               </div>
             </div>
-          )}
-        </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="min-w-0 space-y-1">
+                <label className="text-xs text-muted-foreground">
+                  {t("runtime.executor.defaultModel")}
+                </label>
+                <Input
+                  value={executor.default_model || ""}
+                  onChange={(e) => onUpdate({ default_model: e.target.value || null })}
+                  placeholder={t("runtime.executor.modelPlaceholder")}
+                />
+              </div>
+              <div className="min-w-0 space-y-1">
+                <label className="text-xs text-muted-foreground">
+                  {t("runtime.executor.protocol")}
+                </label>
+                <select
+                  value={executor.protocol ?? "anthropic"}
+                  onChange={(e) => onUpdate({ protocol: e.target.value as "anthropic" | "openai" })}
+                  className="h-9 w-full rounded-md border border-border-subtle bg-surface-input px-3 text-sm"
+                >
+                  <option value="anthropic">{t("runtime.executor.protocolAnthropic")}</option>
+                  <option value="openai">{t("runtime.executor.protocolOpenai")}</option>
+                </select>
+                <p className="text-[11px] text-muted-foreground">
+                  {t("runtime.executor.protocolHint")}
+                </p>
+              </div>
+            </div>
+
+            <div className="border-t border-border-subtle/50 pt-4">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <span className="text-brand">{showAdvanced ? "▼" : "▶"}</span>
+                {t("runtime.executor.advanced")}
+              </button>
+              {showAdvanced && (
+                <div className="mt-3 space-y-3 pl-2">
+                  <div className="min-w-0 space-y-1">
+                    <label className="text-xs text-muted-foreground">
+                      {t("runtime.provider.commandTemplate")}{" "}
+                      <span className="text-[10px]">
+                        (e.g., &quot;model=&#123;model&#125; provider=&#123;provider&#125;&quot;)
+                      </span>
+                    </label>
+                    {executor.providers.map((provider, providerIndex) => (
+                      <div key={provider.id}>
+                        <label className="text-xs text-muted-foreground">
+                          {provider.label} - {t("runtime.provider.commandTemplate")}
+                        </label>
+                        <Input
+                          value={provider.command_template || ""}
+                          onChange={(e) => {
+                            const newProviders = [...executor.providers];
+                            const existingProvider = newProviders[providerIndex];
+                            if (!existingProvider) return;
+                            newProviders[providerIndex] = {
+                              ...existingProvider,
+                              command_template: e.target.value || null,
+                            };
+                            onUpdate({ providers: newProviders });
+                          }}
+                          placeholder={t("runtime.placeholder.command")}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
+  );
+}
+
+interface AcpExecutorFieldsProps {
+  executor: RuntimeExecutorConfig;
+  onUpdate: (updates: Partial<RuntimeExecutorConfig>) => void;
+  t: (key: TranslationKey, params?: Record<string, string | number>) => string;
+}
+
+function AcpExecutorFields({ executor, onUpdate, t }: AcpExecutorFieldsProps) {
+  const acp = executor.acp ?? {
+    command: "",
+    args: [],
+    env_allowlist: [],
+    permission_timeout_s: 300,
+    model_config_id: "model",
+  };
+
+  const updateAcp = (updates: Partial<NonNullable<RuntimeExecutorConfig["acp"]>>) => {
+    onUpdate({ acp: { ...acp, ...updates } });
+  };
+
+  const joinList = (items: string[] | undefined | null): string => (items ?? []).join(", ");
+  const parseList = (raw: string): string[] =>
+    raw
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div className="min-w-0 space-y-1">
+          <label className="text-xs text-muted-foreground">
+            {t("runtime.executor.acpCommand")}
+          </label>
+          <Input
+            value={acp.command}
+            onChange={(e) => updateAcp({ command: e.target.value })}
+            placeholder="acp-agent"
+          />
+        </div>
+        <div className="min-w-0 space-y-1">
+          <label className="text-xs text-muted-foreground">{t("runtime.executor.acpArgs")}</label>
+          <Input
+            value={joinList(acp.args)}
+            onChange={(e) => updateAcp({ args: parseList(e.target.value) })}
+            placeholder="--stdio,--port,1234"
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div className="min-w-0 space-y-1">
+          <label className="text-xs text-muted-foreground">
+            {t("runtime.executor.acpEnvAllowlist")}
+          </label>
+          <Input
+            value={joinList(acp.env_allowlist)}
+            onChange={(e) => updateAcp({ env_allowlist: parseList(e.target.value) })}
+            placeholder="ANTHROPIC_API_KEY,HOME"
+          />
+          <p className="text-[11px] text-muted-foreground">
+            {t("runtime.executor.acpEnvAllowlistHint")}
+          </p>
+        </div>
+        <div className="min-w-0 space-y-1">
+          <label className="text-xs text-muted-foreground">
+            {t("runtime.executor.acpPermissionTimeout")}
+          </label>
+          <Input
+            type="number"
+            value={acp.permission_timeout_s}
+            onChange={(e) => updateAcp({ permission_timeout_s: Number(e.target.value) })}
+            placeholder="300"
+          />
+        </div>
+      </div>
+      <div className="min-w-0 space-y-1">
+        <label className="text-xs text-muted-foreground">
+          {t("runtime.executor.acpModelConfigId")}
+        </label>
+        <Input
+          value={acp.model_config_id ?? ""}
+          onChange={(e) => updateAcp({ model_config_id: e.target.value || null })}
+          placeholder="model"
+        />
+      </div>
+    </div>
   );
 }

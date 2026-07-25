@@ -336,7 +336,7 @@ class CodexTaskRunner:
         mgr = self._process_manager_factory()
         if self._help_orchestrator_factory is not None:
             help_orchestrator = self._help_orchestrator_factory()
-            for runtime_name in ("_codex_runtime", "_claude_runtime"):
+            for runtime_name in ("_codex_runtime", "_claude_runtime", "_acp_runtime"):
                 runtime = getattr(mgr, runtime_name, None)
                 if runtime is not None:
                     cast(RuntimeHelpSlot, runtime).help_orchestrator = help_orchestrator
@@ -546,7 +546,7 @@ class CodexTaskRunner:
         resume_session_id: str | None,
         resume_message_id: str | None,
     ) -> CodexTaskWireInputEvidence:
-        if executor_type != "claude":
+        if executor_type not in ("claude", "acp"):
             raise RuntimeError("wire-input evidence requires the Claude stream-json runtime")
         wire_input = (
             json.dumps(

@@ -16,11 +16,19 @@ export interface RuntimeProviderConfig {
   env_template?: Record<string, string> | null;
 }
 
+export interface AcpRuntimeConfig {
+  command: string;
+  args: string[];
+  env_allowlist: string[];
+  permission_timeout_s: number;
+  model_config_id: string | null;
+}
+
 export interface RuntimeExecutorConfig {
   id: string;
   label: string;
   enabled: boolean;
-  executor_type: "claude" | "codex";
+  executor_type: "claude" | "codex" | "acp";
   api_endpoint?: string | null;
   api_key?: string | null;
   api_key_configured?: boolean;
@@ -28,6 +36,7 @@ export interface RuntimeExecutorConfig {
   protocol?: "anthropic" | "openai";
   providers: RuntimeProviderConfig[];
   default_provider_id: string | null;
+  acp?: AcpRuntimeConfig | null;
 }
 
 export interface ConductorLLMConfig {

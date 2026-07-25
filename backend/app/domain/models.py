@@ -480,12 +480,27 @@ class RuntimeProviderConfig(BaseModel):
     env_template: dict[str, str] | None = None
 
 
+class AcpRuntimeConfig(BaseModel):
+    """Local stdio launch configuration for an ACP v1 agent.
+
+    Environment values are deliberately not stored in the catalog.  Entries in
+    ``env_allowlist`` name variables that must already exist in the backend
+    process environment when the agent is launched.
+    """
+
+    command: str
+    args: list[str] = Field(default_factory=list)
+    env_allowlist: list[str] = Field(default_factory=list)
+    permission_timeout_s: float = Field(default=300.0, gt=0, le=3600)
+    model_config_id: str | None = "model"
+
+
 class RuntimeExecutorConfig(BaseModel):
     """Configuration for a top-level executor (e.g., codex, claude)."""
     id: str  # Unique ID (e.g., "codex", "claude")
     label: str  # Human-readable label
     enabled: bool = True
-    executor_type: Literal["claude", "codex"] = "claude"
+    executor_type: Literal["claude", "codex", "acp"] = "claude"
     api_endpoint: str | None = None
     api_key: str | None = None
     default_model: str | None = None
@@ -495,6 +510,7 @@ class RuntimeExecutorConfig(BaseModel):
     protocol: Literal["anthropic", "openai"] = "anthropic"
     providers: list[RuntimeProviderConfig] = Field(default_factory=list)
     default_provider_id: str | None = None  # ID of the default provider
+    acp: AcpRuntimeConfig | None = None
 
 
 class ConductorLLMConfig(BaseModel):

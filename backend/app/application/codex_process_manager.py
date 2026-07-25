@@ -13,6 +13,7 @@ from __future__ import annotations  # noqa: I001
 from collections.abc import Awaitable, Callable
 
 from app.application import timeouts
+from app.application.acp_process_runtime import AcpProcessRuntime, CatalogLoader
 from app.application.claude_process_runtime import ClaudeProcessRuntime
 from app.application.codex_app_server_runtime import CodexAppServerRuntime
 from app.application.json_rpc_client import JsonObject
@@ -23,7 +24,7 @@ from app.application.process_runtime_common import (
     RuntimeEventBus,
     RuntimeLogStore,
 )
-from app.domain.models import CodexSession
+from app.domain.models import CodexSession, RuntimeCatalog
 
 
 class CodexProcessManager:
@@ -34,6 +35,7 @@ class CodexProcessManager:
         data_dir: str | None = None,
         event_bus: RuntimeEventBus | None = None,
         refresh_task_result: RefreshTaskResult | None = None,
+        catalog_loader: CatalogLoader | None = None,
     ) -> None:
         shared_processes: dict[str, AsyncProcessEntry] = {}
         # Secondary index keyed by task_id for fast lookup when multiple tasks
@@ -59,11 +61,44 @@ class CodexProcessManager:
             processes=shared_processes,
             refresh_task_result=refresh_task_result,
         )
+        # ACP runtime: catalog_loader resolves the live AcpRuntimeConfig per
+        # turn from the runtime catalog. Default loader routes through
+        # RuntimeCatalogService against this manager's current codex_store so
+        # store swaps (setter below) are honoured. Use a bound method so the
+        # loader always reads the live ``self._codex_store``.
+        self._catalog_loader = catalog_loader or self._default_catalog_loader
+        self._acp_runtime = AcpProcessRuntime(
+            codex_store=codex_store,
+            log_store=log_store,
+            catalog_loader=self._catalog_loader,
+            data_dir=data_dir,
+            event_bus=event_bus,
+            processes=shared_processes,
+            refresh_task_result=refresh_task_result,
+        )
         self._codex_store = codex_store
         self._log_store = log_store
         self._data_dir = data_dir or timeouts.DEFAULT_CODEX_DATA_DIR
         self._event_bus = event_bus
         self._refresh_task_result = refresh_task_result
+
+    async def _default_catalog_loader(self) -> RuntimeCatalog:
+        """Default catalog loader: ``RuntimeCatalogService`` over the live store.
+
+        The injected store doubles as a :class:`RuntimeCatalogStore` (it owns
+        ``load_runtime_catalog``/``save_runtime_catalog``); the service surfaces
+        the non-optional ``RuntimeCatalog`` (with default-creation semantics)
+        that :meth:`AcpProcessRuntime._load_acp_config` expects. Reads
+        ``self._codex_store`` on every call so the setter swap is honoured.
+        """
+        from app.application.runtime_catalog_service import RuntimeCatalogService
+
+        return await RuntimeCatalogService(self._codex_store).load_catalog()
+
+    @property
+    def acp_runtime(self) -> AcpProcessRuntime:
+        """Expose the ACP runtime for callers that need direct access."""
+        return self._acp_runtime
 
     @property
     def codex_store(self) -> RuntimeCodexStore:
@@ -74,6 +109,7 @@ class CodexProcessManager:
         self._codex_store = value
         self._codex_runtime.codex_store = value
         self._claude_runtime.codex_store = value
+        self._acp_runtime.codex_store = value
 
     @property
     def log_store(self) -> RuntimeLogStore:
@@ -84,6 +120,7 @@ class CodexProcessManager:
         self._log_store = value
         self._codex_runtime.log_store = value
         self._claude_runtime.log_store = value
+        self._acp_runtime.log_store = value
 
     @property
     def refresh_task_result(self) -> RefreshTaskResult | None:
@@ -94,6 +131,7 @@ class CodexProcessManager:
         self._refresh_task_result = value
         self._codex_runtime.refresh_task_result = value
         self._claude_runtime.refresh_task_result = value
+        self._acp_runtime.refresh_task_result = value
 
     def check_availability(self) -> bool:
         return bool(self._codex_runtime.check_availability())
@@ -103,6 +141,8 @@ class CodexProcessManager:
             return bool(self._codex_runtime.check_availability())
         if executor == "claude":
             return bool(self._claude_runtime.check_availability())
+        if executor == "acp":
+            return bool(self._acp_runtime.check_availability())
         raise ValueError(f"unknown executor availability probe: {executor}")
 
     async def launch(
@@ -140,7 +180,14 @@ class CodexProcessManager:
             or session_id
             or (legacy_workspace_id if isinstance(legacy_workspace_id, str) else None)
         )
-        runtime = self._codex_runtime if executor == "codex" else self._claude_runtime
+        if executor == "codex":
+            runtime = self._codex_runtime
+        elif executor == "acp":
+            runtime = self._acp_runtime
+        elif executor == "claude":
+            runtime = self._claude_runtime
+        else:
+            raise ValueError(f"unknown executor: {executor}")
 
         result = await runtime.write_input_async(
             workspace_id=resolved_workspace_id,
@@ -170,7 +217,7 @@ class CodexProcessManager:
         workspace_id: str | None = None,
         **legacy_kwargs: object,
     ) -> CodexSession:
-        for runtime in (self._codex_runtime, self._claude_runtime):
+        for runtime in (self._codex_runtime, self._claude_runtime, self._acp_runtime):
             try:  # noqa: SIM105
                 await runtime.terminate(workspace_id=workspace_id, **legacy_kwargs)
             except KeyError:
@@ -188,26 +235,38 @@ class CodexProcessManager:
 
     async def terminate_all(self) -> list[str]:
         terminated = []
-        for runtime in (self._codex_runtime, self._claude_runtime):
+        for runtime in (self._codex_runtime, self._claude_runtime, self._acp_runtime):
             terminated.extend(await runtime.terminate_all())
         return terminated
 
     async def terminate_task(self, task_id: str) -> None:
         # Clean up the secondary task_id index entry if present.
         self._task_processes.pop(task_id, None)
-        for runtime in (self._codex_runtime, self._claude_runtime):
+        for runtime in (self._codex_runtime, self._claude_runtime, self._acp_runtime):
             await runtime.terminate_task(task_id)
 
     async def resolve_approval(self, item_id: str, decision: str) -> bool:
-        return bool(await self._codex_runtime.resolve_approval(item_id, decision))
+        # Route by item_id namespace: ACP item_ids are permission request ids
+        # surfaced through the ACP runtime's _pending_approvals; codex item_ids
+        # live in the codex runtime. Try codex first (it owns the bulk of
+        # approvals), then ACP. A truthy result short-circuits.
+        if await self._codex_runtime.resolve_approval(item_id, decision):
+            return True
+        return bool(await self._acp_runtime.resolve_approval(item_id, decision))
 
     def get_pending_approvals(self) -> dict[str, dict[str, object]]:
-        approvals = self._codex_runtime.get_pending_approvals()
-        return {
-            str(item_id): {str(key): value for key, value in payload.items()}
-            for item_id, payload in approvals.items()
-            if isinstance(payload, dict)
-        }
+        # Merge both runtimes' pending approvals. ACP and codex use disjoint
+        # item_id namespaces (codex uses its app-server item ids, ACP uses
+        # permission request ids), so a plain dict merge cannot collide.
+        merged: dict[str, dict[str, object]] = {}
+        for source in (self._codex_runtime, self._acp_runtime):
+            approvals = source.get_pending_approvals()
+            for item_id, payload in approvals.items():
+                if isinstance(payload, dict):
+                    merged[str(item_id)] = {
+                        str(key): value for key, value in payload.items()
+                    }
+        return merged
 
     def _make_app_server_notification_callback(
         self, workspace_id: str, task_id: str | None

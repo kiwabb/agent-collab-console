@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable
 from typing import Protocol
 
@@ -39,6 +40,7 @@ class RuntimeCatalogService:
 
     # Supported template placeholders
     TEMPLATE_PLACEHOLDERS = {"{model}", "{provider}", "{workspace_cwd}", "{task_id}"}
+    ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
     def __init__(self, store: RuntimeCatalogStore) -> None:
         """Initialize with a store that has load_runtime_catalog and save_runtime_catalog."""
@@ -75,6 +77,13 @@ class RuntimeCatalogService:
             if executor.id in executor_ids:
                 raise RuntimeCatalogValidationError(f"Duplicate executor ID: {executor.id}")
             executor_ids.add(executor.id)
+
+            if executor.executor_type == "acp":
+                self._validate_acp_executor(executor)
+            elif executor.acp is not None:
+                raise RuntimeCatalogValidationError(
+                    f"Non-ACP executor '{executor.id}' cannot define ACP launch configuration"
+                )
 
             # Check duplicate provider IDs within executor
             provider_ids = set()
@@ -130,6 +139,60 @@ class RuntimeCatalogService:
                             f"Provider '{default_provider_id}' defaults to disabled model '{default_model_id}'"
                         )
 
+        conductor_executor_id = catalog.conductor_llm.executor_id
+        if conductor_executor_id:
+            conductor_executor = self._find_executor(catalog, conductor_executor_id)
+            if conductor_executor is None:
+                raise RuntimeCatalogValidationError(
+                    f"Conductor references unknown executor '{conductor_executor_id}'"
+                )
+            if conductor_executor.executor_type == "acp":
+                raise RuntimeCatalogValidationError(
+                    "ACP executors cannot be used as the Conductor LLM"
+                )
+
+    def _validate_acp_executor(self, executor: RuntimeExecutorConfig) -> None:
+        config = executor.acp
+        if config is None:
+            raise RuntimeCatalogValidationError(
+                f"ACP executor '{executor.id}' requires ACP launch configuration"
+            )
+        if not config.command.strip():
+            raise RuntimeCatalogValidationError(
+                f"ACP executor '{executor.id}' requires a non-empty command"
+            )
+        if "\x00" in config.command:
+            raise RuntimeCatalogValidationError(
+                f"ACP executor '{executor.id}' command contains a NUL byte"
+            )
+        if any("\x00" in arg for arg in config.args):
+            raise RuntimeCatalogValidationError(
+                f"ACP executor '{executor.id}' arguments cannot contain NUL bytes"
+            )
+        if executor.providers or executor.default_provider_id:
+            raise RuntimeCatalogValidationError(
+                f"ACP executor '{executor.id}' cannot define providers"
+            )
+        if executor.api_endpoint or executor.api_key:
+            raise RuntimeCatalogValidationError(
+                f"ACP executor '{executor.id}' cannot define HTTP credentials"
+            )
+        seen_env_names: set[str] = set()
+        for name in config.env_allowlist:
+            if not self.ENV_NAME_RE.fullmatch(name):
+                raise RuntimeCatalogValidationError(
+                    f"ACP executor '{executor.id}' has invalid environment name '{name}'"
+                )
+            if name in seen_env_names:
+                raise RuntimeCatalogValidationError(
+                    f"ACP executor '{executor.id}' repeats environment name '{name}'"
+                )
+            seen_env_names.add(name)
+        if config.model_config_id is not None and not config.model_config_id.strip():
+            raise RuntimeCatalogValidationError(
+                f"ACP executor '{executor.id}' model_config_id cannot be blank"
+            )
+
     def resolve_effective_config(
         self,
         catalog: RuntimeCatalog,
@@ -172,6 +235,16 @@ class RuntimeCatalogService:
             # Reset provider/model so they're re-resolved against the fallback.
             provider = None
             model = None
+
+        if executor_config.executor_type == "acp":
+            if provider not in (None, "", "None"):
+                raise RuntimeCatalogValidationError(
+                    f"ACP executor '{executor}' does not support providers"
+                )
+            if model in ("", "None"):
+                model = None
+            resolved_model = model or executor_config.default_model or ""
+            return (executor, "", resolved_model, None, "acp")
 
         # Resolve provider
         if provider == "None" or provider == "":
@@ -234,8 +307,6 @@ class RuntimeCatalogService:
             return template
 
         # Find all placeholders in the template
-        import re
-
         found = set(re.findall(r"\{(\w+)\}", template))
 
         # Check for invalid placeholders
@@ -312,6 +383,8 @@ class RuntimeCatalogService:
         return None
 
     def _get_executor_env_overrides(self, executor: RuntimeExecutorConfig) -> dict[str, str]:
+        if executor.executor_type == "acp":
+            return {}
         env: dict[str, str] = {}
         # Only inject credential env when a key is actually available — from the
         # catalog or the backend process env (the UI promises "leave blank to use

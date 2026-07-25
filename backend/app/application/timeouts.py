@@ -83,6 +83,8 @@ DEFAULT_EMBEDDING_TIMEOUT_S = 20.0
 # missing binary, dyld crash) exits within milliseconds; initialize() would then
 # wait forever for a response. This caps that wait so we fail fast (GAP K).
 DEFAULT_CODEX_HANDSHAKE_TIMEOUT_S = 30
+DEFAULT_ACP_HANDSHAKE_TIMEOUT_S = 30
+DEFAULT_ACP_TURN_TIMEOUT_S = 480
 DEFAULT_STALL_WATCHDOG_ENABLED = True
 DEFAULT_STALL_THRESHOLD_S = 900
 DEFAULT_STALL_INTERVAL_S = 30
@@ -244,6 +246,14 @@ def codex_idle_timeout_s() -> int:
 
 def codex_handshake_timeout_s() -> int:
     return _env_int("CODEX_HANDSHAKE_TIMEOUT_S", DEFAULT_CODEX_HANDSHAKE_TIMEOUT_S)
+
+
+def acp_handshake_timeout_s() -> int:
+    return max(1, _env_int("ACP_HANDSHAKE_TIMEOUT_S", DEFAULT_ACP_HANDSHAKE_TIMEOUT_S))
+
+
+def acp_turn_timeout_s() -> int:
+    return max(1, _env_int("ACP_TURN_TIMEOUT_S", DEFAULT_ACP_TURN_TIMEOUT_S))
 
 
 def codex_app_server_cmd() -> str:

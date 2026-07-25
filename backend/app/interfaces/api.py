@@ -7068,6 +7068,55 @@ async def test_runtime_executor_cli(request: TestExecutorRequest) -> object:
     return {"success": True, "latency_ms": round(latency_ms, 1), "mode": "claude_cli"}
 
 
+@router.post("/runtime-catalog/test-acp")
+async def test_runtime_executor_acp(request: TestExecutorRequest) -> object:
+    """Probe an ACP v1 executor by running a real ``initialize`` handshake.
+
+    Unlike the HTTP ``/test`` (requires api_endpoint+api_key) and ``/test-cli``
+    (claude-only) endpoints, this spawns the configured ACP ``command args``
+    over stdio and negotiates protocol version 1. Verifies the agent is actually
+    wire-reachable, not just that the binary exists.
+
+    Env values are never returned; missing allowlisted env variables reject the
+    probe with an actionable error. Fail-closed: handshake timeout, protocol
+    mismatch, and early process exit all report ``success=False``.
+    """
+    from app.bootstrap import get_codex_process_manager
+
+    catalog_service = _get_runtime_catalog_service()
+    catalog = await catalog_service.load_catalog()
+    # Resolve the executor and confirm it is an ACP executor before probing.
+    executor = next(
+        (e for e in catalog.executors if e.id == request.executor_id),
+        None,
+    )
+    if executor is None:
+        raise HTTPException(
+            status_code=404, detail=f"Executor '{request.executor_id}' not found"
+        )
+    if executor.executor_type != "acp":
+        raise HTTPException(
+            status_code=400,
+            detail="ACP probe only supports acp executors",
+        )
+
+    mgr = get_codex_process_manager()
+    # Mock manager (REAL_CLI=false) has no acp_runtime — report unavailable
+    # rather than crashing the probe.
+    acp_runtime = getattr(mgr, "acp_runtime", None)
+    if acp_runtime is None:
+        return {
+            "success": False,
+            "error": "ACP runtime unavailable (REAL_CLI disabled or not bootstrapped)",
+        }
+
+    success, error, latency_ms = await acp_runtime.probe_connectivity(request.executor_id)
+    result: dict[str, object] = {"success": success, "latency_ms": latency_ms, "mode": "acp"}
+    if error:
+        result["error"] = error
+    return result
+
+
 # --- Agent CRUD (PR1: Workflow DAG, behind WORKFLOW_DAG_ENABLED) ---
 
 class AgentCreateRequest(BaseModel):

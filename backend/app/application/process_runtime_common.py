@@ -923,6 +923,10 @@ class BaseProcessRuntime:
                         workspace.thread_id = session_id_val
                     elif entry.executor == "claude":
                         workspace.claude_thread_id = session_id_val
+                    elif entry.executor == "acp":
+                        # ACP session ids live on the task only; never on the
+                        # shared workspace thread pointers (codex/claude).
+                        pass
                     await self.codex_store.save_codex_workspace(workspace)
 
         if msg_type == "system":
@@ -1423,6 +1427,10 @@ class BaseProcessRuntime:
                     workspace.thread_id = entry.resume_session_id
                 elif entry.executor == "claude":
                     workspace.claude_thread_id = entry.resume_session_id
+                elif entry.executor == "acp":
+                    # ACP session ids are persisted on the task only; never
+                    # mirror them onto the shared codex/claude thread pointers.
+                    pass
             workspace.status = "idle"
             workspace.last_active_at = datetime.now()
             await self.codex_store.save_codex_workspace(workspace)

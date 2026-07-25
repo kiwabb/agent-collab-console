@@ -370,7 +370,7 @@ class MockCodexProcessManager:
         return True  # Pretend available so availability checks pass
 
     def check_executor_availability(self, executor: str) -> bool:
-        if executor not in {"codex", "claude"}:
+        if executor not in {"codex", "claude", "acp"}:
             raise ValueError(f"unknown executor availability probe: {executor}")
         return True
 

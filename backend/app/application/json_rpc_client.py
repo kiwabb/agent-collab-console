@@ -89,6 +89,22 @@ def _json_rpc_response_payload(request_id: object | None, result: object) -> Jso
     }
 
 
+def _json_rpc_error_payload(
+    request_id: object | None,
+    code: int,
+    message: str,
+    data: object | None = None,
+) -> JsonObject:
+    error: JsonObject = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": error,
+    }
+
+
 def _parse_json_rpc_message(line: str) -> JsonRpcMessage | None:
     """Parse one JSON-RPC line using the same rules for sync and async peers."""
     if not line.startswith("{"):
@@ -846,6 +862,23 @@ class AsyncJsonRpcPeer:
             return True
         except (BrokenPipeError, OSError) as e:
             logger.warning("async json-rpc send response failed: error=%s", e)
+            return False
+
+    async def send_error_response(
+        self,
+        request_id: object | None,
+        code: int,
+        message: str,
+        data: object | None = None,
+    ) -> bool:
+        """Send a JSON-RPC error response for an unsupported/invalid request."""
+        try:
+            raw = json.dumps(_json_rpc_error_payload(request_id, code, message, data))
+            self._stdin.write(raw.encode("utf-8") + b"\n")
+            await self._stdin.drain()
+            return True
+        except (BrokenPipeError, OSError) as exc:
+            logger.warning("async json-rpc send error response failed: error=%s", exc)
             return False
 
     async def _handle_notification(self, msg: JsonRpcMessage) -> None:
