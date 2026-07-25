@@ -401,6 +401,14 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [aiMutating, setAiMutating] = useState(false);
+  const [inspectorDirty, setInspectorDirty] = useState(false);
+  const [pendingDirtyDiscard, setPendingDirtyDiscard] = useState<
+    | { kind: "layer"; nodeId: string }
+    | { kind: "page"; pageId: string }
+    | { kind: "ai" }
+    | null
+  >(null);
+  const aiApplyTriggerRef = useRef<(() => void) | null>(null);
   const [interaction, setInteraction] = useState(createStructuredPrototypeIdleInteraction);
   const [projectedDocument, setProjectedDocument] = useState<ProjectedPrototypeDocument | null>(
     null,
@@ -616,6 +624,16 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     },
     [endInteraction],
   );
+  const registerAiApplyTrigger = useCallback((trigger: () => void) => {
+    aiApplyTriggerRef.current = trigger;
+  }, []);
+  const requestAiApply = useCallback(() => {
+    if (inspectorDirty) {
+      setPendingDirtyDiscard({ kind: "ai" });
+      return;
+    }
+    aiApplyTriggerRef.current?.();
+  }, [inspectorDirty]);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor),
@@ -760,6 +778,10 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
     activePage !== null && activeNodeSelection.primaryNodeId !== null
       ? findStructuredPrototypeNode(activePage.root, activeNodeSelection.primaryNodeId)
       : null;
+  const selectedNodeDocumentHash = controller.draft?.documentHash ?? null;
+  useEffect(() => {
+    setInspectorDirty(false);
+  }, [selectedNode?.id, selectedNodeDocumentHash]);
   const activeSelectedNodeIds = activeNodeSelection.nodeIds;
   const selectedNodeLocation =
     document !== null && activePage !== null && selectedNode !== null
@@ -1796,6 +1818,10 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
 
   const handlePageSelect = (pageId: string): void => {
     if (interactionRef.current.kind !== "idle") return;
+    if (inspectorDirty) {
+      setPendingDirtyDiscard({ kind: "page", pageId });
+      return;
+    }
     setManualPageId(pageId);
     setNodeSelection(createStructuredPrototypeEmptySelection());
     setMobileDrawer(null);
@@ -1912,6 +1938,10 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
 
   const handleLayerSelect = (nodeId: string): void => {
     if (interactionRef.current.kind !== "idle") return;
+    if (inspectorDirty && nodeId !== selectedNode?.id) {
+      setPendingDirtyDiscard({ kind: "layer", nodeId });
+      return;
+    }
     setNodeSelection(resolveStructuredPrototypeNodeSelection(activePage.root, [nodeId], nodeId));
     setInspectorTab("properties");
     setInteractionError(null);
@@ -2596,6 +2626,32 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
       return Promise.resolve(false);
     }
     return controller.adoptAiDraft(draft);
+  };
+
+  const confirmDirtyDiscard = () => {
+    const pending = pendingDirtyDiscard;
+    if (pending === null) return;
+    setPendingDirtyDiscard(null);
+    setInspectorDirty(false);
+    if (pending.kind === "layer") {
+      if (interactionRef.current.kind !== "idle") return;
+      setNodeSelection(
+        resolveStructuredPrototypeNodeSelection(activePage.root, [pending.nodeId], pending.nodeId),
+      );
+      setInspectorTab("properties");
+      setInteractionError(null);
+      if (!desktopLayout) setMobileDrawer(null);
+    } else if (pending.kind === "page") {
+      if (interactionRef.current.kind !== "idle") return;
+      setManualPageId(pending.pageId);
+      setNodeSelection(createStructuredPrototypeEmptySelection());
+      setMobileDrawer(null);
+    } else {
+      aiApplyTriggerRef.current?.();
+    }
+  };
+  const cancelDirtyDiscard = () => {
+    setPendingDirtyDiscard(null);
   };
 
   return (
@@ -3303,6 +3359,7 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
                     runtimeTable={selectedRuntimeTable}
                     onCapturePlacementFrame={captureSelectedNodePlacementFrame}
                     onApply={applyInspectorCommands}
+                    onDirtyChange={setInspectorDirty}
                     onDelete={() => void deleteSelectedNodes()}
                     onSaveAsComponent={saveNodeAsComponent}
                   />
@@ -3318,6 +3375,8 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
                     onDraftApplied={adoptAiDraft}
                     onApplyEnd={handleAiApplyEnd}
                     onMutatingChange={setAiMutating}
+                    onRequireApply={requestAiApply}
+                    registerApplyTrigger={registerAiApplyTrigger}
                   />
                 )}
               </div>
@@ -3409,6 +3468,18 @@ export function StructuredPrototypeStudioPage({ projectId }: Props) {
         loadingMotionPhase="tool"
         loadingDensity="prototype-delete"
         variant="destructive"
+      />
+      <ConfirmDialog
+        open={pendingDirtyDiscard !== null}
+        onOpenChange={(open) => {
+          if (!open) cancelDirtyDiscard();
+        }}
+        title={t("prototype.structured.dirtyGuard.title")}
+        description={t("prototype.structured.dirtyGuard.description")}
+        confirmText={t("prototype.structured.dirtyGuard.confirm")}
+        cancelText={t("prototype.structured.dirtyGuard.cancel")}
+        onConfirm={confirmDirtyDiscard}
+        variant="warning"
       />
       <DragOverlay
         adjustScale={false}

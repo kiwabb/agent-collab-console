@@ -88,8 +88,8 @@ test("generation preview keeps the runtime document fetch in the authenticated o
     "features/prototype/structured/StructuredPrototypeGenerationPanel.tsx",
   );
 
-  assert.match(generation, /sandbox="allow-scripts allow-same-origin"/);
-  assert.doesNotMatch(generation, /sandbox="allow-scripts"/);
+  assert.match(generation, /sandbox="allow-scripts"/);
+  assert.doesNotMatch(generation, /allow-same-origin/);
 });
 
 test("structured prototype deletion reuses one request identity until success", () => {

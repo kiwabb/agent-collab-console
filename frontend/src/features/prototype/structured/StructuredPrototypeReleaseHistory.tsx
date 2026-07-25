@@ -441,7 +441,7 @@ export function StructuredPrototypeReleaseHistoryDialog({
                   className="min-h-0 w-full flex-1 rounded-md border border-border-muted bg-white"
                   src={selected.artifactPath}
                   title={t("prototype.structured.history.preview")}
-                  sandbox="allow-scripts allow-same-origin"
+                  sandbox="allow-scripts"
                 />
               </div>
             )}

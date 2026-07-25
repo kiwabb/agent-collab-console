@@ -152,7 +152,8 @@ test("share page renders the version-aware viewer with a sandboxed iframe", () =
     "features/prototype/structured/StructuredPrototypeShareViewer.tsx",
   );
   assert.match(page, /<StructuredPrototypeShareViewer documentId=\{documentId\} \/>/);
-  assert.match(shareViewer, /sandbox="allow-scripts allow-same-origin"/);
+  assert.match(shareViewer, /sandbox="allow-scripts"/);
+  assert.doesNotMatch(shareViewer, /allow-same-origin/);
   assert.match(
     shareViewer,
     /structured-prototype-public\/\$\{encodeURIComponent\(documentId\)\}\/current\/index\.html/,

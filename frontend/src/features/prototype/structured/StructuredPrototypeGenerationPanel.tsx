@@ -358,7 +358,7 @@ export function StructuredPrototypeGenerationPanel({ projectId, onAccepted }: Pr
                     src={job.previewPath}
                     title={t("prototype.structured.generation.preview")}
                     className="h-[460px] w-full bg-white"
-                    sandbox="allow-scripts allow-same-origin"
+                    sandbox="allow-scripts"
                   />
                 </section>
               )}

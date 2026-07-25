@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Bot,
   Check,
@@ -29,6 +29,8 @@ interface Props {
   onDraftApplied: (draft: StructuredPrototypeDraft, sessionId: number) => Promise<boolean>;
   onApplyEnd: (sessionId: number) => void;
   onMutatingChange: (mutating: boolean) => void;
+  onRequireApply?: (() => void) | undefined;
+  registerApplyTrigger?: ((trigger: () => void) => void) | undefined;
 }
 
 function shortHash(value: string | null): string {
@@ -47,6 +49,8 @@ export function StructuredPrototypeAiPanel({
   onDraftApplied,
   onApplyEnd,
   onMutatingChange,
+  onRequireApply,
+  registerApplyTrigger,
 }: Props) {
   const { t } = useI18n();
   const [content, setContent] = useState("");
@@ -63,6 +67,12 @@ export function StructuredPrototypeAiPanel({
   useEffect(() => {
     onMutatingChange(ai.mutating);
   }, [ai.mutating, onMutatingChange]);
+  const applyAiProposal = useCallback(() => {
+    void ai.apply();
+  }, [ai]);
+  useEffect(() => {
+    registerApplyTrigger?.(applyAiProposal);
+  }, [registerApplyTrigger, applyAiProposal]);
   const run = ai.snapshot?.latestRun ?? null;
   const active =
     run &&
@@ -197,7 +207,10 @@ export function StructuredPrototypeAiPanel({
                     <button
                       type="button"
                       className="inline-flex min-h-10 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-brand px-3 text-xs font-semibold text-black hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-45"
-                      onClick={() => void ai.apply()}
+                      onClick={() => {
+                        if (onRequireApply) onRequireApply();
+                        else applyAiProposal();
+                      }}
                       disabled={disabled || ai.mutating}
                     >
                       <Check size={14} aria-hidden />

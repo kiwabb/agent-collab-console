@@ -123,7 +123,7 @@ export function StructuredPrototypeShareViewer({ documentId }: { documentId: str
           className="h-full w-full border-0"
           src={source}
           title={t("prototype.structured.share.title")}
-          sandbox="allow-scripts allow-same-origin"
+          sandbox="allow-scripts"
         />
       )}
     </main>

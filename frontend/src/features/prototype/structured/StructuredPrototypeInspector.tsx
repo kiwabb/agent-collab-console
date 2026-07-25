@@ -65,6 +65,7 @@ interface Props {
   runtimeTable: StructuredPrototypeInspectorRuntimeTable | null;
   onCapturePlacementFrame: () => StructuredPrototypePlacementFrame | null;
   onApply: (batch: StructuredPrototypeCommandBatch) => Promise<boolean>;
+  onDirtyChange?: ((dirty: boolean) => void) | undefined;
   onDelete: () => void;
   onSaveAsComponent: (nodeId: string) => void;
 }
@@ -458,6 +459,7 @@ function EditableInspector({
   runtimeTable,
   onCapturePlacementFrame,
   onApply,
+  onDirtyChange,
   onDelete,
   onSaveAsComponent,
 }: Props & { node: StructuredPrototypeNode }) {
@@ -580,9 +582,8 @@ function EditableInspector({
     },
   ];
 
-  const save = async () => {
-    if (!layoutOverridesValid) return;
-    const propertyBatch = buildStructuredPrototypeInspectorBatch(node, {
+  const inspectorDraft: StructuredPrototypeInspectorDraft = useMemo(
+    () => ({
       content: value,
       buttonVariant: variant,
       visibility,
@@ -604,7 +605,41 @@ function EditableInspector({
       badgeTone,
       dividerSpacing,
       dividerTone,
-    });
+    }),
+    [
+      value,
+      variant,
+      visibility,
+      width,
+      minWidth,
+      maxWidth,
+      height,
+      minHeight,
+      maxHeight,
+      grow,
+      shrink,
+      alignSelf,
+      position,
+      containerLayout,
+      freeformGrids,
+      responsive,
+      tableColumns,
+      tableRows,
+      badgeTone,
+      dividerSpacing,
+      dividerTone,
+    ],
+  );
+  const isDirty =
+    !layoutOverridesValid ||
+    buildStructuredPrototypeInspectorBatch(node, inspectorDraft) !== null;
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+
+  const save = async () => {
+    if (!layoutOverridesValid) return;
+    const propertyBatch = buildStructuredPrototypeInspectorBatch(node, inspectorDraft);
     const runtimeCommands =
       node.type === "Table" && runtimeTable
         ? buildStructuredPrototypeRuntimeTableCommands(runtimeTable, runtimeRows)

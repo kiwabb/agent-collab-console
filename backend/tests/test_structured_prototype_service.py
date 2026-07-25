@@ -42,6 +42,7 @@ from app.application.structured_prototype_contracts import (
     SetNodeLayoutCommandV1,
     SetNodePropertyCommandV1,
     StackNodeV1,
+    StructuredPrototypeContractError,
     TextNodeV1,
     canonical_model_json,
     command_batch_envelope_hash,
@@ -3227,6 +3228,130 @@ async def test_live_snap_worker_unavailable_refuses_without_corrupting_draft(
         assert draft.status == "active"
         assert draft.head_sequence_no == 0
         assert draft.head_document_hash == created.state.draft.head_document_hash
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_validate_and_attest_evidence_rejects_mismatch_without_spawning_snap_worker(
+    tmp_path: Path,
+) -> None:
+    attester = _SnapAttesterSpy()
+    store, service = _service(
+        tmp_path / "console.db",
+        tmp_path / "managed-data",
+        snap_attester=attester,
+    )
+    try:
+        created = await service.create_document(
+            project_id="project-1",
+            client_request_id=fixture_id("service-helper-mismatch-create"),
+            document=_new_freeform_document(),
+        )
+        base_hash = created.state.draft.head_document_hash
+        # Evidence declares a stale base head so the context check rejects it
+        # before the snap worker is ever asked to attest.
+        batch = _freeform_move_evidence_batch(
+            created.state.document,
+            draft_id=created.state.draft.id,
+            base_head_sequence_no=1,
+            base_document_hash=base_hash,
+        )
+        assert batch.evidence is not None
+
+        with pytest.raises(StructuredPrototypeContractError) as error:
+            await service.validate_and_attest_command_batch_evidence(
+                document=created.state.document,
+                batch=batch,
+                draft_id=created.state.draft.id,
+                base_head_sequence_no=0,
+                base_document_hash=base_hash,
+                operation_id=fixture_id("service-helper-mismatch-operation"),
+            )
+
+        assert error.value.code == "command_evidence_mismatch"
+        assert attester.attest_calls == []
+        assert attester.attest_many_calls == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_validate_and_attest_evidence_returns_attestation_for_valid_evidence(
+    tmp_path: Path,
+) -> None:
+    attester = _SnapAttesterSpy()
+    store, service = _service(
+        tmp_path / "console.db",
+        tmp_path / "managed-data",
+        snap_attester=attester,
+    )
+    try:
+        created = await service.create_document(
+            project_id="project-1",
+            client_request_id=fixture_id("service-helper-valid-create"),
+            document=_new_freeform_document(),
+        )
+        base_hash = created.state.draft.head_document_hash
+        batch = _freeform_move_evidence_batch(
+            created.state.document,
+            draft_id=created.state.draft.id,
+            base_head_sequence_no=0,
+            base_document_hash=base_hash,
+        )
+        assert batch.evidence is not None
+
+        attestation = await service.validate_and_attest_command_batch_evidence(
+            document=created.state.document,
+            batch=batch,
+            draft_id=created.state.draft.id,
+            base_head_sequence_no=0,
+            base_document_hash=base_hash,
+            operation_id=fixture_id("service-helper-valid-operation"),
+        )
+
+        assert attestation is not None
+        assert attestation.evidence_hash == _SnapAttesterSpy._result(
+            canonical_model_json(batch.evidence)
+        ).evidence_hash
+        assert attester.attest_calls == [canonical_model_json(batch.evidence)]
+        assert attester.attest_many_calls == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_validate_and_attest_evidence_is_a_noop_without_evidence(
+    tmp_path: Path,
+) -> None:
+    attester = _SnapAttesterSpy()
+    store, service = _service(
+        tmp_path / "console.db",
+        tmp_path / "managed-data",
+        snap_attester=attester,
+    )
+    try:
+        created = await service.create_document(
+            project_id="project-1",
+            client_request_id=fixture_id("service-helper-noop-create"),
+            document=_new_document(),
+        )
+        base_hash = created.state.draft.head_document_hash
+        batch = _text_insert_batch()
+        assert batch.evidence is None
+
+        attestation = await service.validate_and_attest_command_batch_evidence(
+            document=created.state.document,
+            batch=batch,
+            draft_id=created.state.draft.id,
+            base_head_sequence_no=0,
+            base_document_hash=base_hash,
+            operation_id=fixture_id("service-helper-noop-operation"),
+        )
+
+        assert attestation is None
+        assert attester.attest_calls == []
+        assert attester.attest_many_calls == []
     finally:
         await store.close()
 

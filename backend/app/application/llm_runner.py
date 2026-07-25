@@ -14,7 +14,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import AsyncIterator, Awaitable, Callable, Protocol  # noqa: UP035
+from typing import Awaitable, Callable, Protocol  # noqa: UP035
 from uuid import uuid4
 
 import httpx
@@ -344,9 +344,12 @@ def build_llm_runner(
                 return None
 
             url = llm_api_url(executor.api_endpoint, "/v1/messages")
-            # Assistant-prefill (see stream_llm for the rationale). The
-            # leading "{" is NOT in the model's response, so we prepend it
-            # before returning so json.loads sees a complete object.
+            # Assistant-prefill: end the messages array with an assistant turn
+            # that starts with "{" so the model continues generating from
+            # inside an open JSON object — no preamble, no markdown fence, no
+            # "Here is the DAG:". The leading "{" is NOT in the model's
+            # response, so we prepend it before returning so json.loads sees a
+            # complete object.
             prefill_supported = model.casefold() != "minimax-m3"
             primary_messages = [{"role": "user", "content": prompt}]
             if prefill_supported:
@@ -533,94 +536,6 @@ def llm_api_url(endpoint: str, api_path: str) -> str:
     if base.endswith("/v1") and path.startswith("/v1/"):
         return f"{base}{path[3:]}"
     return f"{base}{path}"
-
-
-def resolve_streaming_context(catalog: RuntimeCatalog) -> StreamingPlanContext | None:
-    """Mirror of the picks build_llm_runner makes, but exposed so the SSE
-    endpoint can announce which model is about to be called before the first
-    token arrives."""
-    config = _workflow_orchestrator_llm_config()
-    executor = _pick_executor(catalog, config.preferred_executor_id)
-    if executor is None:
-        return None
-    model = _resolve_model(executor.config, config.preferred_model_id)
-    if not model:
-        return None
-    return StreamingPlanContext(
-        executor_id=executor.config.id,
-        executor_label=executor.config.label or executor.config.id,
-        model=model,
-        endpoint=executor.api_endpoint.rstrip("/"),
-        api_key=executor.api_key,
-        max_tokens=config.max_tokens,
-        timeout_s=config.timeout_s,
-    )
-
-
-async def stream_llm(prompt: str, ctx: StreamingPlanContext) -> AsyncIterator[str]:
-    """Stream text deltas from an Anthropic-compatible /v1/messages SSE.
-
-    Anthropic shape (also honored by the MiniMax compat gateway):
-        event: content_block_delta
-        data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"..."}}
-
-    Yields each `text_delta.text` chunk. Stops on `message_stop` or stream
-    close. Raises on transport-level errors (the caller catches and emits a
-    fallback event).
-    """
-    url = llm_api_url(ctx.endpoint, "/v1/messages")
-    # Assistant-prefill trick: by ending the messages array with an empty-ish
-    # assistant turn that starts with "{", we force the model to continue
-    # generating from inside an open JSON object — no preamble, no markdown
-    # fence, no "Here is the DAG:". Anthropic and most compatible gateways
-    # (MiniMax included) honor this. The leading "{" we prefill is NOT in the
-    # streamed response, so we re-prepend it to the accumulated text before
-    # parsing. (Done by the caller via the `assistant_prefill` field below.)
-    payload = {
-        "model": ctx.model,
-        "max_tokens": ctx.max_tokens,
-        "stream": True,
-        "messages": [
-            {"role": "user", "content": prompt},
-            {"role": "assistant", "content": "{"},
-        ],
-    }
-    headers = {
-        "x-api-key": ctx.api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-        "accept": "text/event-stream",
-    }
-    # Note: we do NOT pre-yield the prefilled "{". Some compatible gateways
-    # (e.g. MiniMax) ignore the prefill and re-emit "{" themselves, so adding
-    # our own would produce "{{". Callers must handle the case where the
-    # accumulated stream may or may not start with "{" (see `_extract_first_json_object`
-    # in the SSE endpoint — it prepends "{" if missing).
-    async with _llm_http_client(ctx.timeout_s) as client:  # noqa: SIM117
-        async with client.stream("POST", url, headers=headers, json=payload) as response:
-            if response.status_code != 200:
-                body = await response.aread()
-                raise RuntimeError(f"LLM stream HTTP {response.status_code}: {body[:300]!r}")
-            async for line in response.aiter_lines():
-                if not line:
-                    continue
-                if not line.startswith("data:"):
-                    continue
-                raw = line[5:].strip()
-                if raw in ("", "[DONE]"):
-                    continue
-                event = parse_json_object(raw)
-                if event is None:
-                    continue
-                etype = event.get("type")
-                if etype == "content_block_delta":
-                    delta = object_dict(event.get("delta"))
-                    if delta.get("type") == "text_delta":
-                        text = string_value(delta.get("text"))
-                        if text:
-                            yield text
-                elif etype == "message_stop":
-                    return
 
 
 async def call_llm_with_tools(

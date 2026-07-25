@@ -1154,6 +1154,14 @@ const enUS = {
   "runtime.executor.delete": "Delete",
   "runtime.executor.claudeCli": "Claude CLI",
   "runtime.executor.codexCli": "Codex CLI",
+  "runtime.executor.acpCli": "ACP Process",
+  "runtime.executor.acpCommand": "Launch command",
+  "runtime.executor.acpArgs": "Launch arguments",
+  "runtime.executor.acpEnvAllowlist": "Env allowlist",
+  "runtime.executor.acpEnvAllowlistHint":
+    "Only variable names; values injected from backend env, never shown here",
+  "runtime.executor.acpPermissionTimeout": "Permission timeout (s)",
+  "runtime.executor.acpModelConfigId": "Model config ID",
   "runtime.executor.endpointPlaceholder": "Leave blank to run the local CLI default",
   "runtime.executor.keyPlaceholder": "sk-... (blank = env var, or local CLI)",
   "runtime.executor.keyConfiguredPlaceholder": "Configured. Enter a new key to replace it.",
@@ -2336,6 +2344,11 @@ const enUS = {
     "This deletes the project's drafts, published revisions, generation records, runtime sessions, and AI conversations. This action cannot be undone.",
   "prototype.structured.deleteConfirm": "Delete everything",
   "prototype.structured.deleteCancel": "Cancel",
+  "prototype.structured.dirtyGuard.title": "Unapplied edits",
+  "prototype.structured.dirtyGuard.description":
+    "Switching will discard your unapplied edits. Continue?",
+  "prototype.structured.dirtyGuard.confirm": "Discard and continue",
+  "prototype.structured.dirtyGuard.cancel": "Cancel",
   "prototype.structured.deleteFailed":
     "Deletion failed. The prototype was preserved; review the error and retry.",
   "prototype.structured.generation.title": "Generate an editable prototype from this project",

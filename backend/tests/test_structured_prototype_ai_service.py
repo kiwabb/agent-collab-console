@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
@@ -32,9 +34,12 @@ from app.application.structured_prototype_ai_service import (
 )
 from app.application.structured_prototype_contracts import (
     DomainCommandBatchV1,
+    FreeformNodeV1,
     NewPrototypeDocumentV1,
+    PrototypeDocumentV1,
     StackNodeV1,
     TextNodeV1,
+    freeform_grid_list_hash,
 )
 from app.application.structured_prototype_service import (
     PrototypeRendererExecution,
@@ -45,6 +50,11 @@ from app.domain.structured_prototype import PrototypeRendererWorkerResult
 
 FIXED_NOW = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
 
+OutcomeBuilder = Callable[
+    [PrototypeDocumentV1, str, str],
+    PrototypeAssistantOutcomeV1,
+]
+
 
 def _new_document() -> NewPrototypeDocumentV1:
     payload = procurement_document_payload()
@@ -54,6 +64,187 @@ def _new_document() -> NewPrototypeDocumentV1:
         strict=True,
         by_alias=True,
         by_name=False,
+    )
+
+
+def _new_freeform_document() -> NewPrototypeDocumentV1:
+    payload = procurement_document_payload()
+    payload.pop("id")
+    pages = payload["pages"]
+    assert isinstance(pages, list)
+    list_page = pages[0]
+    assert isinstance(list_page, dict)
+    original_root = list_page["root"]
+    assert isinstance(original_root, dict)
+    children = original_root["children"]
+    assert isinstance(children, list)
+    for index, child in enumerate(children):
+        assert isinstance(child, dict)
+        layout_item = child["layoutItem"]
+        assert isinstance(layout_item, dict)
+        layout_item["position"] = {"x": str(32 + index * 360), "y": "48"}
+    root_layout = original_root["layoutItem"]
+    assert isinstance(root_layout, dict)
+    root_layout["width"] = {"unit": "px", "value": "1200"}
+    root_layout["height"] = {"unit": "px", "value": "800"}
+    list_page["root"] = {
+        "id": original_root["id"],
+        "type": "Freeform",
+        "name": original_root["name"],
+        "visibility": original_root["visibility"],
+        "layoutItem": root_layout,
+        "responsive": [],
+        "children": children,
+        "grids": [
+            {
+                "id": fixture_id("service-move-grid-square"),
+                "version": 1,
+                "type": "square",
+                "visible": True,
+                "snapEnabled": True,
+                "origin": {"x": "0", "y": "0"},
+                "params": {
+                    "size": "16",
+                    "colorTokenKey": "primary",
+                    "opacity": "0.24",
+                },
+            },
+            {
+                "id": fixture_id("service-move-grid-columns"),
+                "version": 1,
+                "type": "columns",
+                "visible": True,
+                "snapEnabled": True,
+                "origin": {"x": "0", "y": "0"},
+                "params": {
+                    "count": 12,
+                    "itemSize": None,
+                    "gutter": "8",
+                    "margin": "24",
+                    "alignment": "stretch",
+                    "colorTokenKey": "primary",
+                    "opacity": "0.18",
+                },
+            },
+        ],
+    }
+    return NewPrototypeDocumentV1.model_validate(
+        payload,
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+
+
+def _freeform_move_evidence_batch(
+    document: PrototypeDocumentV1,
+    *,
+    draft_id: str,
+    base_head_sequence_no: int,
+    base_document_hash: str,
+    delta_x: Decimal = Decimal("8"),
+    delta_y: Decimal = Decimal("4"),
+) -> DomainCommandBatchV1:
+    root = document.pages[0].root
+    assert isinstance(root, FreeformNodeV1)
+    selected = root.children[:2]
+    selected_ids = {child.id for child in selected}
+    commands: list[dict[str, object]] = []
+    for index, child in enumerate(selected):
+        position = child.layout_item.position
+        assert position is not None
+        commands.append(
+            {
+                "kind": "moveNode",
+                "node": {"kind": "existing", "nodeId": child.id},
+                "targetParent": {"kind": "existing", "nodeId": root.id},
+                "targetSlot": None,
+                "targetIndex": index,
+                "targetPosition": {
+                    "x": str(Decimal(position.x) + delta_x),
+                    "y": str(Decimal(position.y) + delta_y),
+                },
+            }
+        )
+    direct_siblings = []
+    for child in root.children:
+        if child.id in selected_ids:
+            continue
+        position = child.layout_item.position
+        assert position is not None
+        direct_siblings.append(
+            {
+                "nodeId": child.id,
+                "x": position.x,
+                "y": position.y,
+                "width": "200",
+                "height": "320",
+            }
+        )
+    direct_siblings.sort(key=lambda sibling: str(sibling["nodeId"]))
+    grids = [grid.model_dump(mode="json", by_alias=True) for grid in root.grids]
+    selected_positions = [child.layout_item.position for child in selected]
+    assert all(position is not None for position in selected_positions)
+    selection_x = min(
+        Decimal(position.x) for position in selected_positions if position is not None
+    )
+    selection_y = min(
+        Decimal(position.y) for position in selected_positions if position is not None
+    )
+    final_x = selection_x + delta_x
+    final_y = selection_y + delta_y
+    return DomainCommandBatchV1.model_validate(
+        {
+            "commandContractVersion": 1,
+            "summary": "移动自由布局组件组",
+            "commands": commands,
+            "evidence": {
+                "evidenceVersion": 2,
+                "kind": "freeformMove",
+                "snapSolverVersion": "structured-prototype-freeform-snap/v1",
+                "snapSolverSourceHash": "sha256:" + "f" * 64,
+                "documentId": document.id,
+                "draftId": draft_id,
+                "freeformId": root.id,
+                "baseHeadSequenceNo": base_head_sequence_no,
+                "baseDocumentHash": base_document_hash,
+                "selectedNodeIds": sorted(selected_ids),
+                "grids": grids,
+                "gridListHash": freeform_grid_list_hash(root.grids),
+                "gridSnappingEnabled": True,
+                "previewScale": "1",
+                "clientThreshold": "6",
+                "selectionBounds": {
+                    "x": str(selection_x),
+                    "y": str(selection_y),
+                    "width": "960",
+                    "height": "320",
+                },
+                "directSiblings": direct_siblings,
+                "containerSize": {"width": "1200", "height": "800"},
+                "requestedDelta": {"x": str(delta_x), "y": str(delta_y)},
+                "rawPosition": {"x": str(final_x), "y": str(final_y)},
+                "finalPosition": {"x": str(final_x), "y": str(final_y)},
+                "correction": {"x": "0", "y": "0"},
+                "bypassSnapping": True,
+                "axisWinners": {"x": "raw", "y": "raw"},
+                "candidates": [],
+                "terminalReason": "pointerup",
+            },
+        },
+        strict=True,
+        by_alias=True,
+        by_name=False,
+    )
+
+
+def _document_selection() -> PrototypeAiSelectionV1:
+    return PrototypeAiSelectionV1(
+        scope="document",
+        page_id=None,
+        selected_node_ids=[],
+        flow_id=None,
+        viewport="desktop",
     )
 
 
@@ -1496,5 +1687,261 @@ async def test_flow_scope_refuses_unrelated_behavior_rule_edits(
         unchanged = await store.load_draft(draft_id)
         assert unchanged is not None
         assert unchanged.head_sequence_no == 0
+    finally:
+        await store.close()
+
+
+async def _freeform_apply_fixture(
+    tmp_path: Path,
+    outcome: PrototypeAssistantOutcomeV1,
+) -> tuple[
+    AsyncStructuredPrototypeStore,
+    StructuredPrototypeService,
+    StructuredPrototypeAiService,
+    str,
+    str,
+]:
+    """Build services over a freeform document and wire the runtime to ``outcome``.
+
+    Kept for the no-evidence regression test where the outcome batch is static.
+    """
+    store = AsyncStructuredPrototypeStore(tmp_path / "console.db")
+    object_store = PrototypeObjectStore(tmp_path / "managed")
+    renderer = PrototypeRendererWorker()
+    artifact_store = PrototypeRenderArtifactStore(tmp_path / "managed")
+    structured = StructuredPrototypeService(
+        store=store,
+        object_store=object_store,
+        renderer_worker=renderer,
+        artifact_store=artifact_store,
+        clock=lambda: FIXED_NOW,
+    )
+    created = await structured.create_document(
+        project_id="project-1",
+        client_request_id=fixture_id("ai-freeform-apply-create"),
+        document=_new_freeform_document(),
+    )
+    project = Project(
+        id="project-1",
+        name="Procurement",
+        repo_path=str(tmp_path),
+        default_branch="main",
+    )
+    ai_service = StructuredPrototypeAiService(
+        store=store,
+        project_store=_ProjectStore(project),
+        object_store=object_store,
+        structured_service=structured,
+        runtime=_Runtime(outcome),
+        renderer_worker=renderer,
+        artifact_store=artifact_store,
+        clock=lambda: FIXED_NOW,
+    )
+    thread = await ai_service.create_thread(
+        document_id=created.state.document_record.id,
+        client_request_id=fixture_id("ai-freeform-apply-thread"),
+        title="采购原型自由布局调整",
+    )
+    return store, structured, ai_service, created.state.draft.id, thread.id
+
+
+async def _freeform_apply_fixture_with_outcome_builder(
+    tmp_path: Path,
+    outcome_builder: OutcomeBuilder,
+) -> tuple[
+    AsyncStructuredPrototypeStore,
+    StructuredPrototypeService,
+    StructuredPrototypeAiService,
+    str,
+    str,
+]:
+    """Build services over a freeform document, then build the outcome from it.
+
+    The outcome builder receives the materialized document, draft id and base
+    document hash so the proposed command batch's evidence can reference the real
+    base document (used by the evidence-mismatch test).
+    """
+    store = AsyncStructuredPrototypeStore(tmp_path / "console.db")
+    object_store = PrototypeObjectStore(tmp_path / "managed")
+    renderer = PrototypeRendererWorker()
+    artifact_store = PrototypeRenderArtifactStore(tmp_path / "managed")
+    structured = StructuredPrototypeService(
+        store=store,
+        object_store=object_store,
+        renderer_worker=renderer,
+        artifact_store=artifact_store,
+        clock=lambda: FIXED_NOW,
+    )
+    created = await structured.create_document(
+        project_id="project-1",
+        client_request_id=fixture_id("ai-freeform-apply-create"),
+        document=_new_freeform_document(),
+    )
+    outcome = outcome_builder(
+        created.state.document,
+        created.state.draft.id,
+        created.state.draft.head_document_hash,
+    )
+    project = Project(
+        id="project-1",
+        name="Procurement",
+        repo_path=str(tmp_path),
+        default_branch="main",
+    )
+    ai_service = StructuredPrototypeAiService(
+        store=store,
+        project_store=_ProjectStore(project),
+        object_store=object_store,
+        structured_service=structured,
+        runtime=_Runtime(outcome),
+        renderer_worker=renderer,
+        artifact_store=artifact_store,
+        clock=lambda: FIXED_NOW,
+    )
+    thread = await ai_service.create_thread(
+        document_id=created.state.document_record.id,
+        client_request_id=fixture_id("ai-freeform-apply-thread"),
+        title="采购原型自由布局调整",
+    )
+    return store, structured, ai_service, created.state.draft.id, thread.id
+
+
+@pytest.mark.asyncio
+async def test_ai_apply_rejects_freeform_move_evidence_that_conflicts_with_base_document(
+    tmp_path: Path,
+) -> None:
+    def build_outcome(
+        document: PrototypeDocumentV1,
+        draft_id: str,
+        base_document_hash: str,
+    ) -> PrototypeAssistantOutcomeV1:
+        root = document.pages[0].root
+        assert isinstance(root, FreeformNodeV1)
+        moved_node_ids = [child.id for child in root.children[:2]]
+        # moveNode affects the moved node, its source parent and its target parent
+        # (all the same freeform root here), so the declared affected entity ids must
+        # include the container as well or the preview scope check rejects the batch.
+        affected_entity_ids = [*moved_node_ids, root.id]
+        # Evidence declares base_head_sequence_no=1 while the real head is 0, so the
+        # shared evidence-context gate must reject the batch before any persistence.
+        batch = _freeform_move_evidence_batch(
+            document,
+            draft_id=draft_id,
+            base_head_sequence_no=1,
+            base_document_hash=base_document_hash,
+        )
+        assert batch.evidence is not None
+        return _outcome(
+            {
+                "contractVersion": 1,
+                "kind": "commandProposal",
+                "message": "已准备自由布局移动, 可先查看预览。",
+                "summary": "移动自由布局组件组",
+                "batch": batch.model_dump(mode="json", by_alias=True),
+                "affectedEntityIds": affected_entity_ids,
+            }
+        )
+
+    store, _structured, service, draft_id, thread_id = (
+        await _freeform_apply_fixture_with_outcome_builder(tmp_path, build_outcome)
+    )
+    apply_request_id = fixture_id("ai-freeform-mismatch-apply")
+    try:
+        draft = await store.load_draft(draft_id)
+        assert draft is not None
+        queued = await service.send_message(
+            thread_id=thread_id,
+            client_message_id=fixture_id("ai-freeform-mismatch-message"),
+            draft_id=draft_id,
+            expected_head_sequence_no=0,
+            expected_document_hash=draft.head_document_hash,
+            content="把自由布局里的前两个组件往右下移动一点",
+            selection=_document_selection(),
+        )
+        ready = await service.wait_for_run(queued.id)
+        assert ready.status == "preview_ready"
+        assert ready.proposed_command_batch_json is not None
+
+        with pytest.raises(StructuredPrototypeAiServiceError) as error:
+            await service.apply(
+                run_id=ready.id,
+                client_request_id=apply_request_id,
+                expected_head_sequence_no=0,
+                expected_document_hash=draft.head_document_hash,
+            )
+
+        assert error.value.code == "command_evidence_mismatch"
+        assert error.value.run_id == ready.id
+        # The run stays preview_ready so the user can reject or retry; no command
+        # batch is persisted and the draft head is unchanged.
+        unchanged_run = await store.load_ai_edit_run(ready.id)
+        assert unchanged_run is not None
+        assert unchanged_run.status == "preview_ready"
+        unchanged_draft = await store.load_draft(draft_id)
+        assert unchanged_draft is not None
+        assert unchanged_draft.head_sequence_no == 0
+        assert unchanged_draft.head_document_hash == draft.head_document_hash
+        assert (
+            await store.load_command_batch_by_request(draft_id, apply_request_id)
+            is None
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_ai_apply_still_succeeds_for_a_batch_without_evidence(
+    tmp_path: Path,
+) -> None:
+    title_id = fixture_id("title-list")
+    summary = "将列表标题改为全部采购申请"
+    proposal = _outcome(
+        {
+            "contractVersion": 1,
+            "kind": "commandProposal",
+            "message": "已准备标题调整, 可先查看预览。",
+            "summary": summary,
+            "batch": {
+                "commandContractVersion": 1,
+                "summary": summary,
+                "commands": [
+                    {
+                        "kind": "setNodeProperty",
+                        "node": {"kind": "existing", "nodeId": title_id},
+                        "update": {"kind": "textContent", "content": "全部采购申请"},
+                    }
+                ],
+            },
+            "affectedEntityIds": [title_id],
+        }
+    )
+    store, _structured, service, draft_id, thread_id = await _freeform_apply_fixture(
+        tmp_path, proposal
+    )
+    apply_request_id = fixture_id("ai-freeform-no-evidence-apply")
+    try:
+        draft = await store.load_draft(draft_id)
+        assert draft is not None
+        queued = await service.send_message(
+            thread_id=thread_id,
+            client_message_id=fixture_id("ai-freeform-no-evidence-message"),
+            draft_id=draft_id,
+            expected_head_sequence_no=0,
+            expected_document_hash=draft.head_document_hash,
+            content="把列表标题改成全部采购申请",
+            selection=_document_selection(),
+        )
+        ready = await service.wait_for_run(queued.id)
+        assert ready.status == "preview_ready"
+
+        applied = await service.apply(
+            run_id=ready.id,
+            client_request_id=apply_request_id,
+            expected_head_sequence_no=0,
+            expected_document_hash=draft.head_document_hash,
+        )
+
+        assert applied.run.status == "applied"
+        assert applied.draft_result.state.draft.head_sequence_no == 1
     finally:
         await store.close()

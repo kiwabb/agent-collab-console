@@ -1152,6 +1152,22 @@ class StructuredPrototypeAiService:
                 "prototype AI command proposal hash is corrupt",
                 run_id=run.id,
             )
+        operation_id = _stable_id(run.id, client_request_id, "ai-apply-operation")
+        try:
+            await self._structured_service.validate_and_attest_command_batch_evidence(
+                document=base_state.document,
+                batch=batch,
+                draft_id=run.draft_id,
+                base_head_sequence_no=run.base_head_sequence_no,
+                base_document_hash=run.base_document_hash,
+                operation_id=operation_id,
+            )
+        except (StructuredPrototypeContractError, StructuredPrototypeServiceError) as exc:
+            raise StructuredPrototypeAiServiceError(
+                exc.code,
+                str(exc),
+                run_id=run.id,
+            ) from exc
         execution = execute_command_batch(
             base_state.document,
             batch,
@@ -1186,7 +1202,6 @@ class StructuredPrototypeAiService:
                 "ai_message_conflict", "prototype AI proposal message is unavailable", run_id=run.id
             )
         now = self._now()
-        operation_id = _stable_id(run.id, client_request_id, "ai-apply-operation")
         request_hash = _hash_json(
             {
                 "kind": "apply_command_batch",

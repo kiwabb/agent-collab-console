@@ -1,8 +1,8 @@
 """Dedicated LLM resolution + protocol dispatch for the ProjectConductor loop.
 
-Kept separate from the workflow-orchestrator's `resolve_streaming_context` so the
-Conductor's orchestrating brain has its own configurable model/provider/protocol
-(catalog.conductor_llm, overridable via CONDUCTOR_LLM_* env). The Conductor loop
+The Conductor's orchestrating brain has its own configurable
+model/provider/protocol (catalog.conductor_llm, overridable via CONDUCTOR_LLM_*
+env), separate from the workflow-orchestrator's LLM picks. The Conductor loop
 only speaks Anthropic-shaped messages; `call_conductor_llm` translates when the
 chosen executor's protocol is OpenAI.
 """

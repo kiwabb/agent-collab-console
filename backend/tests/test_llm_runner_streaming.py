@@ -10,7 +10,6 @@ from app.application.llm_runner import (
     StreamingPlanContext,
     build_llm_runner,
     call_llm_with_tools_streaming,
-    stream_llm,
 )
 from app.application.runtime_catalog_service import RuntimeCatalogService
 from app.domain.models import RuntimeCatalog, RuntimeExecutorConfig
@@ -59,28 +58,6 @@ class _FakeAsyncClient:
             'data: {"type":"message_stop"}',
         ]
         return _FakeStreamResponse(lines)
-
-
-class _NoisyStreamClient:
-    def __init__(self, *args, **kwargs):
-        pass
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-    def stream(self, method, url, headers=None, json=None):  # noqa: ANN001, RUF100
-        return _FakeStreamResponse(
-            [
-                "data: []",
-                "data: not json",
-                'data: {"type":"content_block_delta","delta":"bad"}',
-                'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"ok"}}',
-                'data: {"type":"message_stop"}',
-            ]
-        )
 
 
 class _CatalogService:
@@ -192,29 +169,6 @@ async def test_call_llm_with_tools_streaming_reconstructs_message_and_batches(mo
             "input": {"role": "engineer"},
         },
     ]
-
-
-@pytest.mark.asyncio
-async def test_stream_llm_skips_non_object_and_malformed_sse_events(monkeypatch):
-    monkeypatch.setattr(llm_runner_module.httpx, "AsyncClient", _NoisyStreamClient)
-
-    chunks = [
-        chunk
-        async for chunk in stream_llm(
-            "Plan it",
-            StreamingPlanContext(
-                executor_id="minimax",
-                executor_label="MiniMax",
-                model="MiniMax-M2.7",
-                endpoint="https://example.test",
-                api_key="secret",
-                max_tokens=1024,
-                timeout_s=10,
-            ),
-        )
-    ]
-
-    assert chunks == ["ok"]
 
 
 @pytest.mark.asyncio

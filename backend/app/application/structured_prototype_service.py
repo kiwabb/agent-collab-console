@@ -2068,6 +2068,40 @@ class StructuredPrototypeService:
             await self._handle_recovery_failure(running, step, draft, exc.code)
             raise
 
+    async def validate_and_attest_command_batch_evidence(
+        self,
+        *,
+        document: PrototypeDocumentV1,
+        batch: DomainCommandBatchV1,
+        draft_id: str,
+        base_head_sequence_no: int,
+        base_document_hash: str,
+        operation_id: str,
+    ) -> PrototypeSnapWorkerAttestationResult | None:
+        """Validate freeform-move evidence context and attest it against the snap worker.
+
+        Shared by the user apply path (``apply_command_batch``) and the AI apply path
+        (``StructuredPrototypeAiService.apply``) so both gates reject a command batch
+        whose ``evidence`` does not match the base document before any batch is
+        persisted. Returns the snap attestation when ``batch.evidence`` is present,
+        otherwise ``None`` (no-op). Raises ``StructuredPrototypeContractError``
+        (``command_evidence_mismatch``) on evidence-context mismatch and
+        ``StructuredPrototypeServiceError`` on snap-worker infrastructure failure.
+        """
+        validate_command_batch_evidence_context(
+            document,
+            batch,
+            draft_id=draft_id,
+            base_head_sequence_no=base_head_sequence_no,
+            base_document_hash=base_document_hash,
+        )
+        if batch.evidence is None:
+            return None
+        return await self._attest_snap_evidence(
+            request_id=_stable_id(operation_id, "snap-attest"),
+            evidence_json=canonical_model_json(batch.evidence),
+        )
+
     async def apply_command_batch(
         self,
         *,
@@ -2136,18 +2170,14 @@ class StructuredPrototypeService:
             )
         snap_attestation: PrototypeSnapWorkerAttestationResult | None = None
         try:
-            validate_command_batch_evidence_context(
-                state.document,
-                canonical_batch,
+            snap_attestation = await self.validate_and_attest_command_batch_evidence(
+                document=state.document,
+                batch=canonical_batch,
                 draft_id=draft_id,
                 base_head_sequence_no=expected_head_sequence_no,
                 base_document_hash=expected_document_hash,
+                operation_id=operation.id,
             )
-            if canonical_batch.evidence is not None:
-                snap_attestation = await self._attest_snap_evidence(
-                    request_id=_stable_id(operation.id, "snap-attest"),
-                    evidence_json=canonical_model_json(canonical_batch.evidence),
-                )
             execution = execute_command_batch(
                 state.document,
                 canonical_batch,
