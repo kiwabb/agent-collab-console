@@ -11,6 +11,7 @@ from __future__ import annotations  # noqa: I001
 
 
 from collections.abc import Awaitable, Callable
+from typing import cast
 
 from app.application import timeouts
 from app.application.acp_process_runtime import AcpProcessRuntime, CatalogLoader
@@ -24,6 +25,7 @@ from app.application.process_runtime_common import (
     RuntimeEventBus,
     RuntimeLogStore,
 )
+from app.application.runtime_catalog_service import RuntimeCatalogStore
 from app.domain.models import CodexSession, RuntimeCatalog
 
 
@@ -93,7 +95,14 @@ class CodexProcessManager:
         """
         from app.application.runtime_catalog_service import RuntimeCatalogService
 
-        return await RuntimeCatalogService(self._codex_store).load_catalog()
+        # ``RuntimeCodexStore`` (the manager's store protocol) does not declare
+        # the catalog load/save methods, but the concrete store passed in at
+        # bootstrap (``AsyncSQLiteStore``) satisfies both protocols. Cast at the
+        # boundary so mypy sees the ``RuntimeCatalogStore`` contract the service
+        # requires, matching the pattern used in ``conductor_main_loop``.
+        return await RuntimeCatalogService(
+            cast(RuntimeCatalogStore, self._codex_store)
+        ).load_catalog()
 
     @property
     def acp_runtime(self) -> AcpProcessRuntime:
@@ -181,7 +190,9 @@ class CodexProcessManager:
             or (legacy_workspace_id if isinstance(legacy_workspace_id, str) else None)
         )
         if executor == "codex":
-            runtime = self._codex_runtime
+            runtime: CodexAppServerRuntime | ClaudeProcessRuntime | AcpProcessRuntime = (
+                self._codex_runtime
+            )
         elif executor == "acp":
             runtime = self._acp_runtime
         elif executor == "claude":

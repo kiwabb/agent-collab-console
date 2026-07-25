@@ -130,7 +130,7 @@ class AcpProcessRuntime(BaseProcessRuntime):
 
     async def probe_connectivity(
         self, executor_id: str
-    ) -> tuple[bool, str, int]:
+    ) -> tuple[bool, str, float]:
         """Run a real ACP ``initialize`` handshake against the configured agent.
 
         Spawns the executor's ``command args``, negotiates protocol version 1,
