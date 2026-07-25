@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/07-24-add-acp-runtime-adapter/prd.md", "reason": "PRD: 目标/验收标准/技术路径/Out of Scope,实现的最高约束"}
+{"file": ".trellis/tasks/07-24-add-acp-runtime-adapter/research/acp-v1-runtime.md", "reason": "ACP v1 wire 协议事实、repo 映射点、安全决策,协议实现的直接依据"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 BaseProcessRuntime/AsyncJsonRpcPeer 而非新建并行栈的判据"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "ACP 横跨 domain/application/interfaces/frontend,跨层数据流约束"}
+{"file": ".trellis/spec/ccgui/frontend/index.md", "reason": "前端 Settings editor 加 ACP executor 的目录/组件/类型安全约束"}
