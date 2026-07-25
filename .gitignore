@@ -71,3 +71,12 @@ scratch/
 
 # Local/private vendor testing notes may include real model keys.
 hermes_agent_training_manual.md
+
+# Structured-output audit scratch files (workflow artifacts, never commit)
+.structured_output_tmp.json
+
+# Playwright/debug output artifacts
+output/
+
+# Local env files materialized by the console (contain real values, never commit)
+examples/*/.env
