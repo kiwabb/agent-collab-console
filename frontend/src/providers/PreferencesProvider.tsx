@@ -1,6 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { MotionConfig } from "framer-motion";
 import { useTheme } from "./ThemeProvider";
 import { safeJsonRecord } from "@/lib/utils";
 
@@ -103,7 +104,20 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     [prefs],
   );
 
-  return <PreferencesContext.Provider value={value}>{children}</PreferencesContext.Provider>;
+  return (
+    <PreferencesContext.Provider value={value}>
+      {/* Wire framer-motion's reduced-motion handling to the in-app
+          preference AND the OS setting. When the user toggles reduced
+          motion on, all framer-motion enter/event/stagger animations
+          (workflow graph, etc.) collapse to instant transitions; the CSS
+          `--motion-reduced` var above handles CSS-keyframe loaders in
+          parallel. `reducedMotion="user"` alone would only honor the OS
+          media query and ignore the in-app toggle. */}
+      <MotionConfig reducedMotion={prefs.reducedMotion ? "always" : "user"}>
+        {children}
+      </MotionConfig>
+    </PreferencesContext.Provider>
+  );
 }
 
 export function usePreferences() {

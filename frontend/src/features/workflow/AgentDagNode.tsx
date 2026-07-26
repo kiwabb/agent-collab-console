@@ -2,6 +2,7 @@
 
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "reactflow";
+import { motion } from "framer-motion";
 import {
   BarChart3,
   LayoutGrid,
@@ -10,6 +11,8 @@ import {
   AudioWaveform,
   Palette,
   Server,
+  Check,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { useRoleStatus } from "@/features/agents/dock/AgentStatusProvider";
@@ -44,6 +47,10 @@ export interface AgentDagNodeData {
   onClick?:
     | ((payload: { node_key: string; task_id: string | null; status: string | null }) => void)
     | undefined;
+  /** Per-node enter-animation stagger delay (ms). Assigned by the graph
+   * view for parallel-batch fan-out so siblings cascade in 50ms apart;
+   * 0 (or undefined) for serial nodes that enter immediately. */
+  enterDelayMs?: number | undefined;
 }
 
 const ROLE_ICON: Record<string, LucideIcon> = {
@@ -99,6 +106,34 @@ function AgentDagNodeImpl({ data }: NodeProps<AgentDagNodeData>) {
   const roleTagline = roleTaglineKey ? t(roleTaglineKey) : "";
   const statusText = humanStatus(data.status, live.status.text);
 
+  // Sustained status animation class (carries motion-essential so the
+  // running-pulse / awaiting-blink / failed-glow loaders survive
+  // reduced-motion — they're essential status signal, not decoration).
+  const sustainedClass =
+    tone.mode === "running"
+      ? "motion-essential animate-neural-pulse"
+      : tone.mode === "awaiting"
+        ? "motion-essential animate-caret-blink"
+        : tone.mode === "failed"
+          ? "motion-essential animate-synapse-glow"
+          : undefined;
+
+  // One-shot status-enter event animation. Replayed when `mode` changes
+  // because the inner motion.div is keyed by it. Decorative — no
+  // motion-essential; reduced-motion falls back to color + icon.
+  const eventVariant =
+    tone.mode === "failed"
+      ? { x: [0, -3, 3, -2, 2, 0] }
+      : tone.mode === "done"
+        ? { scale: [0.96, 1] }
+        : undefined;
+  const eventTransition =
+    tone.mode === "failed"
+      ? { duration: 0.3, ease: "easeInOut" as const }
+      : tone.mode === "done"
+        ? { duration: 0.2, ease: "easeOut" as const }
+        : undefined;
+
   return (
     <div
       role="button"
@@ -111,13 +146,19 @@ function AgentDagNodeImpl({ data }: NodeProps<AgentDagNodeData>) {
         })
       }
       className={cn(
-        "relative w-[170px] overflow-hidden rounded-xl cursor-pointer transition-transform",
+        "relative w-[170px] overflow-hidden rounded-xl cursor-pointer",
         "hover:-translate-y-px",
       )}
       style={{
         background: tone.bg,
         border: `1px solid ${tone.border}`,
         boxShadow: tone.shadow,
+        // Layer 1: smooth color/shadow transitions instead of snap. Also
+        // covers transform so the hover:-translate-y-px lift still
+        // animates (inline transition would otherwise override Tailwind's
+        // transition-transform utility).
+        transition:
+          "border-color 280ms ease, box-shadow 280ms ease, background 280ms ease, transform 180ms ease",
       }}
     >
       {/* Left handle (target). Conductor has no inputs. */}
@@ -130,118 +171,152 @@ function AgentDagNodeImpl({ data }: NodeProps<AgentDagNodeData>) {
         />
       )}
 
-      {/* === dn-head === */}
-      <div
-        className="flex items-center gap-2 px-2.5 py-2 border-b border-border-subtle"
-        style={{
-          background: "linear-gradient(180deg, rgba(255,255,255,0.02), transparent)",
+      {/* Sustained status-pulse overlay ring. Sits above the card but
+          below content; pointer-events-none so clicks/hover pass through.
+          Only present for running / awaiting / failed (sustained loaders). */}
+      {sustainedClass && (
+        <span
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute inset-0 rounded-xl",
+            sustainedClass,
+          )}
+          style={{
+            // Use the tone's ring/border color so the pulse reads as a
+            // breathing halo rather than a generic brand blob.
+            boxShadow: `0 0 0 1px ${tone.border} inset`,
+          }}
+        />
+      )}
+
+      {/* Layer 3 (enter) + Layer 2 (event) motion wrapper. Keyed by
+          node.id + mode: id keeps the enter animation stable across
+          status refreshes (plays once on mount), while mode remounts the
+          element when status changes so the shake/settle event replays.
+          Does NOT touch the ReactFlow node wrapper's positioning
+          transform — this is inner content only. */}
+      <motion.div
+        key={`${data.node_key}::${tone.mode}`}
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0, ...(eventVariant ?? {}) }}
+        transition={{
+          delay: (data.enterDelayMs ?? 0) / 1000,
+          ...(eventTransition ?? { duration: 0.2 }),
         }}
       >
-        <span
-          className="shrink-0 size-[26px] rounded-[7px] flex items-center justify-center"
-          style={{ background: tone.iconBg, color: tone.text }}
+        {/* === dn-head === */}
+        <div
+          className="flex items-center gap-2 px-2.5 py-2 border-b border-border-subtle"
+          style={{
+            background: "linear-gradient(180deg, rgba(255,255,255,0.02), transparent)",
+          }}
         >
-          <Icon size={14} strokeWidth={2} />
-        </span>
-        <span
-          className="font-mono text-[10.5px] uppercase tracking-[0.1em] font-semibold flex-1 leading-none"
-          style={{ color: tone.text }}
-        >
-          {roleLabel}
-        </span>
-        <StatusDot mode={tone.mode} />
-      </div>
-
-      {/* === dn-role === */}
-      {(roleTagline || data.label) && (
-        <div className="px-2.5 pt-2 pb-1.5 text-[12px] text-text-secondary border-b border-border-subtle border-dashed">
-          {roleTagline}
-          {data.label && data.label !== roleLabel && (
-            <>
-              {" · "}
-              <b className="text-foreground font-medium">{data.label}</b>
-            </>
-          )}
+          <span
+            className="shrink-0 size-[26px] rounded-[7px] flex items-center justify-center"
+            style={{ background: tone.iconBg, color: tone.text }}
+          >
+            <Icon size={14} strokeWidth={2} />
+          </span>
+          <span
+            className="font-mono text-[10.5px] uppercase tracking-[0.1em] font-semibold flex-1 leading-none"
+            style={{ color: tone.text }}
+          >
+            {roleLabel}
+          </span>
+          <StatusDot mode={tone.mode} />
         </div>
-      )}
 
-      {/* === dn-body: per-role num + lbl stat rows (design handoff) === */}
-      <div className="px-2.5 pt-2 pb-1.5 flex flex-col gap-1">
-        {data.stats?.summary_stats?.length ? (
-          data.stats.summary_stats.map((s, i) => (
-            <div
-              key={`${s.label}-${i}`}
-              className="flex items-baseline gap-1.5 text-[12px] text-text-secondary"
-            >
-              <span
-                className={cn(
-                  "font-mono text-[14px] font-semibold tabular-nums leading-none tracking-tight min-w-[32px]",
-                  s.tone === "good"
-                    ? "text-status-done"
-                    : s.tone === "bad"
-                      ? "text-status-failed"
-                      : "text-foreground",
-                )}
-              >
-                {s.label === "added" && s.num > 0
-                  ? `+${s.num}`
-                  : s.label === "removed" && s.num > 0
-                    ? `−${s.num}`
-                    : s.num}
-              </span>
-              <span className="text-[11px] text-text-muted">{s.label}</span>
-            </div>
-          ))
-        ) : (
-          <div className="flex items-baseline gap-1.5 text-[12px] text-text-secondary">
-            <span className="text-[11px] text-text-muted">status</span>
-            <span
-              className="font-mono text-[13px] font-semibold leading-none tracking-tight"
-              style={{ color: tone.text }}
-            >
-              {statusText}
-            </span>
+        {/* === dn-role === */}
+        {(roleTagline || data.label) && (
+          <div className="px-2.5 pt-2 pb-1.5 text-[12px] text-text-secondary border-b border-border-subtle border-dashed">
+            {roleTagline}
+            {data.label && data.label !== roleLabel && (
+              <>
+                {" · "}
+                <b className="text-foreground font-medium">{data.label}</b>
+              </>
+            )}
           </div>
         )}
-      </div>
 
-      {/* === dn-tools chips === */}
-      {data.stats?.tools && data.stats.tools.length > 0 && (
-        <div className="px-2.5 py-1.5 flex flex-wrap gap-1 border-t border-border-subtle border-dashed">
-          {data.stats.tools.slice(0, 4).map((tool) => (
-            <span
-              key={tool}
-              className="font-mono text-[10px] text-text-muted bg-surface-input border border-border-subtle px-1.5 leading-[14px] rounded"
-            >
-              {tool}
-            </span>
-          ))}
-          {data.stats.tools.length > 4 && (
-            <span className="font-mono text-[10px] text-text-muted bg-surface-input border border-border-subtle px-1.5 leading-[14px] rounded">
-              +{data.stats.tools.length - 4}
-            </span>
+        {/* === dn-body: per-role num + lbl stat rows (design handoff) === */}
+        <div className="px-2.5 pt-2 pb-1.5 flex flex-col gap-1">
+          {data.stats?.summary_stats?.length ? (
+            data.stats.summary_stats.map((s, i) => (
+              <div
+                key={`${s.label}-${i}`}
+                className="flex items-baseline gap-1.5 text-[12px] text-text-secondary"
+              >
+                <span
+                  className={cn(
+                    "font-mono text-[14px] font-semibold tabular-nums leading-none tracking-tight min-w-[32px]",
+                    s.tone === "good"
+                      ? "text-status-done"
+                      : s.tone === "bad"
+                        ? "text-status-failed"
+                        : "text-foreground",
+                  )}
+                >
+                  {s.label === "added" && s.num > 0
+                    ? `+${s.num}`
+                    : s.label === "removed" && s.num > 0
+                      ? `−${s.num}`
+                      : s.num}
+                </span>
+                <span className="text-[11px] text-text-muted">{s.label}</span>
+              </div>
+            ))
+          ) : (
+            <div className="flex items-baseline gap-1.5 text-[12px] text-text-secondary">
+              <span className="text-[11px] text-text-muted">status</span>
+              <span
+                className="font-mono text-[13px] font-semibold leading-none tracking-tight"
+                style={{ color: tone.text }}
+              >
+                {statusText}
+              </span>
+            </div>
           )}
         </div>
-      )}
 
-      {/* === dn-foot: duration + tokens === */}
-      <div
-        className="flex items-center justify-between px-2.5 py-1.5 font-mono text-[10.5px] border-t border-border-subtle"
-        style={{ background: "rgba(0,0,0,0.18)" }}
-      >
-        <span className="text-text-secondary truncate">
-          {data.stats?.duration_seconds != null
-            ? fmtDuration(data.stats.duration_seconds)
-            : tone.footTag}
-        </span>
-        <span className="text-text-muted truncate">
-          {data.stats?.est_cost_usd != null
-            ? `$${data.stats.est_cost_usd.toFixed(3)}`
-            : data.task_id
-              ? `task ${data.task_id.slice(0, 6)}`
-              : "—"}
-        </span>
-      </div>
+        {/* === dn-tools chips === */}
+        {data.stats?.tools && data.stats.tools.length > 0 && (
+          <div className="px-2.5 py-1.5 flex flex-wrap gap-1 border-t border-border-subtle border-dashed">
+            {data.stats.tools.slice(0, 4).map((tool) => (
+              <span
+                key={tool}
+                className="font-mono text-[10px] text-text-muted bg-surface-input border border-border-subtle px-1.5 leading-[14px] rounded"
+              >
+                {tool}
+              </span>
+            ))}
+            {data.stats.tools.length > 4 && (
+              <span className="font-mono text-[10px] text-text-muted bg-surface-input border border-border-subtle px-1.5 leading-[14px] rounded">
+                +{data.stats.tools.length - 4}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* === dn-foot: duration + tokens === */}
+        <div
+          className="flex items-center justify-between px-2.5 py-1.5 font-mono text-[10.5px] border-t border-border-subtle"
+          style={{ background: "rgba(0,0,0,0.18)" }}
+        >
+          <span className="text-text-secondary truncate">
+            {data.stats?.duration_seconds != null
+              ? fmtDuration(data.stats.duration_seconds)
+              : tone.footTag}
+          </span>
+          <span className="text-text-muted truncate">
+            {data.stats?.est_cost_usd != null
+              ? `$${data.stats.est_cost_usd.toFixed(3)}`
+              : data.task_id
+                ? `task ${data.task_id.slice(0, 6)}`
+                : "—"}
+          </span>
+        </div>
+      </motion.div>
 
       {/* Right handle (source) */}
       <Handle
@@ -263,24 +338,58 @@ function StatusDot({
     return <AgentThinkingIndicator phase="dispatching" size={10} />;
   }
 
+  // Done / failed render an icon glyph that fades in on status-enter.
+  // Decorative (no motion-essential); the color token is the primary
+  // signal, the icon is reinforcement.
+  if (mode === "done") {
+    return (
+      <motion.span
+        key="status-dot-done"
+        initial={{ opacity: 0, scale: 0.6 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.2, ease: "easeOut" }}
+        className="shrink-0 size-[14px] rounded-full flex items-center justify-center"
+        style={{
+          background: "var(--color-status-done)",
+          boxShadow: "0 0 0 3px var(--color-done-ring)",
+          color: "var(--color-background)",
+        }}
+      >
+        <Check size={9} strokeWidth={3.5} />
+      </motion.span>
+    );
+  }
+  if (mode === "failed") {
+    return (
+      <motion.span
+        key="status-dot-failed"
+        initial={{ opacity: 0, scale: 0.6 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.2, ease: "easeOut" }}
+        className="shrink-0 size-[14px] rounded-full flex items-center justify-center"
+        style={{
+          background: "var(--color-status-failed)",
+          boxShadow: "0 0 0 3px var(--color-failed-ring)",
+          color: "var(--color-background)",
+        }}
+      >
+        <X size={9} strokeWidth={3.5} />
+      </motion.span>
+    );
+  }
+
   const color =
-    mode === "done"
-      ? "var(--color-status-done)"
-      : mode === "start"
-        ? "var(--color-brand)"
-        : mode === "failed"
-          ? "var(--color-status-failed)"
-          : mode === "awaiting"
-            ? "var(--color-status-awaiting)"
-            : "var(--color-text-faint)";
+    mode === "start"
+      ? "var(--color-brand)"
+      : mode === "awaiting"
+        ? "var(--color-status-awaiting)"
+        : "var(--color-text-faint)";
   const ring =
-    mode === "done"
-      ? "var(--color-done-ring)"
-      : mode === "start"
-        ? "var(--color-brand-ring)"
-        : mode === "failed"
-          ? "var(--color-failed-ring)"
-          : "transparent";
+    mode === "start"
+      ? "var(--color-brand-ring)"
+      : mode === "awaiting"
+        ? "color-mix(in srgb, var(--color-status-awaiting) 35%, transparent)"
+        : "transparent";
   return (
     <span
       className="shrink-0 size-[7px] rounded-full"
@@ -320,12 +429,16 @@ function resolveTone(data: AgentDagNodeData, isLiveActive: boolean): Tone {
     };
   }
   if (isLiveActive || status === "running") {
+    // Current head (running AND live active) gets a bolder ring pulse to
+    // distinguish it from a plain persisted-running node.
+    const isCurrentHead = isLiveActive;
     return {
       mode: "running",
       bg: surfaceGradient,
       border: "var(--color-brand-ring)",
-      shadow:
-        "0 12px 36px -10px rgba(0,0,0,0.7), 0 0 0 1px var(--color-brand-ring) inset, 0 0 40px -6px var(--color-brand-ring)",
+      shadow: isCurrentHead
+        ? "0 14px 40px -8px rgba(0,0,0,0.78), 0 0 0 2px var(--color-brand-ring) inset, 0 0 56px -4px var(--color-brand-ring)"
+        : "0 12px 36px -10px rgba(0,0,0,0.7), 0 0 0 1px var(--color-brand-ring) inset, 0 0 40px -6px var(--color-brand-ring)",
       iconBg: "var(--color-brand-bg)",
       text: "var(--color-brand)",
       footTag: "running",

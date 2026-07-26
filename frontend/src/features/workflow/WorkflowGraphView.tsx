@@ -12,6 +12,7 @@ import ReactFlow, {
   useReactFlow,
 } from "reactflow";
 import "reactflow/dist/style.css";
+import { motion } from "framer-motion";
 import { Maximize2, Minus, Plus } from "lucide-react";
 
 import type { WorkflowGraph } from "@/lib/types";
@@ -156,6 +157,11 @@ function toReactFlow(
     string,
     { x: number; y: number; batchKey: string | null; status: string }
   >();
+  // Per-batch sibling index for the parallel fan-out enter stagger (50ms
+  // apart). Serial nodes (no batch_key) get no delay. Counted in graph
+  // order so the stagger matches the visual top-to-bottom lane order.
+  const batchSiblingIndex = new Map<string, number>();
+  const BATCH_STAGGER_MS = 50;
   const rfNodes: Node<AgentDagNodeData>[] = nodesWithConductor.map((n) => {
     const depth = depthByKey.get(n.node_key) ?? 0;
     const seen = rowSeenInDepth.get(depth) ?? 0;
@@ -176,6 +182,11 @@ function toReactFlow(
     const x = depth * colWidth;
     const y = seen * rowHeight + 60;
     nodeBox.set(n.node_key, { x, y, batchKey: n.batch_key ?? null, status: n.status ?? "pending" });
+    const batchKey = n.batch_key ?? null;
+    const enterDelayMs = batchKey
+      ? ((batchSiblingIndex.get(batchKey) ?? 0) * BATCH_STAGGER_MS)
+      : 0;
+    if (batchKey) batchSiblingIndex.set(batchKey, (batchSiblingIndex.get(batchKey) ?? 0) + 1);
     return {
       id: n.node_key,
       type: "agent",
@@ -189,6 +200,7 @@ function toReactFlow(
         node_key: n.node_key,
         stats: stat,
         onClick: onNodeClick,
+        enterDelayMs,
       },
     };
   });
@@ -236,10 +248,32 @@ function toReactFlow(
     });
   });
 
+  // Pre-compute which batch_keys have at least one active member node, so
+  // parallel-fanout edges flowing into an active batch animate (ants-trail).
+  const activeBatchKeys = new Set<string>();
+  nodeBox.forEach((box) => {
+    if (box.batchKey && ACTIVE_BATCH_STATUSES.has(box.status.toLowerCase())) {
+      activeBatchKeys.add(box.batchKey);
+    }
+  });
+
   const rfEdges: Edge[] = edgesWithConductor.map((e, idx) => {
     const isStart = e.from_node_key === CONDUCTOR_KEY;
     const color = isStart ? EDGE_START_COLOR : EDGE_COLOR[e.edge_type] || "#4ade80";
     const isSpecialistCall = e.edge_type === "specialist_call";
+    // Target node status drives the sequence-edge flow: animate when the
+    // downstream node is currently running. For parallel-fanout edges,
+    // animate while the target's batch is active.
+    const targetBox = nodeBox.get(e.to_node_key);
+    const targetBatchActive =
+      e.edge_type === "parallel-fanout" &&
+      !!targetBox?.batchKey &&
+      activeBatchKeys.has(targetBox.batchKey);
+    const animated =
+      e.edge_type === "refine-loop" ||
+      e.edge_type === "retry-on-fail" ||
+      targetBatchActive ||
+      (e.edge_type === "sequence" && targetBox?.status.toLowerCase() === "running");
     return {
       id: `e${idx}`,
       source: e.from_node_key,
@@ -248,7 +282,7 @@ function toReactFlow(
       // handoff's horizontal SVG rail with arrowheads.
       type: "straight",
       label: e.edge_type === "sequence" ? undefined : e.edge_type,
-      animated: e.edge_type === "refine-loop" || e.edge_type === "retry-on-fail",
+      animated,
       style: {
         stroke: color,
         strokeWidth: 3.4,
@@ -440,8 +474,11 @@ export interface BatchGroupNodeData {
  * it reads as "these ran in parallel" without competing with the agent cards. */
 function BatchGroupNode({ data }: NodeProps<BatchGroupNodeData>) {
   return (
-    <div
+    <motion.div
       data-density="parallel-dispatch-lane"
+      initial={{ opacity: 0, scale: 0.98 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
       className={cn(
         "pointer-events-none relative overflow-hidden rounded-2xl border border-dashed transition-colors",
         data.isActive &&
@@ -472,6 +509,6 @@ function BatchGroupNode({ data }: NodeProps<BatchGroupNodeData>) {
         )}
         {data.label} · {data.count}
       </div>
-    </div>
+    </motion.div>
   );
 }

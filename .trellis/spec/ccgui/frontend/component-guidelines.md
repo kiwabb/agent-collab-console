@@ -234,6 +234,34 @@ will not work — Tailwind v4 resolves utility colors at theme build time.
   No `role="button"` on a `<div>` that could just be a `<button>`.
 - **Reduced motion.** All animations honor `prefers-reduced-motion` —
   no transition that blocks input or delays content reveal.
+- **framer-motion JS animations need `<MotionConfig>`.** CSS
+  `prefers-reduced-motion` and the in-app `--motion-reduced` CSS var
+  only control **CSS** animations/keyframes (the `motion-essential`
+  opt-in system in `globals.css`). They do **not** reach
+  framer-motion's JS-driven `animate` prop (`motion.div` enter/exit,
+  `key`-triggered event replays like shake/settle, `motion.span` icon
+  fade-ins). To make decorative framer-motion animations respect both
+  the OS setting and the app's reduced-motion toggle, wrap the app
+  tree once in `<MotionConfig reducedMotion={prefs.reducedMotion ? "always" : "user"}>` (see
+  `providers/PreferencesProvider.tsx`). `"user"` honors the OS media
+  query; `"always"` forces it on for the in-app toggle. Sustained
+  CSS loaders (`animate-neural-pulse`, `animate-caret-blink`,
+  `animate-synapse-glow`, `animate-shimmer-sweep`) are className-driven
+  and still survive via `motion-essential` — they are NOT affected by
+  `MotionConfig`. Convention: decorative framer-motion animations
+  (enter/stagger/shake/settle) must NOT carry `motion-essential` and
+  are disabled by `MotionConfig`; sustained status loaders carry
+  `motion-essential` and stay alive.
+- **Inline `transition` vs Tailwind `transition-*` utility.** A React
+  inline `style={{ transition: "border-color 280ms, box-shadow 280ms" }}`
+  **overrides** any Tailwind `transition-transform` / `transition-colors`
+  utility class on the same element — the inline `transition-property`
+  list replaces, not merges. If you need both (e.g. a 280ms color/shadow
+  transition for status changes AND a 180ms `hover:-translate-y-px`
+  lift), put all properties in one inline `transition`:
+  `transition: "border-color 280ms ease, box-shadow 280ms ease, background 280ms ease, transform 180ms ease"`
+  and drop the `transition-transform` class. Otherwise the hover lift
+  silently disappears.
 - **Color is never the only signal.** Status text or icon is mandatory
   even when the color token is already on.
 

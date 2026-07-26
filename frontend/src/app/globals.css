@@ -88,6 +88,13 @@
   --animate-dot-cascade: dot-cascade 1.2s ease-in-out infinite;
   --animate-synapse-glow: synapse-glow 2.4s ease-in-out infinite;
 
+  /* One-shot event animations for the workflow graph node state changes.
+     Transform/opacity only — GPU-friendly. NOT marked motion-essential:
+     these are decorative status-enter flourishes, so reduced-motion
+     disables them (state info still reaches via color + icon). */
+  --animate-shake: shake 300ms ease-in-out 1;
+  --animate-settle-scale: settle-scale 200ms ease-out 1;
+
   @keyframes shimmer {
     100% {
       transform: translateX(100%);
@@ -132,6 +139,21 @@
   @keyframes synapse-glow {
     0%, 100% { opacity: 0.4; transform: scale(0.9); }
     50% { opacity: 0.85; transform: scale(1.08); }
+  }
+
+  /* one-shot horizontal shake (workflow node entering failed state) */
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-3px); }
+    40% { transform: translateX(3px); }
+    60% { transform: translateX(-2px); }
+    80% { transform: translateX(2px); }
+  }
+
+  /* one-shot settle scale (workflow node entering done state) */
+  @keyframes settle-scale {
+    0% { transform: scale(0.96); opacity: 0.6; }
+    100% { transform: scale(1); opacity: 1; }
   }
 
   /* Aliases so Tailwind utility classes (bg-popover, text-muted-foreground, etc.)
