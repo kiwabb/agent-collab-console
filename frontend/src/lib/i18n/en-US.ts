@@ -696,6 +696,7 @@ const enUS = {
   "issue.command.diffSummary": "Worktree changes and merge controls",
   "issue.command.mesh": "Mesh",
   "issue.command.meshSummary": "{count} agent messages",
+  "issue.command.graph": "Graph",
   "issue.command.title.clarification": "Conductor asked for clarification",
   "issue.command.title.memory": "Retrieved cold memory",
   "issue.command.title.finalize": "Finalized the issue",

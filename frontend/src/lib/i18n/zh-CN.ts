@@ -640,6 +640,7 @@ const zhCN = {
   "issue.command.diffSummary": "Worktree 变更与合并控制",
   "issue.command.mesh": "协作网",
   "issue.command.meshSummary": "{count} 条智能体消息",
+  "issue.command.graph": "流程图",
   "issue.command.title.clarification": "Conductor 请求澄清",
   "issue.command.title.memory": "已检索冷记忆",
   "issue.command.title.finalize": "需求已完成收尾",

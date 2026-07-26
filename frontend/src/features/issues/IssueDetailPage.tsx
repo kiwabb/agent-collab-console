@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FolderArchive, GitPullRequest, Network, Clock } from "lucide-react";
+import { FolderArchive, GitPullRequest, Network, Clock, Workflow } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AgentThinkingIndicator } from "@/components/ui/AgentThinkingIndicator";
 
@@ -54,14 +54,21 @@ import { useLatestFailure } from "./hooks/useLatestFailure";
 import { useConductorAlerts } from "./hooks/useConductorAlerts";
 import { GitInfoCard } from "./components/GitInfoCard";
 import { IssueSideStack } from "./components/IssueSideStack";
+import { DagTab } from "./tabs/DagTab";
 
 interface Props {
   issueId: string;
 }
 
-type IssueWorkbenchTab = "timeline" | "artifacts" | "diff" | "mesh";
+type IssueWorkbenchTab = "timeline" | "graph" | "artifacts" | "diff" | "mesh";
 
-const ISSUE_WORKBENCH_TABS = new Set<IssueWorkbenchTab>(["timeline", "artifacts", "diff", "mesh"]);
+const ISSUE_WORKBENCH_TABS = new Set<IssueWorkbenchTab>([
+  "timeline",
+  "graph",
+  "artifacts",
+  "diff",
+  "mesh",
+]);
 
 function readIssueWorkbenchTab(value: string | null): IssueWorkbenchTab {
   return value && ISSUE_WORKBENCH_TABS.has(value as IssueWorkbenchTab)
@@ -342,7 +349,7 @@ export function IssueDetailPage({ issueId }: Props) {
                       className="pointer-events-none absolute inset-x-0 top-0 h-px animate-shimmer-sweep bg-gradient-to-r from-transparent via-brand/70 to-transparent"
                     />
                   )}
-                  <TabsList className="grid h-10 w-full grid-cols-4 rounded-lg border border-border-subtle bg-surface/90 p-1 sm:max-w-[520px]">
+                  <TabsList className="grid h-10 w-full grid-cols-5 rounded-lg border border-border-subtle bg-surface/90 p-1 sm:max-w-[640px]">
                     <TabsTrigger
                       value="timeline"
                       data-density="workbench-scheduling-tab"
@@ -365,6 +372,25 @@ export function IssueDetailPage({ issueId }: Props) {
                       </span>
                     </TabsTrigger>
                     <TabsTrigger
+                      value="graph"
+                      className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer"
+                    >
+                      <Workflow size={14} className="shrink-0" />
+                      <span className="truncate max-sm:sr-only">{t("issue.command.graph")}</span>
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="mesh"
+                      className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer"
+                    >
+                      <Network size={14} className="shrink-0" />
+                      <span className="truncate max-sm:sr-only">{t("issue.command.mesh")}</span>
+                      {agentMeshMessages.length > 0 && (
+                        <span className="font-mono text-[10px] font-black text-brand">
+                          {agentMeshMessages.length}
+                        </span>
+                      )}
+                    </TabsTrigger>
+                    <TabsTrigger
                       value="artifacts"
                       className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer"
                     >
@@ -383,18 +409,6 @@ export function IssueDetailPage({ issueId }: Props) {
                       <GitPullRequest size={14} className="shrink-0" />
                       <span className="truncate max-sm:sr-only">{t("issue.command.diff")}</span>
                     </TabsTrigger>
-                    <TabsTrigger
-                      value="mesh"
-                      className="min-w-0 gap-1.5 rounded-md px-1 text-[12px] font-bold transition-colors cursor-pointer"
-                    >
-                      <Network size={14} className="shrink-0" />
-                      <span className="truncate max-sm:sr-only">{t("issue.command.mesh")}</span>
-                      {agentMeshMessages.length > 0 && (
-                        <span className="font-mono text-[10px] font-black text-brand">
-                          {agentMeshMessages.length}
-                        </span>
-                      )}
-                    </TabsTrigger>
                   </TabsList>
                 </div>
 
@@ -406,6 +420,16 @@ export function IssueDetailPage({ issueId }: Props) {
                   />
                 </TabsContent>
 
+                <TabsContent value="graph" className="flex-none outline-none">
+                  <DagTab issueId={issueId} />
+                </TabsContent>
+
+                <TabsContent value="mesh" className="flex-none outline-none">
+                  <div className="enterprise-panel min-h-[420px] rounded-lg bg-surface/90 p-1">
+                    <MeshPanel issueId={issueId} />
+                  </div>
+                </TabsContent>
+
                 <TabsContent value="artifacts" className="flex-none outline-none">
                   <div className="enterprise-panel min-h-[420px] rounded-lg bg-surface/90 p-1">
                     <ArtifactsPanel issueId={issueId} issue={issue} />
@@ -415,12 +439,6 @@ export function IssueDetailPage({ issueId }: Props) {
                 <TabsContent value="diff" className="flex-none outline-none">
                   <div className="enterprise-panel min-h-[420px] rounded-lg bg-surface/90 p-1">
                     <IssueDiffPanel issueId={issueId} issue={issue} />
-                  </div>
-                </TabsContent>
-
-                <TabsContent value="mesh" className="flex-none outline-none">
-                  <div className="enterprise-panel min-h-[420px] rounded-lg bg-surface/90 p-1">
-                    <MeshPanel issueId={issueId} />
                   </div>
                 </TabsContent>
               </Tabs>

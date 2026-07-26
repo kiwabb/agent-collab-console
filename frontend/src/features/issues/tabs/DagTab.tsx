@@ -154,7 +154,7 @@ export function DagTab({ issueId }: Props) {
         }
         return;
       }
-      router.push(`/issues/${issueId}?tab=tasks&taskId=${payload.task_id}`);
+      router.push(`/issues/${issueId}?tab=timeline&taskId=${payload.task_id}`);
     },
     [router, issueId, addToast],
   );
